@@ -1,0 +1,29 @@
+# AI agent tooling (local, machine-specific — not part of the product)
+.claude/
+.agents/
+.codex/
+skills-lock.json
+
+# Dependencies
+node_modules/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Build output
+dist/
+build/
+.next/
+out/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
