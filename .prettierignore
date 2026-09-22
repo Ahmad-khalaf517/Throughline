@@ -18,3 +18,9 @@ public
 
 # env
 .env*
+
+# design docs - hand-authored long-form prose/tables, not code; reformatting
+# these is a mass-diff unrelated to any real change (see docs/Throughline_ERD.md's
+# living-doc discipline - a diff should be the decision, not Prettier's opinion
+# of a markdown table).
+docs

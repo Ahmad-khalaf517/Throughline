@@ -49,7 +49,6 @@ export type Env = z.infer<typeof envSchema>;
 function loadEnv(): Env {
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
-    // eslint-disable-next-line no-console -- boot-time failure, no logger exists yet
     console.error('Invalid environment configuration:', parsed.error.issues);
     throw new Error('Invalid environment configuration - see console output above.');
   }
