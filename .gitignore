@@ -25,5 +25,14 @@ npm-debug.log*
 # OS / editor
 .DS_Store
 Thumbs.db
-.vscode/
 .idea/
+# .vscode/ is committed on purpose (Project Setup plan section 5.8)
+
+# next.js / typescript
+*.tsbuildinfo
+next-env.d.ts
+.vercel
+/coverage
+
+# drizzle-kit local artifacts (migrations/ and meta/ ARE committed - see Project Setup section 3 rule 4)
+drizzle/.drizzle-studio/

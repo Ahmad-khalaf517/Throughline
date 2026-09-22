@@ -1,0 +1,20 @@
+# dependencies
+node_modules
+
+# next.js
+.next
+out
+build
+
+# generated
+drizzle/migrations
+drizzle/meta
+pnpm-lock.yaml
+next-env.d.ts
+*.tsbuildinfo
+
+# public assets
+public
+
+# env
+.env*
