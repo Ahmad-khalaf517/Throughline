@@ -1,6 +1,16 @@
-# AI agent tooling (local, machine-specific — not part of the product)
-.claude/
-.agents/
+# AI agent tooling.
+# Third-party skills and machine-local config stay out of the repo; the project's
+# OWN skills and agents are committed — they encode frozen ERD / Module Boundaries
+# decisions and must be identical for every agent on every machine.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/throughline-*/
+!.claude/agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/throughline-*/
 .codex/
 skills-lock.json
 
