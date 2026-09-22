@@ -43,6 +43,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Generates .next/types (e.g. LayoutProps/PageProps) that tsconfig.json
+      # includes; without this, typecheck fails on a fresh checkout since
+      # .next/ is gitignored and never produced by a full build here.
+      - run: pnpm exec next typegen
+
       - run: pnpm typecheck
 
       # Boundary violations (eslint-plugin-boundaries) fail the build here.
