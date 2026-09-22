@@ -1,0 +1,11 @@
+allowBuilds:
+  # Needed by testcontainers (docker exec / grpc) for the Appendix C suite.
+  cpu-features: true
+  ssh2: true
+  protobufjs: true
+  # Needed by tsx/vite/drizzle-kit.
+  esbuild: true
+  # Not needed without image optimization / native module resolution -
+  # create-next-app's own default; left as-is.
+  sharp: false
+  unrs-resolver: false
