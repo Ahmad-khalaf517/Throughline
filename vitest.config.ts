@@ -9,6 +9,9 @@ import { defineConfig } from 'vitest/config';
 //    so advisory-lock behaviour is observable and deterministic.
 export default defineConfig({
   test: {
+    // No tests exist yet (early slice-1); don't fail the run over an empty
+    // suite. Remove once tests/unit and tests/integration have real specs.
+    passWithNoTests: true,
     coverage: {
       provider: 'v8',
       // Coverage thresholds apply only to the highest-risk code (ERD 14 risk
@@ -21,6 +24,9 @@ export default defineConfig({
           name: 'unit',
           include: ['tests/unit/**/*.test.ts'],
           environment: 'node',
+          // No unit tests exist yet (early slice-1); don't fail the run
+          // over an empty suite. Remove once tests/unit has real specs.
+          passWithNoTests: true,
         },
       },
       {
@@ -28,6 +34,9 @@ export default defineConfig({
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],
           environment: 'node',
+          // No integration tests exist yet (early slice-1); don't fail the
+          // run over an empty suite. Remove once tests/integration has real specs.
+          passWithNoTests: true,
           // Testcontainers + advisory locks: keep it deterministic, not parallel.
           pool: 'threads',
           poolOptions: { threads: { singleThread: true } },
