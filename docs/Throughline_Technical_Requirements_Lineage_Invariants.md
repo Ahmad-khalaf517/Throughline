@@ -1,10 +1,21 @@
 # Throughline - Technical Requirements & Lineage Invariants
 
-**Document version:** 1.2  
+**Document version:** 1.3  
 **Project type:** AI-assisted software project initialization platform  
 **Delivery context:** Solo capstone project, 8 full-time development days  
-**Status:** Technical baseline aligned with Throughline BRD v2.2 and the final approved lineage/workflow decisions; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation  
+**Status:** Technical baseline aligned with Throughline BRD v2.2 and ERD/Data Model v1.4; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation  
 **Primary audience:** Developer, technical reviewers, and AI coding agents
+
+### Revision 1.3 alignment
+
+Version 1.3 absorbs every behaviour the ERD/Data Model needed but v1.2 did not state (ERD section 12), the platform decisions, and the final cross-document review. The business baseline (BRD v2.2) is unchanged. Summary:
+
+- **New workflow rules (section 16A):** generation prerequisites (FR-080), AI and manual revision paths (FR-081), manual item edit with visible rebinding (FR-082), the approval currentness gate (FR-083), the approve-anyway override (FR-084), and impact shown in every external-write preview (FR-085).
+- **New invariants:** generation freshness (INV-006), brief immutability (INV-007), deterministic identity fallback (INV-014), immutable dependency edges (INV-015), upstream versions in the semantic hash (INV-016), one impact engine evaluated against current state (INV-025), cause-specific acknowledgement (INV-026).
+- **Corrected:** GitHub adoption requires a verified ownership marker, never the name alone (30.1); the selected architecture option is recorded on the approved version (FR-022); architecture-driving context is modelled as constraint requirement items (FR-010); acknowledgement fields (section 26); Stitch mode names (FR-054); Epics as well as Stories get the re-export choice (FR-074); GitHub drift is item-level (FR-036); traversal is relative to current state, not the last approval (INV-021).
+- **Platform (section 5.1):** Next.js/TypeScript, Supabase Auth and Supabase Postgres, Drizzle ORM; security rules in NFR-005.
+
+The ERD/Data Model v1.4 is the authoritative realization of this document's data behaviour. Where the two differ, the difference is a defect to resolve before coding (section 45.1).
 
 ### Revision 1.2 alignment
 
@@ -118,6 +129,20 @@ The capstone implementation has the following fixed constraints:
 - the system must remain explainable during a live demo
 - third-party integration failure must not destroy the entire workflow
 - the implementation should preserve a realistic path toward a future product without attempting enterprise scope now
+
+### 5.1 Technology Baseline
+
+| Concern | Decision |
+|---|---|
+| Application | Next.js / TypeScript; every read and write goes through the application server |
+| Database | PostgreSQL on Supabase (15+) |
+| Authentication | Supabase Auth, invite-only, with a server-side email allowlist |
+| ORM / migrations | Drizzle ORM + drizzle-kit, SQL-first |
+| Object storage | Private Supabase Storage bucket for Stitch HTML/screenshots |
+| AI | One LLM provider |
+| External systems | GitHub (one pinned starter), one configured Jira project, Google Stitch |
+
+Schema, triggers, the impact function, and connection and hardening rules are specified in the ERD/Data Model v1.4.
 
 ---
 
@@ -248,6 +273,8 @@ Optional context may include:
 - technology preferences
 - expected scale
 
+Optional context is creation-time input only. Once Requirements are generated, its authoritative form is the set of constraint requirement items (FR-010), and the brief and optional context become immutable (INV-007).
+
 ### FR-002 - Interpret Project Brief With AI
 
 The system shall use an LLM to transform the plain-language brief into structured project context and Requirements.
@@ -280,6 +307,13 @@ The system shall generate a Requirements artifact containing appropriate structu
 - user journeys
 - acceptance criteria
 
+These fields are split by whether downstream work can depend on them:
+
+- **Requirement items (dependable, lineage-tracked):** functional requirements, non-functional requirements, and **architecture-driving constraints** - expected scale, deadline and delivery constraints, budget, team size and stated skills, technology preferences, and security / performance / deployment expectations. Constraints are requirement items of type `constraint` with a `dimension`, one item per dimension (roughly 6-8 per project). Acceptance criteria live inside their requirement item.
+- **Artifact payload (not dependable):** business problem, actors, assumptions, unresolved questions, user journeys.
+
+If downstream work should be flagged when something changes, that thing must be an item. No stored copy or summary of the constraint items is kept in the payload.
+
 ### FR-011 - Requirements Item Identity
 
 Each requirement item shall have:
@@ -308,8 +342,9 @@ Optional AI-based semantic checks are P1.
 
 The user shall be able to:
 
-- approve the Requirements artifact
-- request revision with feedback
+- approve the Requirements artifact (subject to the approval gate, FR-083)
+- request an AI revision with feedback
+- revise manually (FR-081)
 
 A revision creates a new ArtifactVersion and never overwrites an existing historical version.
 
@@ -334,6 +369,13 @@ Each option shall explain project-specific trade-offs involving factors such as:
 
 Generic technology comparison text without connection to the project context is not sufficient.
 
+Each option shall also carry:
+
+- a structured **stack descriptor** (frontend, backend, database, hosting, repository layout), used by GitHub scaffold-vs-docs-only selection (FR-031)
+- its candidate architecture decisions, each listing only the requirement and constraint items that actually drove it - listing every constraint on every decision would make one deadline change flag the whole architecture
+
+Candidate decisions are not lineage while the Architecture version is a draft (FR-022).
+
 ### FR-021 - Architecture Option Identity
 
 Each architecture option shall have a stable option identifier inside its Architecture artifact version.
@@ -342,15 +384,17 @@ Each architecture option shall have a stable option identifier inside its Archit
 
 An Architecture version cannot become authoritative unless exactly one option is selected.
 
-The approval event shall record the selected option identifier.
+The selected option is recorded on the approved Architecture ArtifactVersion itself: it is set only at approval and never changes afterwards, and the version's approval event references that version rather than carrying a duplicate copy.
 
-Only decisions belonging to the selected architecture option become canonical lineage sources for GitHub initialization and downstream planning.
+Only decisions belonging to the selected architecture option become canonical lineage sources for GitHub initialization and downstream planning. They are **materialized at approval**: the selected option's candidate decisions become ADR items, matched against the previously approved ADRs (section 24). Unchanged decisions keep their identity and ItemVersion, changed decisions get a new ItemVersion under the same LogicalItem, and previous ADRs absent from the selection become removed.
 
-Unselected options remain historical alternatives but must not drive downstream lineage.
+Unselected options remain historical alternatives but must not drive downstream lineage. Because they never become items, they cannot appear in lineage by construction.
+
+If every materialized decision is unchanged, the selected option's stack descriptor must equal the previously approved one; otherwise approval is refused, because the stack drives the repository but carries no lineage of its own.
 
 ### FR-023 - Architecture Team-Skill Warning (P1)
 
-This is a **P1** feature. If implemented, a deterministic warning may compare structured architecture `requiredSkills[]` with project `teamSkills[]`.
+This is a **P1** feature. If implemented, a deterministic warning may compare the skills required by the selected architecture decisions with the `teamSkills[]` value of the team-skills constraint item (FR-010). Architecture options do not store a separate required-skills field.
 
 Correct wording:
 
@@ -392,6 +436,10 @@ Used when the selected architecture does not safely match the available starter.
 
 The system must not silently create a mismatched codebase.
 
+The mode is chosen from the selected option's structured stack descriptor (FR-020), not from free text.
+
+The MVP creates **one repository per project**. There is no re-initialization flow; a later architecture change is reported as drift (FR-036), never applied to the repository.
+
 ### FR-032 - Use One Pinned Starter for MVP
 
 Throughline shall use one approved, pinned repository starter/template for scaffold mode.
@@ -412,15 +460,19 @@ Throughline shall add project-specific documentation such as:
 
 ### FR-034 - ADR Provenance
 
-ADRs shall cite the Throughline artifact versions that produced the approved architecture decision.
+ADRs shall cite the exact Throughline item versions that produced each approved architecture decision, plus the artifact versions for context.
 
 Example:
 
 ```yaml
+adr: ADR-03 v2
+depends_on: [R-07 v3, R-12 v1]
 architecture_version: ARCH-v2
 requirements_version: REQ-v3
 approved_at: 2026-09-20
 ```
+
+The repository also carries Throughline's ownership marker (section 30.1).
 
 ### FR-035 - GitHub Is Self-Describing, Not Round-Trippable
 
@@ -430,11 +482,13 @@ The MVP shall not import GitHub metadata later to reconstruct Throughline databa
 
 ### FR-036 - GitHub Change Warning
 
-If the approved architecture changes after repository initialization, Throughline shall not automatically restructure the repository.
+If a decision the repository embeds changes or is removed after repository initialization, Throughline shall not automatically restructure the repository.
+
+Drift is evaluated at item level: the repository is flagged when an ADR it was created from is no longer current or is itself impacted. Re-approving the Architecture with no changed decision does not flag it. Decisions **added** after initialization are not detected, because the repository depends on nothing obsolete - it is merely incomplete.
 
 It shall display wording similar to:
 
-> Architecture changed after repository initialization. The repository setup may no longer reflect the currently approved architecture. Manual review is required.
+> A decision this repository was created from has changed (ADR-03 v1 -> v2). The repository setup may no longer reflect the currently approved architecture. Manual review is required.
 
 The user may acknowledge the warning.
 
@@ -488,20 +542,22 @@ Throughline shall persist the useful Stitch result rather than depend permanentl
 Preferred storage approach:
 
 - metadata, checksum, and storage reference in the database
-- HTML/screenshot bytes in file/object storage
+- HTML/screenshot bytes in file/object storage (a private Supabase Storage bucket, read through short-lived signed URLs)
 
 ### FR-053 - Safe HTML Preview
 
-If generated HTML is displayed inside Throughline, it shall be sandboxed rather than injected directly into the application's main DOM.
+If generated HTML is displayed inside Throughline, it shall be sandboxed rather than injected directly into the application's main DOM: it is rendered only inside a sandboxed iframe without `allow-same-origin`, either from a separate origin or through `srcdoc` after a server-side fetch.
 
 ### FR-054 - Stitch Fallback
 
 If the Stitch API fails, Throughline shall preserve the generated Stitch-ready prompt and allow the workflow to continue in manual mode.
 
-The artifact shall record a generation mode such as:
+The Stitch output record shall carry a generation mode:
 
-- `api`
-- `manual`
+- `api` - always linked to the external reference of the Stitch generation
+- `manual_fallback` - never linked to one; the preserved prompt is the output
+
+If a later API attempt succeeds for the same UI Requirements version, the record becomes `api`. Manual-fallback output has no external reference and therefore no drift warning.
 
 Third-party failure must not invalidate the rest of the project.
 
@@ -539,7 +595,7 @@ The LLM may propose that a Story depends on specific upstream items such as:
 - Architecture Decision item versions
 - UI Requirement item versions
 
-Application code validates that the references exist and are structurally valid before persisting them.
+Application code validates that the references exist and are structurally valid before persisting them. The model supplies display keys; code binds each one to the exact ItemVersion inside the approved versions the model was given (INV-006), never to a newer version the model did not see.
 
 Code validates referential integrity, not semantic truth.
 
@@ -599,11 +655,11 @@ The MVP shall not:
 
 After successful creation, Throughline shall store the mapping between the local source ItemVersion and external Jira issue.
 
-Canonical provenance must use `sourceItemVersionId`, not only the human display key.
+Canonical provenance must use `sourceItemVersionId`, not only the human display key. Each Jira reference also records the exact Backlog version it was exported from, and that pair must be a real membership of the version.
 
 ### FR-074 - Re-export Changed Story Behavior
 
-If a logical Story already has a Jira issue created from an older ItemVersion and the Story changes, Throughline must not silently duplicate, update, or skip the issue.
+If a logical Epic or Story already has a Jira issue (in the configured project) created from an older ItemVersion and the item changes, Throughline must not silently duplicate, update, or skip the issue. This applies to **Epics as well as Stories**: an edited Epic title creates a new Epic ItemVersion, and re-exporting it without this choice would silently create a second Jira Epic.
 
 The user shall see a choice similar to:
 
@@ -619,6 +675,58 @@ Current: S-12 v2
 ```
 
 Updating the existing Jira issue is out of scope for the MVP.
+
+Stories are created with their Epic's Jira issue as parent. The parent is the Jira issue created from the Epic's current ItemVersion; if the user chose Skip for a changed Epic, it is the most recent Jira issue of that Epic's logical item. A Story whose Epic has no Jira issue at all is not exported and is listed in the preview.
+
+---
+
+## 16A. Cross-Artifact Workflow Rules
+
+These rules apply to every artifact type.
+
+### FR-080 - Generation Prerequisites
+
+An artifact may be generated only from approved upstream artifacts, in workflow order:
+
+| Artifact | Requires approved |
+|---|---|
+| Requirements | - (the project brief) |
+| Architecture | Requirements |
+| UI Requirements | Requirements, Architecture |
+| Backlog | Requirements, Architecture, UI Requirements |
+
+The approved versions given to the model are recorded as the generation context (section 23.1). Because an approved artifact never returns to unapproved, no current downstream item can depend on an artifact that has no approved version.
+
+### FR-081 - Revision Paths
+
+A new draft of an approved artifact can be created in two ways:
+
+- **AI revision:** regenerate with the user's feedback. The approved base items are given to the model with their display keys, and unchanged items must come back verbatim so their ItemVersions are reused (INV-010).
+- **Manual revision** (Requirements, UI Requirements, Backlog): create a draft that reuses **every** ItemVersion of the approved version unchanged, with no model call, then edit individual items (FR-082). A controlled change is then exactly one change - which the capstone's controlled change test (BRD 10.3) depends on, because an AI revision would also measure model noise.
+
+Architecture is revised by regeneration only, because its decisions become items at approval (FR-022). Either path replaces an existing draft (INV-005).
+
+### FR-082 - Manual Item Edit and Rebinding
+
+Editing an item in a draft creates a new ItemVersion. Its upstream references are **rebound** to the current version of each upstream item, and the user is shown exactly which references change ("S-12 will now depend on R-07 v3 instead of v2") and must confirm. The edit is refused if an upstream item has been removed.
+
+This is the manual repair path for a stale dependency. The human edited against what is current, so binding to current is correct; showing the rebinding prevents a typo fix from silently clearing a warning. (Model output is different: it binds only to what the model was shown, INV-006.)
+
+### FR-083 - Approval Currentness Gate
+
+Approving a version is blocked while any of its own items would be flagged by the impact engine immediately after approval and is not acknowledged. The engine is evaluated **as if the candidate replaced** its artifact's approved version (INV-025). This applies at any depth: a new Story built on a current-but-impacted decision would be flagged transitively, so repair proceeds top-down.
+
+Blocking message example:
+
+> S-12 would be flagged: it depends on R-07 v2 (now v3). Regenerate, revise, or approve with a note.
+
+### FR-084 - Approve-Anyway Override
+
+The user may approve a blocked version with a **mandatory, non-empty note**. The override does not bypass the gate - it satisfies it: the server recomputes the blocking warnings inside the approval, records one cause-specific acknowledgement per warning (section 26), and marks the approval event as an override. The client sends only the note. A later, independent change still warns.
+
+### FR-085 - Impact in External-Write Previews
+
+Every GitHub, Stitch and Jira preview shall show the current impact warnings for the items the write would be created from. Creating an external object from a flagged item requires an explicit confirmation; it is not blocked. The resulting external reference is flagged from the moment it exists, so nothing stale leaves Throughline silently.
 
 ---
 
@@ -641,6 +749,8 @@ Suggested version statuses:
 - `approved`
 - `superseded`
 - `rejected`
+
+A version is created only as `draft`, or as `rejected` for a generation that was already stale when its result arrived (INV-006). A rejected version records its reason: revision requested, rejected by the user, replaced by regeneration, or stale generation context.
 
 ---
 
@@ -683,6 +793,18 @@ The MVP shall allow at most one active draft for a given Artifact.
 If regeneration occurs before the current draft is accepted, the older pending draft is preserved historically but becomes inactive/replaced.
 
 Implementation may use an existing status plus a system reason rather than adding unnecessary public statuses.
+
+### INV-006 - Generation Freshness
+
+Model output is bound only to what the model was actually shown:
+
+1. At generation start, record the approved upstream versions given to the model and the artifact's own approved version (the base).
+2. When the result arrives, if the base is no longer the approved version, or any dependency bound inside the recorded versions is no longer current, the result is stored as a **rejected** version with reason *stale generation context* - raw output and generation context kept for audit, no items created - and the user regenerates.
+3. Output is never silently re-bound to newer versions the model did not see.
+
+### INV-007 - Brief Immutability
+
+The project brief and optional creation-time context become immutable once any Requirements version exists. Requirement items are the roots of the lineage graph but are generated from the brief, and nothing outside the item graph can raise a warning, so an edited brief would silently invalidate every provenance claim. Changing the brief means creating a new project.
 
 ---
 
@@ -744,8 +866,9 @@ with fields such as:
 - artifactVersionId
 - itemVersionId
 - position/order if required
+- for a Story, the Epic's logical item it sits under in that version
 
-This is fundamentally many-to-many.
+This is fundamentally many-to-many. An ArtifactVersion holds at most one ItemVersion of each LogicalItem. The Epic parent is structural and deliberately outside the Story's semantic projection, so moving a Story between Epics is not a lineage change.
 
 ---
 
@@ -797,16 +920,27 @@ semanticHash = SHA-256(canonicalJSON(semanticProjection(item)))
 
 Example fields:
 
-| Item type | Example semantic fields |
+| Item type | Semantic fields |
 |---|---|
-| Requirement | type, actor, behavior, constraints, acceptance criteria |
-| Architecture Decision | decision, technology/approach, constraints, major trade-offs |
-| UI Requirement | screen/flow, interaction requirement, responsive/accessibility constraints |
-| Story | user/value statement, source references, acceptance criteria |
+| Requirement | type (functional, non-functional, or constraint with its dimension), actor, behavior, constraints, acceptance criteria; for constraints, the structured value |
+| Architecture Decision | decision, technology/approach, constraints, major trade-offs, **exact upstream ItemVersion ids** |
+| UI Requirement | screen/flow, interaction requirement, responsive/accessibility constraints, **exact upstream ItemVersion ids** |
+| Story | user/value statement, acceptance criteria, structured behavior, **exact upstream ItemVersion ids** |
+| Epic | title, scope statement |
 
 Fields such as formatting, generated explanation text, timestamps, or display-only metadata shall not affect semantic equality unless they carry real project meaning.
 
 The LLM's proposed unchanged/modified classification is a hint. Code-owned structural comparison decides whether the previous ItemVersion is reused.
+
+### INV-016 - Upstream Versions Are Part of the Hash
+
+For dependent item types, the sorted exact upstream ItemVersion ids are part of the semantic projection. Otherwise a Story regenerated against a changed Requirement would reuse its old ItemVersion, whose dependencies still point at the obsolete version, and the warning could never clear. Consequently, changing an item's dependency set always creates a new ItemVersion (INV-015).
+
+A **content-only projection** - the same projection without upstream ids - is used only for identity fallback matching (INV-014).
+
+The projection rules are frozen for the MVP (hash rule version 1). Code refuses to compare against an ItemVersion hashed under a different rule version rather than silently marking every item modified.
+
+Regeneration must be **stable**: aggressive normalization (case, whitespace, punctuation, sorted criteria), the base items supplied verbatim to the model, and low generation temperature, verified by a no-change regeneration test (section 44, item 25).
 
 ---
 
@@ -829,8 +963,9 @@ Generation context is used for:
 - auditability
 - debugging
 - reproducibility
+- the **binding scope**: the model's dependency references are resolved only inside these versions (INV-006)
 
-Generation context does **not** automatically mean semantic dependency.
+Generation context does **not** automatically mean semantic dependency, and it never drives staleness. A manual revision draft (FR-081) contains no model output and has no generation context.
 
 ### 23.2 Semantic Dependency
 
@@ -860,6 +995,10 @@ Application code shall validate:
 
 Application code cannot prove the semantic relationship is logically true; it can enforce structural integrity.
 
+### INV-015 - Dependency Edges Are Immutable
+
+Dependencies are recorded between exact ItemVersions only when the downstream ItemVersion is created, and are never added, changed or removed afterwards. Changing what an item depends on means creating a new ItemVersion. Both ends of every dependency belong to the same project, enforced by the database.
+
 ---
 
 ## 24. Item Matching During Regeneration
@@ -868,15 +1007,23 @@ The application owns item identities.
 
 When an artifact is regenerated, the comparison base shall be the current authoritative approved ArtifactVersion captured when the new draft is created. Rejected or inactive drafts shall not become the base.
 
-1. Existing items and their identifiers from that approved base are supplied to the model.
-2. The model may propose which previous logical item a new output corresponds to.
-3. Code validates that proposed previous identity exists.
+1. Existing items from that approved base are supplied to the model with their **display keys** (never database ids).
+2. The model may propose which previous logical item a new output corresponds to, by display key.
+3. Code validates that the proposed key belongs to a member of the base version of the same item type. Each base item can be claimed at most once; two outputs claiming the same key is a validation error.
 4. Code computes the artifact-type-specific semantic comparison.
 5. If meaningfully unchanged, reuse the old ItemVersion.
 6. If meaningfully modified, create a new ItemVersion under the same LogicalItem.
 7. If new, create a new LogicalItem and ItemVersion.
 
 The model must not invent trusted canonical identifiers.
+
+Only the base version's ItemVersion can be reused. An identical *older* version is not: a revert creates a new ItemVersion, and work built on the old one stays flagged conservatively until it is regenerated or acknowledged.
+
+### INV-014 - Deterministic Identity Fallback
+
+If an output has no valid previous key, code compares its content-only projection (INV-016) with the still-unclaimed base items of the same type. Exactly one identical match is treated as that item; zero or several means new. One forgotten hint must not mint a new identity, mark the old one removed, and flag everything downstream of it.
+
+Architecture decisions are matched this way at approval, against the previously approved ADRs (FR-022).
 
 ---
 
@@ -898,7 +1045,9 @@ Impact state is computed from:
 
 Approving a new ArtifactVersion does not automatically make every downstream item stale.
 
-Traversal begins from the specific ItemVersions that changed or were removed.
+Traversal begins from the specific ItemVersions that are no longer current - changed or removed - **relative to the current approved state**, not only those changed by the most recent approval. A warning therefore persists across unrelated later revisions until the dependent item is regenerated against the current version or acknowledged.
+
+An ItemVersion is **current** when it is a member of its artifact's approved version. An unchanged ItemVersion reused by a new version stays current, so work built on it is never flagged.
 
 ### INV-022 - Direct vs Transitive Impact
 
@@ -908,6 +1057,8 @@ Throughline shall distinguish:
 - **Transitive impact:** the item depends on another impacted item through one or more dependency edges
 
 The system shall support transitive traversal for P0 and shall not flatten all impact into one undifferentiated list.
+
+If an item is impacted both directly and transitively by the same cause, it is reported as direct. Only current items are reported, and traversal never passes through historical items: when an intermediate item is itself superseded, the warning names that nearest obsolete item as the cause, so repair proceeds top-down.
 
 ### INV-023 - Inspectable Impact Path
 
@@ -933,6 +1084,12 @@ Warnings shall use conservative wording such as:
 
 Throughline shall not claim an item is incorrect unless that conclusion is actually known.
 
+### INV-025 - One Impact Engine, Evaluated Against Current State
+
+All impact output - warning panel, dependency view, approval gate, and GitHub/Stitch/Jira drift - comes from one implementation, evaluated against the current approved state on every read. Nothing is derived from "what changed at the last approval".
+
+For the approval gate, the candidate draft **replaces** its own artifact's approved version for the evaluation; it is never evaluated in addition to it. External references are impacted when an item they were created from is no longer current or is itself impacted (GitHub and Stitch: every item of the source version; Jira: the exact source item).
+
 ---
 
 ## 26. Warning Acknowledgements
@@ -946,20 +1103,20 @@ Acknowledgement must be specific to both:
 
 Conceptual fields:
 
-- subjectVersionId
-- subjectItemVersionId if applicable
-- causeVersionId
-- causeItemVersionId if applicable
-- acknowledgedAt
-- note
+- subject: the flagged ItemVersion, or the flagged external reference
+- obsolete root: the non-current ItemVersion the warning traces back to
+- acknowledged against: the current ItemVersion of that root's logical item at acknowledgement time, or none if the item was removed
+- acknowledgedBy, acknowledgedAt, note
 
 Example:
 
-S-12 acknowledges impact caused by:
+S-12 acknowledges impact caused by `R-07 v2`, acknowledged against `R-07 v3`.
 
-`R-07 v2 -> R-07 v3`
+### INV-026 - Cause-Specific Acknowledgement
 
-If R-11 later changes, the earlier acknowledgement must not suppress the new warning.
+An acknowledgement suppresses exactly one divergence: that subject, that root, and what was current then. It stops suppressing the moment the root's logical item moves again (R-07 v3 -> v4), and it never suppresses a warning with a different cause (a later R-11 change). Acknowledging does not stop propagation to items that depend on the acknowledged item. Acknowledgements are append-only.
+
+Removed content that is added back later is a new logical item (display keys are never reused), so an acknowledgement of the removal keeps matching.
 
 ---
 
@@ -1004,9 +1161,11 @@ Conceptually, `ExternalRef` contains:
 
 - provider
 - externalId
-- sourceVersionId when relevant
-- canonical `sourceItemVersionId` when created from an item
+- the exact source ArtifactVersion: the selected Architecture version (GitHub), the UI Requirements version (Stitch), or the exported Backlog version (Jira)
+- canonical `sourceItemVersionId`, for Jira only: the exact Epic/Story ItemVersion, which must be a member of that Backlog version
 - optional display key for convenience
+
+An external object can be adopted by at most one reference.
 
 The human-readable key is not the canonical provenance foreign key.
 
@@ -1033,6 +1192,15 @@ Possible states may include:
 - failed
 - reconciliation_required
 
+Rules:
+
+- **One operation per external object.** Thirteen Stories are thirteen operations, so partial failure is representable per object.
+- **Deterministic, target-specific operation key.** GitHub includes the repository name; Jira includes the Jira project key and the source ItemVersion. Changing the target is a new operation, never a reuse of an object in the old target.
+- **The operation is committed before the provider request.** Otherwise a crash mid-request leaves no record that a request was sent, and the retry duplicates the object.
+- **Provenance is validated when the operation is created**, before any provider call, with the same rules as ExternalRef, so a malformed write fails before a side effect exists.
+- **The request fingerprint is compared first**, for every status: the same key with a different request is a conflict - never a silent resend and never a silent reuse.
+- `failed` is only for definitive provider rejections. Timeouts, server errors and lost responses become `reconciliation_required`. A `pending` operation is treated as possibly abandoned only after longer than the provider timeout plus a margin, measured from a database-maintained timestamp. Retries after an ambiguous outcome are user-initiated.
+
 ---
 
 ## 30. Retry Safety and Reconciliation
@@ -1054,13 +1222,14 @@ Therefore P0 requires a reconciliation strategy after ambiguous failures.
 
 ### 30.1 GitHub Reconciliation
 
-GitHub repository creation can use a deterministic owner/repository name.
+GitHub repository creation uses a deterministic owner/repository name **and an ownership marker** written atomically at creation (a keyed hash of the operation key in the repository description, repeated in the lineage metadata file). A matching name alone is never trusted.
 
 After an ambiguous failure:
 
 1. query GitHub for the expected repository
-2. if it exists, reconcile the local ExternalRef
-3. if it does not exist, allow retry
+2. if it exists **and the marker matches**, reconcile the local ExternalRef
+3. if it exists without the marker, it belongs to someone else: the operation fails definitively and the user chooses another name (a new operation)
+4. if it does not exist, allow retry
 
 ### 30.2 Jira Reconciliation
 
@@ -1068,9 +1237,9 @@ For Jira creation, Throughline shall use a deterministic Throughline source mark
 
 After an ambiguous failure:
 
-1. search Jira for the Throughline source marker
+1. search Jira for the Throughline source marker; Jira search can lag behind a create, so re-query briefly (a few attempts over about ten seconds) before concluding it is absent
 2. if an issue exists, reconcile the local ExternalRef
-3. if no issue exists, allow retry
+3. if no issue exists, allow a retry that the user confirms explicitly
 
 The exact Jira marker mechanism must be validated during the technical integration spike.
 
@@ -1133,7 +1302,7 @@ AI-generated outputs shall use structured schemas rather than unvalidated free-f
 
 Every artifact payload shall include a `schemaVersion`.
 
-The application shall validate structured output before accepting it into workflow state.
+The application shall validate structured output before accepting it into workflow state. Model output that arrives after its generation context became stale is kept as received, separately from the validated payload, for audit (INV-006).
 
 ---
 
@@ -1169,7 +1338,7 @@ Users shall be able to understand why a downstream item is flagged when a depend
 
 ### NFR-002 - Data Integrity
 
-Application code shall enforce referential integrity and prevent invalid cross-project references.
+The database and the application shall together enforce referential integrity and prevent invalid cross-project references. The database enforces the invariants that protect lineage directly (ERD/Data Model v1.4, integrity matrix); the application enforces the rest through a single write path.
 
 ### NFR-003 - History Preservation
 
@@ -1193,6 +1362,10 @@ Where practical, generated ArtifactVersions should record:
 - Generated HTML shall be sandboxed for preview.
 - External writes shall require explicit user action after preview.
 - The hosted capstone instance shall be protected by at least a basic access gate (for example, authenticated/allowlisted access) so an unknown public visitor cannot use stored GitHub, Jira, Stitch, or LLM credentials to trigger external actions or spend API budget.
+- Authentication uses Supabase Auth with public sign-up disabled (invite-only). An email allowlist is checked server-side on every request, and the user's identity is taken only from verified session data.
+- Every request is authorized by project ownership before any read or write.
+- The database is reachable only through the application server: the Supabase Data API is denied to its public roles for every table and function.
+- Model output is untrusted data: it never supplies identifiers, statuses or queries, and generated text is rendered as escaped text or sanitized Markdown, never as raw HTML.
 
 ### NFR-006 - Reliability
 
@@ -1230,7 +1403,8 @@ P0 is the minimum acceptable capstone.
 - approval/revision workflow
 - ApprovalEvent log
 - immutable history
-- selected Architecture option
+- selected Architecture option, with approval-time materialization of its decisions
+- invite-only authentication with server-side allowlist; Data API closed to public roles
 
 ### Lineage
 
@@ -1244,6 +1418,10 @@ P0 is the minimum acceptable capstone.
 - inspectable impact path
 - computed review/stale warnings
 - warning acknowledgement tied to the triggering change
+- generation freshness (stale results recorded, never re-bound)
+- approval currentness gate and approve-anyway override with a note
+- manual revision draft and manual item edit with visible rebinding
+- impact shown in every external-write preview
 
 ### AI
 
@@ -1462,6 +1640,8 @@ Recommended order:
 
 If time becomes tight, P1 features are removed before simplifying the P0 lineage model.
 
+The ERD/Data Model v1.4 (section 14) refines this order into four build slices, each gated by specific tests.
+
 ---
 
 ## 42. Early Technical Spikes
@@ -1475,6 +1655,8 @@ Prove:
 ```text
 LLM -> structured JSON -> schema validation -> persisted ArtifactVersion
 ```
+
+and that **regenerating with no change reproduces the same items**: the same semantic hashes and zero new ItemVersions. If regeneration is not stable, every downstream item is flagged for nothing; this is the highest-risk behaviour in the product.
 
 ### Spike B - Stitch
 
@@ -1519,6 +1701,11 @@ The purpose is to expose problems involving:
 
 The first hosted deployment should not be left until demo day.
 
+Specific to the chosen platform:
+
+- Supabase free-tier projects pause after a period of inactivity; open the project before any demo or evaluation session.
+- LLM generation calls can run longer than default serverless function limits; set the function duration explicitly for generation routes. A timed-out request persists nothing (the persist transaction runs after the model call), so a retry is safe but costs another model call.
+
 ---
 
 # PART H - ACCEPTANCE CRITERIA FOR THE CAPSTONE
@@ -1551,6 +1738,11 @@ The capstone is considered functionally successful when all of the following cor
 22. The dependency view is generated from the same lineage data used by the warning engine.
 23. The user can acknowledge a warning without suppressing unrelated future warnings.
 24. No automatic Jira update, repository restructuring, code generation, or deployment occurs.
+25. Regenerating an artifact with no change creates no new ItemVersions and no new warnings.
+26. A draft whose own items rest on obsolete sources cannot be approved without an explicit, noted override, which is recorded as cause-specific acknowledgements.
+27. A generation whose context became stale before its result was saved is recorded as rejected and never re-bound to newer versions.
+28. The controlled change test can be performed with a manual revision that changes exactly one item.
+29. The public Supabase key cannot read or write any project data.
 
 ---
 
@@ -1590,6 +1782,16 @@ These rules must not be silently changed during implementation.
 30. AI semantic change-impact prose is optional P1.
 31. One active draft per Artifact is allowed in the MVP.
 32. The project prioritizes lineage correctness over integration breadth or visual polish.
+33. Generation binds dependencies only inside the approved versions the model was shown; stale results are recorded as rejected, never re-bound.
+34. Approval is blocked while the draft's own items would be flagged; the exits are regeneration, revision, or an audited override that writes cause-specific acknowledgements.
+35. The approval gate evaluates the candidate as replacing its artifact's approved version.
+36. Dependency edges are immutable; changing dependencies creates a new ItemVersion.
+37. Exact upstream ItemVersion ids are part of the semantic hash of dependent items.
+38. A base item keeps its identity when the model forgets its key, through content-only fallback matching.
+39. The brief is immutable once Requirements generation has run.
+40. External operations are committed with valid provenance before the provider call; the request fingerprint is checked before any status decision.
+41. GitHub repositories are adopted only when Throughline's ownership marker matches.
+42. Epics and Stories both get the Skip / Create New re-export choice.
 
 ---
 
@@ -1597,7 +1799,7 @@ These rules must not be silently changed during implementation.
 
 When using this file as development context:
 
-- Treat this technical requirements document, together with Throughline BRD v2.2, as the current authoritative product baseline.
+- Treat this technical requirements document, together with Throughline BRD v2.2 and the ERD/Data Model v1.4, as the current authoritative product baseline.
 - Do not reopen previously rejected features unless a concrete blocker requires it.
 - Do not introduce two-way synchronization.
 - Do not introduce autonomous code generation.
@@ -1611,18 +1813,17 @@ When using this file as development context:
 - Prefer simple, explicit data structures that preserve the invariants above.
 - If implementation pressure occurs, remove P1 features before weakening lineage behavior.
 - If a requested implementation contradicts this technical requirements document, identify the contradiction before proceeding.
+- Do not accept identifiers, statuses or dependency ids from model output; code binds display keys.
+- Do not bypass the approval gate; the override is the only audited exit.
+- Do not write Supabase RLS policies or use the Supabase Data API for data; all access goes through the application server.
 
 Recommended next development documents:
 
-1. ERD / Data Model
+1. ERD / Data Model - done (v1.4)
 2. Module boundaries
 3. API contracts
 4. Jira implementation plan
 5. Day-by-day implementation plan
-
----
-
-**End of Technical Requirements & Lineage Invariants**
 
 ---
 
@@ -1633,13 +1834,13 @@ This matrix connects the business requirements in **Throughline BRD v2.2** to th
 | Business Requirement | Technical realization |
 |---|---|
 | **BR-001** - Structured project-initialization workflow | FR-001, FR-002, FR-010, FR-020, FR-040, FR-060; Sections 7, 9-15 |
-| **BR-002** - Human approval controls authoritative state | FR-013, FR-022, FR-041, FR-064; INV-001 through INV-005 |
-| **BR-003** - Exact approved-source lineage | FR-011, FR-034, FR-062, FR-073; Sections 19-24 and 28 |
-| **BR-004** - Specific direct/transitive change impact with inspectable reason | INV-013, INV-020 through INV-024; Sections 25-27 |
+| **BR-002** - Human approval controls authoritative state | FR-013, FR-022, FR-041, FR-064, FR-081 through FR-084; INV-001 through INV-007 |
+| **BR-003** - Exact approved-source lineage | FR-011, FR-034, FR-062, FR-073, FR-080, FR-082; INV-014 through INV-016; Sections 19-24 and 28 |
+| **BR-004** - Specific direct/transitive change impact with inspectable reason | FR-083; INV-013, INV-020 through INV-026; Sections 25-27 |
 | **BR-005** - Honest GitHub initialization from approved architecture | FR-030 through FR-036; Sections 12, 29-31 |
 | **BR-006** - Stitch generation from approved UI Requirements without controlling backlog lineage | FR-040, FR-041, FR-050 through FR-054; Sections 13-14 |
 | **BR-007** - Preview/create Jira Epics and Stories with exact local provenance | FR-070 through FR-074; Sections 16 and 28-30 |
-| **BR-008** - Explicit, previewed, retry-aware external writes | FR-030, FR-050, FR-070; Sections 29-31 |
+| **BR-008** - Explicit, previewed, retry-aware external writes | FR-030, FR-050, FR-070, FR-085; Sections 29-31 |
 | **BR-009** - AI for semantic work; deterministic code for state and integrity | Sections 23-24 and 32-33; all approval/lineage invariants |
 | **BR-010** - Protect core lineage when scope pressure occurs | Sections 36-38 and 41-44 |
 
@@ -1658,3 +1859,7 @@ Business Objective (BO)
 
 The ERD shall not invent entities that contradict this technical baseline. If an implementation need appears to require such a contradiction, the requirement or invariant must be revisited explicitly first.
 
+
+---
+
+**End of Technical Requirements & Lineage Invariants**
