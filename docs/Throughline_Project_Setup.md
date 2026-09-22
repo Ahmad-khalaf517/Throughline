@@ -1,7 +1,7 @@
 # Throughline - Project Setup & Configuration Plan
 
-**Document version:** 1.1
-**Status:** Plan only - nothing in this document has been installed or executed yet. v1.1 adds the house code-hygiene conventions (husky, lint-staged, Prettier, `.npmrc`, `.vscode`, `.gitattributes`), read from `luxe-sofa-shop`, `AuthFlow` and `BillBoard-Hub` rather than invented. Derived from ERD/Data Model v1.4 (FROZEN), Technical Requirements & Lineage Invariants v1.3, and Module Boundaries v1.0.
+**Document version:** 1.2
+**Status:** Slice 1, steps 1-4 of section 10 are scaffolded on branch `chore/project-setup` (worktree `../Throughline-project-setup`); steps 5-12 not started. v1.2 records what actually happened during scaffolding (section 13). v1.1 added the house code-hygiene conventions (husky, lint-staged, Prettier, `.npmrc`, `.vscode`, `.gitattributes`), read from `luxe-sofa-shop`, `AuthFlow` and `BillBoard-Hub` rather than invented. Derived from ERD/Data Model v1.4 (FROZEN), Technical Requirements & Lineage Invariants v1.3, and Module Boundaries v1.0.
 **Primary audience:** Developer, AI coding agents doing slice 1.
 
 > **For AI agents:** this document decides *how the repository is set up*; it does not decide behavior. Every stack choice below traces to a decision already frozen in the ERD (section 15) or TR (section 5.1), or to a decision recorded in section 11 of this document. Do not add a dependency that is not in section 4 without recording it there first - NFR-008 (simplicity) is a requirement, not a preference.
@@ -30,7 +30,7 @@ No schema, invariant, or module boundary changes. These are build-environment de
 | Node | **22.x LTS** | Pinned in `.nvmrc` and `package.json#engines`; Vercel and GitHub Actions both read it. |
 | Package manager | **pnpm** (`packageManager` field in `package.json`) | Corepack-enabled, lockfile committed. |
 | Language | **TypeScript 5.x**, `strict: true`, `noUncheckedIndexedAccess: true` | The lineage core is where an `undefined` slips through silently. |
-| Framework | **Next.js 15, App Router**, React 19, server-side only for data | TR 5.1: every read and write goes through the application server. |
+| Framework | **Next.js 16.3.5, App Router**, React 19.2.8, server-side only for data | TR 5.1: every read and write goes through the application server. Bumped from the originally planned "15" - 16 was current stable when `create-next-app` scaffolded slice 1 (section 13); nothing in the ERD/TR pins a Next.js major. |
 | Database | **PostgreSQL 15+ on Supabase** | ERD section 2.1 for connection rules. |
 | Module system | ESM throughout | |
 
@@ -453,3 +453,30 @@ Slices 2-4 then follow Module Boundaries §8 unchanged - no further setup work i
 | Container-based integration tests on `postgres:15-alpine` | ERD header (verified on 15 and 17) |
 | Invite-only auth + server-side allowlist on every request | NFR-005, ERD sections 2 and 4.1 |
 | Private Storage bucket, signed URLs | ERD 4.16, TR 5.1 |
+
+---
+
+## 13. Slice-1 scaffolding log
+
+What actually happened, kept here so this document stays accurate rather than aspirational (same discipline as the ERD's Appendix B).
+
+**Where:** branch `chore/project-setup`, in a separate worktree at `../Throughline-project-setup` (not the `main` checkout).
+
+**Done (section 10 steps 1-4):**
+
+1. `create-next-app` scaffolded TypeScript/Tailwind v4/ESLint/App Router/`src/`. Landed as **Next.js 16.3.5 / React 19.2.8** - current stable at scaffold time, not the "15" this document originally pinned in section 2. Nothing in the ERD or TR pins a Next.js major, so 16 was kept rather than fighting the installer down to 15; section 2's table now reflects this.
+2. `tsconfig.json` strictness (`noUncheckedIndexedAccess`, `noImplicitOverride`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`), `package.json#engines` (`node >=22 <23`), all npm scripts from section 8.
+3. Code hygiene (2b): `.gitattributes`, `.npmrc`, `.prettierrc.json`, `.prettierignore`, `.vscode/`, husky hooks (`pre-commit`/`pre-push`, executable bit set via `git update-index --chmod=+x` since Windows doesn't persist `chmod` - confirm this survives a real clone), `lint-staged` config. Default `create-next-app` boilerplate (public SVGs, sample `page.tsx`/README copy) removed per step 1's "delete the sample content."
+4. All 17 module folders with stub `index.ts` files (plus `src/db/client.ts`, `src/db/lock.ts`, `src/db/schema/index.ts`, and a README in `src/app/api/` in place of a stub, since route handlers don't share one barrel file). `eslint.config.mjs` written with `eslint-plugin-boundaries` encoding Module Boundaries §2's layer graph, plus `no-restricted-imports` pinning `withProjectLock` to `artifact-lifecycle` and the `openai` SDK to `ai-client`. A deliberate `src/artifact-types/backlog/_boundary-violation-test.ts` was added per step 3 but **not yet run** - see the blocker below. Delete that file once `pnpm lint` has been confirmed to fail on it and then to pass without it.
+5. `drizzle.config.ts`, `vitest.config.ts` (unit/integration projects), `next.config.ts` (`serverExternalPackages: ['postgres']`), `components.json` (shadcn), `scripts/verify-ddl.ts` (a skeleton that prints normalized generated SQL for manual comparison - the auto-diff-against-a-pasted-Appendix-A behavior described in section 5 is not yet implemented; see the script's own TODO), `.github/workflows/ci.yml`, `src/lib/env.ts` (Zod-parsed env, throws at import time - uses `.string().url()`/`.string().email()` rather than the newer `z.url()`/`z.email()` top-level helpers, since the installed Zod major couldn't be confirmed against the registry).
+
+**Blocked - could not complete:**
+
+`pnpm install` has not finished. Diagnosed directly: DNS/TCP/TLS to `registry.npmjs.org` are all fast (tens of milliseconds), but sustained download throughput on this sandbox's egress is roughly **1-1.5 KB/s** - confirmed with `curl -w` timing breakdowns and PowerShell's `Invoke-WebRequest`, both with and without the Bash tool's sandbox. At that rate a full Next.js dependency tree (hundreds of packages) would take on the order of days, not minutes. Consequences:
+
+- No `node_modules`, no `pnpm-lock.yaml`.
+- `package.json`'s dependency versions (section 4 list) are best-effort: `next`, `react`, `react-dom`, `eslint-config-next` are exact and confirmed (`create-next-app` resolved them before the throttle made itself known); everything else is a caret range chosen from training knowledge, **not verified against the registry**. Some may need correcting once `pnpm install` actually runs.
+- Steps 3's boundary-lint self-test, 6-9 (Drizzle schema, migrations, Appendix C suite), and 11 (CI) cannot proceed until dependencies install somewhere with normal network access - a different machine/connection, or whatever resolves this sandbox's egress limit.
+- `next/font/google` (used in `src/app/layout.tsx` for Geist) also fetches from Google Fonts' CDN at build time and will hit the same throttle; if this recurs elsewhere with normal network, switch to `next/font/local` or system fonts rather than re-diagnosing the same issue.
+
+**Not started:** section 10 steps 5 (Supabase provisioning - needs the user's account), 10-12 (auth module, CI verification, Vercel deploy).
