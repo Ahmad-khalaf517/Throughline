@@ -24,9 +24,10 @@ export default defineConfig({
           name: 'unit',
           include: ['tests/unit/**/*.test.ts'],
           environment: 'node',
-          // No unit tests exist yet (early slice-1); don't fail the run
-          // over an empty suite. Remove once tests/unit has real specs.
-          passWithNoTests: true,
+          // passWithNoTests is set once at the root (above) - vitest 3's
+          // NonProjectOptions forbids it per-project (tsc catches this:
+          // "'passWithNoTests' does not exist in type 'ProjectConfig'").
+          // The root setting still applies when running `--project unit`.
         },
       },
       {
@@ -34,9 +35,8 @@ export default defineConfig({
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],
           environment: 'node',
-          // No integration tests exist yet (early slice-1); don't fail the
-          // run over an empty suite. Remove once tests/integration has real specs.
-          passWithNoTests: true,
+          // passWithNoTests is set once at the root (above); see the `unit`
+          // project's comment - it is not a valid per-project option in vitest 3.
           // Testcontainers + advisory locks: keep it deterministic, not parallel.
           pool: 'threads',
           poolOptions: { threads: { singleThread: true } },
