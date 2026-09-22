@@ -1,7 +1,7 @@
 # Throughline - Claude Skills & Agents Plan
 
-**Document version:** 1.2
-**Status:** Recommendation + operating guide, now fully applied. v1.1 recorded the section 2 removals (4 skills deleted from `.claude/skills/`, `.agents/skills/` and `skills-lock.json`) and the `.gitignore` split. v1.2 records section 6's four skills and section 7.3's four agents as **written and committed** (2026-09-23) - the ~2h30 setup checklist (section 11) is complete.
+**Document version:** 1.3
+**Status:** Recommendation + operating guide, now fully applied. v1.1 recorded the first removal pass (4 skills deleted). v1.2 recorded section 6's four skills and section 7.3's four agents as **written and committed** (2026-09-23) - the ~2h30 setup checklist (section 11) is complete. v1.3 records a second removal pass, same day, on request: the five originally-"Demote" skills were also deleted after their individual rationale was reviewed in chat. Active skill count: **9 -> 4** third-party skills.
 **Derived from:** BRD v2.2, Technical Requirements & Lineage Invariants v1.3, ERD/Data Model v1.4 (FROZEN), Module Boundaries v1.0, API Contracts v1.0, Project Setup & Configuration Plan v1.1, Jira Implementation Plan v1.0.
 **Primary audience:** Developer (you), and any AI coding agent doing E1-E6 work.
 
@@ -29,8 +29,8 @@ The second rule matters more than it sounds:
 
 | Location | Contents | Notes |
 |---|---|---|
-| `.claude/skills/` (project) | **9** skills from `emilkowalski/skill`: `animate`, `animation-vocabulary`, `apple-design`, `ask-sonner`, `emil-design-eng`, `find-animation-opportunities`, `improve-animations`, `prototype`, `review-animations` | Pinned by `skills-lock.json` with content hashes. Was 13; section 2's four removals are applied |
-| `.agents/skills/` (project) | Byte-identical mirror of the same 9 | Feeds the non-Claude agent runtime configured in `.codex/config.toml` |
+| `.claude/skills/` (project) | **4** skills from `emilkowalski/skill`: `animate`, `ask-sonner`, `emil-design-eng`, `prototype` | Pinned by `skills-lock.json` with content hashes. Was 13, then 9 after the first removal pass, then 4 after the second (section 2) |
+| `.agents/skills/` (project) | Byte-identical mirror of the same 4 | Feeds the non-Claude agent runtime configured in `.codex/config.toml` |
 | `~/.claude/skills/` (user) | `ui-ux-pro-max` | Applies to every project on this machine, not only Throughline |
 | `~/.claude/plugins/` (user) | `code-review@claude-plugins-official`, `frontend-design@claude-plugins-official` | |
 | This desktop session | `design:*`, `engineering:*`, `product-management:*`, `productivity:*`, `anthropic-skills:*`, `dataviz`, `artifact-design`, `artifact-diagramming`, plus built-in `/code-review`, `/security-review`, `/simplify`, `/init` | Bundled with the app - **no install needed**, invoke by name |
@@ -52,17 +52,17 @@ The second rule matters more than it sounds:
 | `frontend-design` (plugin) | **Keep - with a correction** | Stops generic AI-template output. But it optimizes for *distinctive*; Throughline needs *dense and calm*. Always prompt it with "dense internal data tool, not a marketing page". |
 | `code-review` (plugin) + built-in `/code-review` | **Keep** | Generic correctness review of the lineage core. It will not know your invariants - that gap is closed by section 6.1, not by a better generic reviewer. |
 | `prototype` | **Keep - sandbox only** | Fine for exploring a layout in a scratch file. Its output must not land in `src/` unchecked: it does not know Project Setup section 4 or the module layer graph. |
-| `review-animations` | **Demote** | Only meaningful once motion exists. You will have ~3 transitions; reviewing them is a five-minute job, not a skill invocation. |
-| `find-animation-opportunities` | **Demote** | Asks "what else could move?" in a project whose stated NFR is simplicity. Its honest answer here is "almost nothing". |
-| `improve-animations` | **Demote** | Produces a motion roadmap. E5 is 27h for ten screens; there is no room for one. |
-| `apple-design` | **Demote** | Gestures, sheets, momentum, translucency - Throughline has none of these. Its typography/restraint material is good, but `emil-design-eng` covers that without the gesture content. |
-| `animation-vocabulary` | **Demote** | A naming lookup. Costs nothing to keep, contributes nothing here. |
+| `review-animations` | **Removed** ✔ (was Demote) | Only meaningful once motion exists. You will have ~3 transitions; reviewing them is a five-minute job, not a skill invocation. |
+| `find-animation-opportunities` | **Removed** ✔ (was Demote) | Asks "what else could move?" in a project whose stated NFR is simplicity. Its honest answer here is "almost nothing". |
+| `improve-animations` | **Removed** ✔ (was Demote) | Produces a motion roadmap. E5 is 27h for ten screens; there is no room for one. |
+| `apple-design` | **Removed** ✔ (was Demote) | Gestures, sheets, momentum, translucency - Throughline has none of these. Its typography/restraint material is good, but `emil-design-eng` covers that without the gesture content. |
+| `animation-vocabulary` | **Removed** ✔ (was Demote) | A naming lookup. Costs nothing to keep, contributes nothing here. |
 | `mobile-native` | **Removed** ✔ | Throughline's own UI has no mobile requirement. "Responsive" appears in the requirement set **only as a content field of the generated `ui_requirement` artifact** (TR line 508; ERD `ui_requirement` row) - a constraint Throughline writes *about someone else's project*, never a constraint on its own screens. |
 | `animate-expo` | **Removed** ✔ | React Native / Expo. Not this stack. |
 | `write-swift` | **Removed** ✔ | Swift. Not this stack. |
 | `pick-ui-library` | **Removed** ✔ | Frozen: Project Setup **D-2 = Tailwind + shadcn/ui**. A skill whose job is to reopen a closed decision is a liability in a repo built on frozen decisions. |
 
-**Applied 2026-09-23.** The four **Removed** skills were deleted from `.claude/skills/`, from the `.agents/skills/` mirror, and from `skills-lock.json` (13 entries -> 9). The five **Demote** skills were deliberately kept: they cost nothing on disk, and `apple-design`'s typography material plus `review-animations` still have a marginal use in E5.
+**Applied 2026-09-23, in two passes.** First pass: the four originally-verdict **Removed** skills were deleted from `.claude/skills/`, the `.agents/skills/` mirror, and `skills-lock.json` (13 entries -> 9). Second pass, same day, on request: the five originally-verdict **Demote** skills were reviewed (their individual "why" restated above, requested and given in chat before deletion) and then also deleted, on the reasoning that "irrelevant but harmless" is still selection-space noise (section 10.1) once the four `throughline-*` skills exist to do the load-bearing work - 9 entries -> 4. **Active set is now 4 third-party skills** (`animate`, `ask-sonner`, `emil-design-eng`, `prototype`) **+ 4 `throughline-*` skills** (section 6) **+ user-level `ui-ux-pro-max`** (not in this repo's lock file - see section 1's location table).
 
 **How to reverse it:** `.claude/`, `.agents/` and `skills-lock.json` are gitignored, so this deletion is *not* recoverable from git history. Re-running `npx skills add emilkowalski/skill` restores the full pack from source, then delete again what you do not want. Nothing else in the repo referenced these four.
 
@@ -483,7 +483,7 @@ If a skill you wrote never fires, the cause is nearly always the `description` l
 
 Skills are chosen by matching your request against `description` lines. Thirteen animation and mobile skills in a project with no animation and no mobile do not sit quietly - they compete for selection with the skills you need, and occasionally win. A vague description on an irrelevant skill is worse than no skill.
 
-**Target: about 8-12 active skills for this project.** Section 2's removals and section 6's four additions land you near that.
+**Target: about 8-12 active skills for this project.** Section 2's original plan landed at 9 (4 kept third-party + 4 `throughline-*` + `ui-ux-pro-max` at user level) and was tightened further to **8** on request - the five originally-"Demote" skills were removed as well, leaving only skills with a genuine, stated reason to fire in this repo.
 
 ### 10.2 If you do not want to remove them, name the ones that apply
 
