@@ -1,7 +1,7 @@
 # Throughline - ERD / Data Model
 
-**Document version:** 1.4 - **FROZEN for implementation** (see section 14 for what may still change)
-**Status:** Derived from Throughline BRD v2.2 and Technical Requirements & Lineage Invariants v1.3, after seven review rounds (round 7: final cross-document review; no DDL change). Parent of Modules -> API Contracts -> Jira Plan -> Implementation.
+**Document version:** 1.5 - **FROZEN for implementation** (see section 14 for what may still change)
+**Status:** Derived from Throughline BRD v2.2 and Technical Requirements & Lineage Invariants v1.3, after eight review rounds (round 8: build-environment decisions - LLM provider, UI, tests, CI; no DDL change). Parent of Modules -> Project Setup -> API Contracts -> Jira Plan -> Implementation.
 **Target engine:** PostgreSQL 15+ (`NULLS NOT DISTINCT` needs 15). **Verified:** the complete Appendix A DDL, all triggers, `impact()` and the Supabase hardening apply cleanly and pass the behaviour suite (Appendix C) on **PostgreSQL 15 and 17** (the versions Supabase runs), as a non-superuser table owner with Supabase's roles and default grants reproduced.
 **Platform:** Supabase Auth + Supabase Postgres (sections 2 and 4.1). **ORM:** Drizzle ORM + drizzle-kit (section 2.1).
 **Primary audience:** Developer, technical reviewers, and AI coding agents.
@@ -1026,6 +1026,11 @@ Most expensive to change later: upstream ids in the semantic hash - which is why
 - **Authentication:** Supabase Auth, invite-only; `app_user.id` = Supabase user id, no FK to `auth.users`, no unique email (section 4.1).
 - **Data API:** denied to anon/authenticated (grants revoked, RLS deny-all, no policies); the app never uses it (A.3).
 - **Object storage:** private Supabase Storage bucket, signed URLs (section 4.16).
+- **LLM provider:** OpenAI, strict structured outputs + local Zod re-validation in `ai-client` (round 8).
+- **UI:** Tailwind CSS + shadcn/ui, components copied into the repo (round 8).
+- **Tests:** Vitest; Appendix C suite against a `postgres:15-alpine` container (round 8).
+- **Hosting/CI:** Vercel + GitHub Actions on every PR; layer boundaries lint-enforced (round 8).
+- **Build environment:** the full setup, dependency and migration-order plan is `docs/Throughline_Project_Setup.md` (current version tracked there; v1.1 as of round 8 - it adds house code-hygiene conventions on top of the v1.0 stack decisions, no further schema/DDL impact).
 
 **Still open:** none that affect the schema. Spike C (the Jira marker mechanism) can change only the *content* of the marker, not any table.
 
@@ -1576,6 +1581,19 @@ No DDL, trigger or `impact()` change; Appendix A and the Appendix C results stan
 | R7-4 | Impact shown in every external-write preview, with explicit confirmation (section 7.1, TR FR-085) | Nothing stale leaves Throughline without the user seeing it (T42) |
 | R7-5 | Technical Requirements v1.3 corrected where v1.2 contradicted this ERD - most importantly its section 30.1, which adopted an existing GitHub repository by name alone | Section 12 now maps every ERD behavior to a TR requirement |
 | R7-6 | BRD v2.2 reviewed: no change needed | Every business requirement, P0 capability and exclusion is consistent with the ERD and TR v1.3 |
+
+---
+
+### Round 8 (v1.4 -> v1.5: build-environment decisions, Project Setup plan v1.0)
+
+No DDL, trigger or `impact()` change - the freeze holds. These close the last four open build choices left by TR section 5.1 and Module Boundaries v1.0, and are recorded here so this document stays the single current source of truth. They are captured in full in `docs/Throughline_Project_Setup.md` v1.0.
+
+| Ref | Change | Note |
+|---|---|---|
+| R8-1 | **LLM provider: OpenAI**, via the official `openai` SDK using strict structured outputs (`zodResponseFormat`), with a second Zod parse inside `ai-client` | TR 5.1 required "one LLM provider" without naming it. Provider-side schema enforcement plus local re-validation keeps Module Boundaries §4.1's contract intact; model output remains untrusted data (NFR-005) |
+| R8-2 | **UI: Tailwind CSS + shadcn/ui** (components copied into the repo, no UI runtime dependency) | Covers the review/diff/impact/approval screens without a component-library runtime; NFR-008 |
+| R8-3 | **Tests: Vitest**, unit tests headless for the lineage core, Appendix C suite against a throwaway `postgres:15-alpine` container | Matches the engine Appendix A was executed on; ERD section 14 risk 1 ("build it headless") and risk 2 ("keep the suite running on every change") |
+| R8-4 | **Hosting/CI: Vercel + GitHub Actions** running typecheck, lint, unit and the Appendix C suite on every PR; layer boundaries enforced by `eslint-plugin-boundaries` | Makes the section 14 regression net automatic rather than a matter of discipline; T34 additionally runs once manually against the real Supabase project |
 
 ---
 
