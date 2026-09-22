@@ -3,10 +3,11 @@ import { defineConfig } from 'drizzle-kit';
 // ERD section 2.1: migrations run over the session pooler / direct
 // connection as `postgres`, NOT the transaction pooler (port 6543) the
 // application uses at runtime - see src/db/client.ts.
-const directUrl = process.env.DIRECT_DATABASE_URL;
-if (!directUrl) {
-  throw new Error('DIRECT_DATABASE_URL is required for drizzle-kit (see .env.example).');
-}
+//
+// Only commands that open a live connection (migrate, push, studio, pull)
+// need this to be a real URL; `generate` diffs local schema snapshots and
+// never connects, so it must not be blocked by a missing .env.local.
+const directUrl = process.env.DIRECT_DATABASE_URL ?? '';
 
 export default defineConfig({
   schema: './src/db/schema',

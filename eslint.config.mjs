@@ -209,8 +209,8 @@ const eslintConfig = defineConfig([
     'build/**',
     'next-env.d.ts',
     'coverage/**',
+    // Covers the nested meta/ snapshots too.
     'drizzle/migrations/**',
-    'drizzle/meta/**',
   ]),
 ]);
 

@@ -1,7 +1,7 @@
 # Throughline - Project Setup & Configuration Plan
 
-**Document version:** 1.3
-**Status:** Slice 1, steps 1-4 of section 10 are scaffolded and verified on branch `chore/project-setup` (worktree `../Throughline-project-setup`) - dependencies installed, typecheck/lint/format all pass, the boundary-lint self-test has actually run. Steps 5-12 not started. v1.3 records the install/verification pass (section 13). v1.1 added the house code-hygiene conventions (husky, lint-staged, Prettier, `.npmrc`, `.vscode`, `.gitattributes`), read from `luxe-sofa-shop`, `AuthFlow` and `BillBoard-Hub` rather than invented. Derived from ERD/Data Model v1.4 (FROZEN), Technical Requirements & Lineage Invariants v1.3, and Module Boundaries v1.0.
+**Document version:** 1.4
+**Status:** Slice 1 steps 1-4 done and merged to `main`. An auth-only first cut of steps 5-6 also done, by request: the Supabase project exists (`throughline`, `olqxqsfowewvyrpwvepr`, eu-west-2) with just `app_user` created and hardened - not the full 16-table schema. v1.4 records that cut (section 13); a fixed `drizzle.config.ts` bug and a corrected `drizzle/migrations/meta/` path also landed. v1.1 added the house code-hygiene conventions (husky, lint-staged, Prettier, `.npmrc`, `.vscode`, `.gitattributes`), read from `luxe-sofa-shop`, `AuthFlow` and `BillBoard-Hub` rather than invented. Derived from ERD/Data Model v1.4 (FROZEN), Technical Requirements & Lineage Invariants v1.3, and Module Boundaries v1.0.
 **Primary audience:** Developer, AI coding agents doing slice 1.
 
 > **For AI agents:** this document decides *how the repository is set up*; it does not decide behavior. Every stack choice below traces to a decision already frozen in the ERD (section 15) or TR (section 5.1), or to a decision recorded in section 11 of this document. Do not add a dependency that is not in section 4 without recording it there first - NFR-008 (simplicity) is a requirement, not a preference.
@@ -47,8 +47,12 @@ Throughline/
   .github/workflows/ci.yml
   docs/                              # BRD, ERD, TR, Module Boundaries, this document
   drizzle/
-    migrations/                      # drizzle-kit output; 0000_*.sql .. 0003_*.sql (section 6)
-    meta/                            # drizzle-kit snapshots - COMMITTED, never hand-edited
+    migrations/                      # drizzle-kit output; 0000_*.sql, 0001_*.sql, ... (section 6)
+      meta/                          # drizzle-kit snapshots - nested here by drizzle-kit itself
+                                      # (not a sibling of migrations/ - corrected after slice 1
+                                      # scaffolding found the real default). COMMITTED, never
+                                      # hand-edited except a migration's journal tag on a deliberate
+                                      # rename of its .sql file.
   scripts/
     verify-ddl.ts                    # diff generated SQL against ERD Appendix A (slice 1 gate)
   src/
@@ -101,7 +105,7 @@ Throughline/
 1. Each module folder has an `index.ts`; nothing outside the folder imports a non-re-exported file (Module Boundaries §7). Enforced mechanically in section 5.3.
 2. `src/app/api/` contains route handlers and nothing else - no domain logic, no direct `db` import (except the project-creation route, per Module Boundaries §4.7).
 3. `src/lib/` is for framework glue. If something in `lib/` starts knowing about `artifact_version.status`, it belongs in a module.
-4. `drizzle/meta/` is committed. Deleting a snapshot makes the next `generate` re-emit objects that custom migrations already created.
+4. `drizzle/migrations/meta/` is committed. Deleting a snapshot makes the next `generate` re-emit objects that custom migrations already created.
 
 ---
 
@@ -188,7 +192,7 @@ Coverage thresholds are set on `src/lineage/**` and `src/artifact-lifecycle/**` 
 
 - `next.config.ts` - minimal; `serverExternalPackages: ['postgres']`.
 - `components.json` - shadcn/ui config pointing at `src/components/ui`.
-- `.gitignore` - `.env*.local`, `.next`, `node_modules`, coverage. **Not** `drizzle/meta`.
+- `.gitignore` - `.env*.local`, `.next`, `node_modules`, coverage. **Not** `drizzle/migrations/` (including its nested `meta/`).
 - `.npmrc` - copied verbatim from `luxe-sofa-shop` (peer-dep and fetch-retry settings):
 
 ```ini
@@ -230,9 +234,9 @@ node_modules
 out
 build
 
-# generated
+# generated - drizzle-kit nests its meta/ snapshots under migrations/, so one
+# entry covers both
 drizzle/migrations
-drizzle/meta
 pnpm-lock.yaml
 next-env.d.ts
 *.tsbuildinfo
@@ -244,7 +248,7 @@ public
 .env*
 ```
 
-Note `drizzle/migrations` and `drizzle/meta` are ignored: generated SQL must be diffed against ERD Appendix A byte-for-byte (section 6), and a formatter rewriting it would defeat `db:verify`.
+Note `drizzle/migrations` (its nested `meta/` included) is ignored: generated SQL must be diffed against ERD Appendix A byte-for-byte (section 6), and a formatter rewriting it would defeat `db:verify`.
 
 ### 5.7 Git hooks - husky + lint-staged
 
@@ -482,4 +486,14 @@ What actually happened, kept here so this document stays accurate rather than as
 
 **Not yet run:** `pnpm test:int` (the Appendix C suite doesn't exist yet either - same slice-2 dependency), anything needing Docker.
 
-**Still not started:** section 10 steps 5 (Supabase provisioning - needs the user's account), 6-9 (Drizzle schema/migrations/Appendix C suite - slice 2), 11 (CI - the workflow file exists but has never actually run), 12 (Vercel deploy).
+**Done since (auth-only first cut of steps 5-6, by request - not the full 16-table slice 2):**
+
+11. Fixed a real bug found while doing this: `drizzle.config.ts` hard-threw when `DIRECT_DATABASE_URL` was unset, which would have blocked `pnpm db:generate` on a machine with no `.env.local` yet, even though `generate` never opens a connection. Now defaults to an empty string; only `migrate`/`studio`/`push` (never used per section 2's rule) need it to be real.
+12. Corrected a layout mistake from step 4/5 above: drizzle-kit nests its `meta/` snapshots **inside** `drizzle/migrations/`, not as a sibling folder. Section 3's tree, `.gitignore`'s comment, `.prettierignore`, and `eslint.config.mjs`'s `globalIgnores` all referenced a `drizzle/meta/` that drizzle-kit never creates; all four fixed to `drizzle/migrations/**` (which already covers the nested `meta/`).
+13. `src/db/schema/app-user.ts` written to match ERD section 4.1 / Appendix A exactly (verified: `timestamptz` and `timestamp with time zone` are the same type, quoted vs unquoted identifiers and explicit `NOT NULL` on a `PRIMARY KEY` are cosmetic - the generated DDL is semantically identical to Appendix A). `pnpm db:generate` produced `drizzle/migrations/0000_app_user.sql`; renamed from drizzle-kit's random name to something legible, with the matching `tag` updated in `drizzle/migrations/meta/_journal.json` (renaming a migration file requires updating its journal tag, or `migrate` can't find it).
+14. `drizzle/migrations/0001_app_user_hardening.sql` written by hand: the two schema-wide `REVOKE` statements from ERD A.3 plus `ALTER TABLE app_user ENABLE ROW LEVEL SECURITY` - the per-table pattern section 6 already specified for any table added incrementally. Triggers (A.2) and `impact()` (section 6.3) are correctly **not** included; they operate on lineage tables that don't exist in this auth-only cut.
+15. A Supabase project was created for Throughline (none existed - the two prior projects in the account are unrelated and inactive): `throughline`, ref `olqxqsfowewvyrpwvepr`, `eu-west-2`, free tier ($0/month, confirmed before creation). Both migrations applied via the Supabase MCP's `apply_migration` (not `drizzle-kit migrate` - no DB password was available through any MCP tool to build a connection string; same SQL, same order, so the result is identical to what `migrate` would have produced).
+16. Verified against the live database, not just asserted: `list_tables` confirms `app_user` exists with `rls_enabled: true`; `get_advisors(type: security)` returns exactly one INFO-level finding - "RLS enabled, no policies" - which is the intended deny-all posture, not a problem; `information_schema.columns` matches Appendix A column-for-column.
+17. `.env.local` created (gitignored, never committed) with what the Supabase MCP could supply: project URL and the public anon key (both public by design). `DATABASE_URL`/`DIRECT_DATABASE_URL` have the pooler hostnames but a `[YOUR-DB-PASSWORD]` placeholder, and `SUPABASE_SERVICE_ROLE_KEY` is empty - neither the DB password nor the service-role key is retrievable through any Supabase MCP tool, by design. Get both from the dashboard: Project Settings -> Database (password) and Project Settings -> API (service_role secret key).
+
+**Still not started:** Supabase Auth configuration itself (invite-only sign-up, disabling public sign-up - NFR-005; this is a project setting, not a migration, and wasn't part of "create the app_user table"). The other 15 ERD tables, triggers, and `impact()` (slice 2). CI has still never actually run (the workflow file exists but no push/PR has triggered it). Vercel deploy (step 12).

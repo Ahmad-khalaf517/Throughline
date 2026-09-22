@@ -6,9 +6,11 @@ node_modules
 out
 build
 
-# generated
+# generated - drizzle-kit nests its meta/ snapshots under migrations/, so
+# this one entry covers both (Project Setup section 6: db:verify diffs the
+# .sql files against ERD Appendix A byte-for-byte; meta/*.json is drizzle-kit's
+# own bookkeeping, never hand-edited except journal tags on a deliberate rename).
 drizzle/migrations
-drizzle/meta
 pnpm-lock.yaml
 next-env.d.ts
 *.tsbuildinfo
@@ -24,3 +26,10 @@ public
 # living-doc discipline - a diff should be the decision, not Prettier's opinion
 # of a markdown table).
 docs
+
+# project-specific skill/agent definitions - same reasoning as docs/ above;
+# these encode frozen ERD/Module Boundaries decisions verbatim for AI agents
+# and aren't application code.
+.claude/skills
+.claude/agents
+.agents/skills

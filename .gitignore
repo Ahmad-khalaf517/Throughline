@@ -44,5 +44,6 @@ next-env.d.ts
 .vercel
 /coverage
 
-# drizzle-kit local artifacts (migrations/ and meta/ ARE committed - see Project Setup section 3 rule 4)
+# drizzle-kit local artifacts (drizzle/migrations/, including its nested
+# meta/ snapshots, IS committed - see Project Setup section 3 rule 4)
 drizzle/.drizzle-studio/

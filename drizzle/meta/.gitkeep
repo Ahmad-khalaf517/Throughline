@@ -1,3 +1,0 @@
-drizzle-kit snapshots - committed, never hand-edited (Project Setup section 3
-rule 4: deleting a snapshot makes the next generate re-emit objects that
-custom migrations already created).
