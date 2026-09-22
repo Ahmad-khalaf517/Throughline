@@ -1,11 +1,15 @@
 # Throughline - Jira Implementation Plan
 
-**Document version:** 1.1
+**Document version:** 1.2
 **Status:** Derived from ERD/Data Model v1.5, Technical Requirements & Lineage Invariants v1.3, Module Boundaries v1.0, API Contracts v1.0, and Project Setup & Configuration Plan v1.2. Parent of the day-by-day implementation plan and of coding.
 **Purpose:** The ticket breakdown for building **Throughline itself** over the 8-day capstone window - not the in-product Jira *integration* (that is FR-070..074, delivered by Epic 4 below). This plan is what gets created in a real Jira project to run the build.
-**Companion file:** [`Throughline_Jira_Import.csv`](./Throughline_Jira_Import.csv) - the same 68 issues in Jira's CSV import format, ready to bulk-import.
+**CSV export:** `Throughline_Jira_Import.csv` is not kept in the repo - it was a mechanical, always-derivable restatement of the table below with no decisions of its own. Regenerate it from this plan (same 68 issues, Jira's CSV import format) immediately before the actual bulk-import, rather than carrying a second copy that can drift from this table.
 
 > **For AI agents:** every story below cites the exact ERD test id(s), TR requirement id(s), Module Boundaries function(s), and/or API Contracts route(s) it delivers. Do not close a story without its cited tests passing. Do not invent a story that has nothing to cite - if a task doesn't trace to one of the four parent documents, it does not belong in P0. Epic 1's stories are the ticket-level view of `Throughline_Project_Setup.md`'s section 10 setup sequence - that document, not this one, is the authoritative step order and tool list (OpenAI, Tailwind/shadcn, Vitest/Testcontainers, Vercel/GitHub Actions); this plan cites it rather than restating it, so the two cannot drift.
+
+### Revision 1.2 changes
+
+Docs-folder cleanup pass, no ticket content changed: removed `Throughline_Jira_Import.csv` from the repo (was a generated duplicate of the table below, kept in sync by hand - a drift risk this plan otherwise avoids by design; see the header's replacement note).
 
 ### Revision 1.1 changes
 
