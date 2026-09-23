@@ -1,7 +1,7 @@
 # Throughline - API Contracts
 
-**Document version:** 1.0
-**Status:** Derived from ERD/Data Model v1.4, Technical Requirements & Lineage Invariants v1.3, and Module Boundaries v1.0. Parent of Jira Plan -> Implementation.
+**Document version:** 1.1
+**Status:** Derived from ERD/Data Model v1.6, Technical Requirements & Lineage Invariants v1.4, and Module Boundaries v1.1. Parent of Jira Plan -> Implementation. v1.1: dropped the allowlist gate/`403 NOT_ALLOWLISTED` - ERD Appendix B round 9 (sign-up is open, gated by email verification only).
 **Style:** REST over HTTPS, JSON bodies, implemented as Next.js Route Handlers under `app/api/` (Module Boundaries layer 6).
 **Primary audience:** Developer, AI coding agents implementing route handlers.
 
@@ -16,7 +16,7 @@
 Supabase Auth session, read server-side via `auth.getVerifiedUser()` (Module Boundaries 4.1) from the httpOnly session cookie set by the Supabase SSR client. No custom `Authorization` header is required for browser calls. Every route below additionally accepts `Authorization: Bearer <supabase access token>` for scripted testing (spikes, curl), verified the same way.
 
 Every route (except session bootstrap, section 2) requires:
-1. A verified, allowlisted user (`auth.getVerifiedUser`) - else `401 UNAUTHENTICATED`.
+1. A verified user (`auth.getVerifiedUser`) - else `401 UNAUTHENTICATED`. Sign-up is open; verification (not an allowlist) is the gate (ERD Appendix B round 9).
 2. Where the route touches a project, `auth.requireProjectOwner(userId, projectId)` - else `404 NOT_FOUND` (section 1.4, not `403`).
 
 ### 1.2 Versioning
@@ -122,7 +122,7 @@ Called once by the client right after Supabase sign-in. Not project-scoped.
 
 **Request:** none (user comes from the verified session).
 **Response `200`:** `{ user: { id: string; email: string; displayName: string | null } }`
-**Errors:** `401 UNAUTHENTICATED` (no valid session), `403 NOT_ALLOWLISTED` (valid Supabase session, email not on the allowlist - the app_user row is not created).
+**Errors:** `401 UNAUTHENTICATED` (no valid session - includes an unverified email, since Supabase does not issue a usable session until verification completes).
 
 ---
 
@@ -420,8 +420,7 @@ A `manual_fallback` result is `200`, not an error: FR-054 requires the workflow 
 | Code | HTTP status | Meaning |
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | Request body failed schema validation |
-| `UNAUTHENTICATED` | 401 | No verified Supabase session |
-| `NOT_ALLOWLISTED` | 403 | Verified session, email not on the allowlist |
+| `UNAUTHENTICATED` | 401 | No verified Supabase session (includes an account that has not completed email verification) |
 | `NOT_FOUND` | 404 | Object does not exist, or belongs to another project (section 1.4) |
 | `PREREQUISITE_NOT_APPROVED` | 409 | TR FR-080 - an upstream artifact is not yet approved |
 | `DRAFT_EXISTS` | 409 | Reserved; default behavior replaces the draft instead (ERD `draft_replaced`) |

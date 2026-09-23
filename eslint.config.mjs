@@ -58,6 +58,9 @@ const eslintConfig = defineConfig([
     },
     plugins: { boundaries },
     rules: {
+      // A leading underscore marks a param as intentionally unused (e.g. a
+      // stubbed function that must keep its real signature).
+      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
       'boundaries/no-unknown': 'error',
       'boundaries/no-unknown-files': 'off',
       'boundaries/element-types': [
@@ -65,14 +68,19 @@ const eslintConfig = defineConfig([
         {
           default: 'disallow',
           rules: [
+            // `lib` (src/lib: env.ts, errors.ts, serialize.ts) is framework
+            // glue below even layer 0 - every layer may import it (Project
+            // Setup section 3 rule 3). Found the hard way: layer0-db/auth
+            // couldn't import env.ts to read DATABASE_URL/Supabase config
+            // until this was added.
             // Layer 0: no dependency on any domain layer.
-            { from: ['layer0-db'], allow: [] },
-            { from: ['layer0-auth'], allow: ['layer0-db'] },
-            { from: ['layer0-ai-client'], allow: ['layer0-db'] },
+            { from: ['layer0-db'], allow: ['lib'] },
+            { from: ['layer0-auth'], allow: ['layer0-db', 'lib'] },
+            { from: ['layer0-ai-client'], allow: ['layer0-db', 'lib'] },
             // Layer 1: lineage core - layer 0 only.
             {
               from: ['layer1-identity', 'layer1-dependency-binding', 'layer1-impact'],
-              allow: ['layer0-db', 'layer0-auth', 'layer0-ai-client'],
+              allow: ['layer0-db', 'layer0-auth', 'layer0-ai-client', 'lib'],
             },
             // Layer 2: state machine - layer 0-1. architecture-materialization -> identity
             // is the one documented exception (Module Boundaries section 4.4/8).
@@ -85,11 +93,12 @@ const eslintConfig = defineConfig([
                 'layer1-identity',
                 'layer1-dependency-binding',
                 'layer1-impact',
+                'lib',
               ],
             },
             {
               from: ['layer2-architecture-materialization'],
-              allow: ['layer0-db', 'layer0-auth', 'layer0-ai-client', 'layer1-identity'],
+              allow: ['layer0-db', 'layer0-auth', 'layer0-ai-client', 'layer1-identity', 'lib'],
             },
             // Layer 3: artifact-type modules - layer 0-2 only. Never a layer-3 peer
             // (Module Boundaries section 4.4: "artifact-type modules never import each other").
@@ -104,12 +113,13 @@ const eslintConfig = defineConfig([
                 'layer1-impact',
                 'layer2-artifact-lifecycle',
                 'layer2-architecture-materialization',
+                'lib',
               ],
             },
             // Layer 4: shared external-write protocol - layer 0-1 only (db, impact).
             {
               from: ['layer4-external-operations'],
-              allow: ['layer0-db', 'layer1-impact'],
+              allow: ['layer0-db', 'layer1-impact', 'lib'],
             },
             // Layer 5: provider integrations - layer 0-4, and read-only into their
             // paired layer-3 module (github->architecture, jira->backlog, stitch->ui-requirements).
@@ -122,6 +132,7 @@ const eslintConfig = defineConfig([
                 'layer1-impact',
                 'layer3-artifact-types',
                 'layer4-external-operations',
+                'lib',
               ],
             },
             // Layer 6: API route handlers - everything below. Module Boundaries
@@ -143,8 +154,9 @@ const eslintConfig = defineConfig([
           ],
         },
       ],
-      // Module Boundaries principle 3 / section 4.1: withProjectLock and the
-      // openai SDK are each importable from exactly one module.
+      // Module Boundaries principle 3 / section 4.1: withProjectLock, the
+      // openai SDK, and the @supabase/* auth clients are each importable
+      // from exactly one module.
       'no-restricted-imports': [
         'error',
         {
@@ -159,6 +171,11 @@ const eslintConfig = defineConfig([
               group: ['**/db/lock', '**/db/lock.ts'],
               message:
                 'withProjectLock is imported from src/artifact-lifecycle only (Module Boundaries principle 3).',
+            },
+            {
+              group: ['@supabase/*'],
+              message:
+                'Only src/auth may import @supabase/* auth/SSR clients (Module Boundaries 4.1). middleware.ts calls src/auth/updateSession instead of building its own client.',
             },
           ],
         },
@@ -194,6 +211,29 @@ const eslintConfig = defineConfig([
             {
               name: 'openai',
               message: 'Only src/ai-client may import the openai SDK (Module Boundaries 4.1).',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/auth/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'openai',
+              message: 'Only src/ai-client may import the openai SDK (Module Boundaries 4.1).',
+            },
+          ],
+          patterns: [
+            {
+              group: ['**/db/lock', '**/db/lock.ts'],
+              message:
+                'withProjectLock is imported from src/artifact-lifecycle only (Module Boundaries principle 3).',
             },
           ],
         },

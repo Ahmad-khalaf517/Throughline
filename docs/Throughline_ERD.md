@@ -1,7 +1,7 @@
 # Throughline - ERD / Data Model
 
-**Document version:** 1.5 - **FROZEN for implementation** (see section 14 for what may still change)
-**Status:** Derived from Throughline BRD v2.2 and Technical Requirements & Lineage Invariants v1.3, after eight review rounds (round 8: build-environment decisions - LLM provider, UI, tests, CI; no DDL change). Parent of Modules -> Project Setup -> API Contracts -> Jira Plan -> Implementation.
+**Document version:** 1.6 - **FROZEN for implementation** (see section 14 for what may still change)
+**Status:** Derived from Throughline BRD v2.2 and Technical Requirements & Lineage Invariants v1.4, after nine review rounds (round 9: auth access gate changed from invite-only+allowlist to open sign-up+mandatory email verification; no DDL/table change - `app_user` already had no unique-email constraint, section 4.1, so this round needed no schema edit). Parent of Modules -> Project Setup -> API Contracts -> Jira Plan -> Implementation.
 **Target engine:** PostgreSQL 15+ (`NULLS NOT DISTINCT` needs 15). **Verified:** the complete Appendix A DDL, all triggers, `impact()` and the Supabase hardening apply cleanly and pass the behaviour suite (Appendix C) on **PostgreSQL 15 and 17** (the versions Supabase runs), as a non-superuser table owner with Supabase's roles and default grants reproduced.
 **Platform:** Supabase Auth + Supabase Postgres (sections 2 and 4.1). **ORM:** Drizzle ORM + drizzle-kit (section 2.1).
 **Primary audience:** Developer, technical reviewers, and AI coding agents.
@@ -104,7 +104,7 @@ erDiagram
 | Deletes | Append-only in P0. Every FK is written **explicitly** `ON DELETE RESTRICT` (the PostgreSQL default is `NO ACTION`, which is not identical). Project deletion is out of scope. |
 | Platform | **Supabase Auth** for identity and **Supabase Postgres** for the database. The app reads and writes only through its own server (Next.js + Drizzle); the Supabase Data API is never used for data. |
 | Secrets | Provider credentials (GitHub, Jira, Stitch, LLM) and the Supabase **service-role key** are **server-side configuration only**, never a column and never shipped to the browser. The Supabase anon/publishable key is public by design - which is why section A.3 exists. One configured Jira project per instance (technical doc NFR, "API credentials shall remain server-side"). No raw request headers in any column; `metadata` and `target_descriptor` hold whitelisted fields only. |
-| Authentication | The session user is the Supabase user id taken from **verified** data on the server (`auth.getUser()` or verified JWT claims), never from `getSession()`, which reads an unverified cookie. Public sign-ups are disabled (invite-only) **and** the email allowlist is checked server-side on every request, because Supabase issues a valid token to any user who exists in the project. |
+| Authentication | The session user is the Supabase user id taken from **verified** data on the server (`auth.getUser()` or verified JWT claims), never from `getSession()`, which reads an unverified cookie. Public sign-up is **open**; the access gate is mandatory email verification (Supabase `mailer_autoconfirm` off) rather than a server-side allowlist (round 9 - was invite-only + allowlist through round 8). |
 | Authorization | Every API handler first loads the project by `(id, owner_user_id = session user)`. Only then may it read children, call `impact()` or start a write. `impact()` itself takes a project id and trusts its caller. Actor ids (`actor_user_id`, `acknowledged_by_user_id`) are passed explicitly; SQL never uses `auth.uid()` - the server connects as the table owner, so it would be NULL. |
 | Data API exposure | Supabase publishes the `public` schema to the anon/publishable key and grants its roles access to every new table and function. Appendix A.3 revokes those grants and enables RLS with **no policies** on every table (deny-all), and revokes `EXECUTE` on functions. Every future table or function gets the same treatment in its own migration (T34 catches a miss). No RLS policies are ever written: authorization lives in the server, not in a second policy system. |
 | Untrusted AI output | LLM text is rendered as escaped text or sanitized Markdown, never raw HTML. The only HTML ever rendered is stored Stitch output, and only inside the sandboxed separate-origin iframe (section 4.16). Model output is data: it never supplies ids, statuses or SQL. |
@@ -232,7 +232,7 @@ Created (or refreshed) on the user's first authenticated request with `INSERT ..
 
 **Deliberately no unique email.** Identity belongs to Supabase. A user deleted and re-created with the same email gets a **new** id; their old row must remain because history references it, so a unique email would lock them out permanently (T35).
 
-Access gate (NFR-005): public sign-ups disabled in Supabase (invite-only), and the email allowlist - in configuration, not in this table - checked server-side on every request (section 2).
+Access gate (NFR-005, round 9): public sign-up is open in Supabase; the gate is mandatory email verification (`mailer_autoconfirm` off) rather than an allowlist. Project ownership (`project.owner_user_id`) is still the only authorization boundary between users - anyone verified can create their own project, but not read or write another user's.
 
 ### 4.2 `project`
 
@@ -835,7 +835,7 @@ Currentness is re-evaluated against the live approved state on every read; nothi
 | Edges inserted only at ItemVersion creation | **APP** single write path + test |
 | Allowed dependency type-pairs; acyclic order | **APP** + test (traversal still has a cycle guard, T25) |
 | **Same-project invariant, other tables:** every ArtifactVersion, ExternalRef and operation referenced by a row resolves to that row's `project_id` (`generation_context_ref`, `external_ref`, `external_operation`, `impact_acknowledgement`, `ai_generation_run`, `stitch_output`). Memberships are DB-safe through the artifact composite FKs | **APP** single write path + integration test (T16). Not worth denormalizing `project_id` into these tables: a mistake here is wrong but visible, whereas a cross-project *edge* is a permanently unclearable warning |
-| Project ownership of every request; verified Supabase identity; allowlist on every request | **APP** (section 2) |
+| Project ownership of every request; verified Supabase identity; email verification required (round 9) | **APP** (section 2) |
 | `item_type` matches `artifact.type`; Epic/Story parent typing; option belongs to an architecture version | **APP** |
 | Freshness / binding / approval gate / stack guard | **APP** transaction + `impact()` |
 | Semantic hashing, matching and content fallback | **APP** (pure functions, unit-tested) |
@@ -958,7 +958,7 @@ Per its section 45.1, behavior the ERD needs must be stated in the Technical Req
 | FR-001: the brief and creation-time context are **immutable once Requirements generation has run** | The brief is outside the item graph, so an edit could never raise a warning |
 | Section 29: Jira operation key is target-specific (includes the Jira project key); the request hash is checked before any status decision; the pending operation commits before the network call; T derives from the provider timeout | Closes the silent-reuse, lost-marker and in-flight-reconciliation duplicate paths |
 | FR-031: Architecture approval refuses a `stack` change when no ADR changed | `stack` drives the scaffold but is not lineaged |
-| NFR-005: **Supabase Auth**, invite-only sign-up, allowlist enforced server-side on every request, identity from verified claims only; Supabase Postgres with the Data API denied to the anon/authenticated roles (grants revoked, RLS deny-all, no policies) | Supabase's public key and default grants would otherwise expose every table and bypass the single write path |
+| NFR-005: **Supabase Auth**, open sign-up with mandatory email verification, identity from verified claims only (round 9 - was invite-only + allowlist); Supabase Postgres with the Data API denied to the anon/authenticated roles (grants revoked, RLS deny-all, no policies) | Supabase's public key and default grants would otherwise expose every table and bypass the single write path |
 | Section 29: every `ExternalOperation` carries its source version, Jira operations their exact ItemVersion; `updated_at` is database-maintained | A malformed write must fail before the provider call; the staleness clock cannot depend on caller discipline |
 | FR-023 (P1): architecture options no longer carry `required_skills`. Available skills come from the team-skills constraint item; required skills are derived from the selected ADRs when FR-023 is built | Removes a non-lineaged P1 field |
 | FR-080 generation prerequisites: Architecture <- Requirements; UI Requirements <- Requirements + Architecture; Backlog <- all three | Section 5.2's "no current item depends on an unapproved artifact" relied on a rule no document stated |
@@ -988,7 +988,7 @@ Per its section 45.1, behavior the ERD needs must be stated in the Technical Req
 | Section 29, 30 | `external_operation`, section 7 |
 | NFR-002, NFR-003 | Composite FKs, triggers, RESTRICT deletes |
 | NFR-004 | `ai_generation_run` |
-| NFR-005 | Supabase Auth (invite-only, verified identity, server-side allowlist), Data API deny-all (A.3), per-request project ownership check, server-side credentials, private storage bucket + sandboxed HTML, escaped AI text, HMAC repository marker, secret-free columns |
+| NFR-005 | Supabase Auth (open sign-up, mandatory email verification, verified identity), Data API deny-all (A.3), per-request project ownership check, server-side credentials, private storage bucket + sandboxed HTML, escaped AI text, HMAC repository marker, secret-free columns |
 
 ---
 
@@ -1023,7 +1023,7 @@ Most expensive to change later: upstream ids in the semantic hash - which is why
 - **ORM/migrations:** Drizzle ORM + drizzle-kit, SQL-first, with the rules in section 2.1.
 - **PostgreSQL:** 15+ on Supabase (verified on 15 and 17; section 2.1 for connection rules).
 - **Approve-anyway override:** kept (section 3.5).
-- **Authentication:** Supabase Auth, invite-only; `app_user.id` = Supabase user id, no FK to `auth.users`, no unique email (section 4.1).
+- **Authentication:** Supabase Auth, open sign-up with mandatory email verification (round 9); `app_user.id` = Supabase user id, no FK to `auth.users`, no unique email (section 4.1).
 - **Data API:** denied to anon/authenticated (grants revoked, RLS deny-all, no policies); the app never uses it (A.3).
 - **Object storage:** private Supabase Storage bucket, signed URLs (section 4.16).
 - **LLM provider:** OpenAI, strict structured outputs + local Zod re-validation in `ai-client` (round 8).
@@ -1594,6 +1594,21 @@ No DDL, trigger or `impact()` change - the freeze holds. These close the last fo
 | R8-2 | **UI: Tailwind CSS + shadcn/ui** (components copied into the repo, no UI runtime dependency) | Covers the review/diff/impact/approval screens without a component-library runtime; NFR-008 |
 | R8-3 | **Tests: Vitest**, unit tests headless for the lineage core, Appendix C suite against a throwaway `postgres:15-alpine` container | Matches the engine Appendix A was executed on; ERD section 14 risk 1 ("build it headless") and risk 2 ("keep the suite running on every change") |
 | R8-4 | **Hosting/CI: Vercel + GitHub Actions** running typecheck, lint, unit and the Appendix C suite on every PR; layer boundaries enforced by `eslint-plugin-boundaries` | Makes the section 14 regression net automatic rather than a matter of discipline; T34 additionally runs once manually against the real Supabase project |
+
+---
+
+### Round 9 (v1.5 -> v1.6: auth access gate changed from invite-only + allowlist to open sign-up + mandatory email verification)
+
+No DDL, trigger or `impact()` change - the freeze holds. `app_user` already had no unique-email constraint and no FK to `auth.users` (section 4.1, decided round 6 for an unrelated reason - re-created users after deletion), so this round needed no schema edit at all; it is purely NFR-005 and its downstream references.
+
+| Ref | Change | Note |
+|---|---|---|
+| R9-1 | **Public sign-up enabled** in Supabase (`disable_signup: false`), superseding the invite-only decision from round 6 (R6-1/R6-4) | User decision: "I'll let anyone create an account and signup" |
+| R9-2 | **Server-side email allowlist removed** from `getVerifiedUser` (Module Boundaries §4.1) and from NFR-005/section 2/section 4.1 here | Keeping an allowlist that blocks a verified, signed-up user contradicts open sign-up - a user could complete sign-up and email verification and then be denied by the allowlist on every subsequent request. Confirmed with the user rather than assumed (the alternative - keep the allowlist empty by default - was offered and declined) |
+| R9-3 | **Mandatory email verification is now the sole access gate** (Supabase `mailer_autoconfirm: false`, verified live against the project's `/auth/v1/settings` endpoint) | Preserves NFR-005's actual goal ("an unknown public visitor cannot use stored credentials to trigger external actions or spend API budget") - an unverified email still cannot get a usable session - while dropping the pre-approval requirement |
+| R9-4 | **Accepted-risk note added to NFR-005** (TR v1.4): any verified user, not only a pre-approved one, can create a project and spend the shared LLM/GitHub/Jira credentials on it. Project ownership still isolates users from each other's data | Not a schema or invariant change; a stated tradeoff the user should see written down, not discover later |
+
+`ALLOWLISTED_EMAILS` is removed from `.env.example`/`.env.local` and from `src/lib/env.ts`'s Zod schema (Project Setup document, updated in the same step this round was made).
 
 ---
 

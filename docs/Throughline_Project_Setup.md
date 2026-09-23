@@ -1,7 +1,7 @@
 # Throughline - Project Setup & Configuration Plan
 
-**Document version:** 1.4
-**Status:** Slice 1 steps 1-4 done and merged to `main`. An auth-only first cut of steps 5-6 also done, by request: the Supabase project exists (`throughline`, `olqxqsfowewvyrpwvepr`, eu-west-2) with just `app_user` created and hardened - not the full 16-table schema. v1.4 records that cut (section 13); a fixed `drizzle.config.ts` bug and a corrected `drizzle/migrations/meta/` path also landed. v1.1 added the house code-hygiene conventions (husky, lint-staged, Prettier, `.npmrc`, `.vscode`, `.gitattributes`), read from `luxe-sofa-shop`, `AuthFlow` and `BillBoard-Hub` rather than invented. Derived from ERD/Data Model v1.4 (FROZEN), Technical Requirements & Lineage Invariants v1.3, and Module Boundaries v1.0.
+**Document version:** 1.5
+**Status:** Slice 1 steps 1-4 done and merged to `main`. An auth-only first cut of steps 5-6 also done: the Supabase project exists (`throughline`, `olqxqsfowewvyrpwvepr`, eu-west-2) with just `app_user` created and hardened - not the full 16-table schema. v1.5: auth access gate changed to open sign-up + mandatory email verification, no allowlist (ERD Appendix B round 9) - confirmed live against the project's `/auth/v1/settings`; `ALLOWLISTED_EMAILS` removed throughout. v1.4 recorded the auth-only cut (section 13); a fixed `drizzle.config.ts` bug and a corrected `drizzle/migrations/meta/` path also landed then. v1.1 added the house code-hygiene conventions (husky, lint-staged, Prettier, `.npmrc`, `.vscode`, `.gitattributes`), read from `luxe-sofa-shop`, `AuthFlow` and `BillBoard-Hub` rather than invented. Derived from ERD/Data Model v1.6 (FROZEN), Technical Requirements & Lineage Invariants v1.4, and Module Boundaries v1.1.
 **Primary audience:** Developer, AI coding agents doing slice 1.
 
 > **For AI agents:** this document decides *how the repository is set up*; it does not decide behavior. Every stack choice below traces to a decision already frozen in the ERD (section 15) or TR (section 5.1), or to a decision recorded in section 11 of this document. Do not add a dependency that is not in section 4 without recording it there first - NFR-008 (simplicity) is a requirement, not a preference.
@@ -330,7 +330,7 @@ Slice 1's deliverable. The order is fixed by ERD Appendix A ("Apply it in this o
 3. Any future table or function gets its own A.3-style hardening in the same migration that creates it. Test **T34** is what catches a miss.
 4. Constraint names: name them explicitly in the Drizzle schema so error messages are stable.
 
-**Supabase project setup (manual, once):** create the project; disable public sign-up (invite-only); add the allowlisted email(s); create the **private** Storage bucket for Stitch assets; copy the two connection strings and the service-role key into `.env.local`.
+**Supabase project setup (manual, once):** create the project; enable email sign-up with mandatory email verification (Supabase Auth settings - `mailer_autoconfirm` off, public sign-up on; ERD Appendix B round 9); create the **private** Storage bucket for Stitch assets; copy the two connection strings and the service-role key into `.env.local`.
 
 ---
 
@@ -345,7 +345,6 @@ Slice 1's deliverable. The order is fixed by ERD Appendix A ("Apply it in this o
 | `NEXT_PUBLIC_SUPABASE_URL` | module 2 | public by design |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | module 2 | public by design - A.3 is why this is safe |
 | `SUPABASE_SERVICE_ROLE_KEY` | module 2 (server only) | never imported from a client component |
-| `ALLOWLISTED_EMAILS` | module 2 | comma-separated; checked server-side on **every** request (NFR-005) |
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | module 3 | model id logged per run (NFR-004) |
 | `GITHUB_TOKEN`, `GITHUB_OWNER` | module 14 | server-side credential; never the Supabase `provider_token` (ERD 7.3) |
 | `GITHUB_MARKER_SECRET` | module 14 | HMAC repo marker (TR 30.1) |
@@ -433,7 +432,7 @@ Slices 2-4 then follow Module Boundaries §8 unchanged - no further setup work i
 4. **`scripts/verify-ddl.ts` is a normalizing text diff**, not a semantic SQL comparison - it lowercases, strips comments and collapses whitespace, and a human reads the remaining diff. Building a real SQL AST comparison is out of scope.
 5. **Testcontainers needs a working Docker daemon on the dev machine.** If Docker is unavailable, the fallback is the Supabase CLI local stack, at the cost of slower runs.
 6. **`pnpm@9` vs `pnpm@10`.** `luxe-sofa-shop` pins `pnpm@9.15.0` in `packageManager`. Pin whichever is current at scaffold time; nothing here depends on the major.
-7. **`ALLOWLISTED_EMAILS` as an env var** (not a table) follows ERD 4.1 ("the email allowlist - in configuration, not in this table"). Changing the allowlist is a redeploy. Accepted for a single-user capstone.
+7. **No `ALLOWLISTED_EMAILS`.** Removed - ERD Appendix B round 9 dropped the allowlist gate in favor of open sign-up + mandatory email verification. If an allowlist is ever reintroduced, it goes back into `getVerifiedUser`/env the same way it was structured before.
 
 ---
 
@@ -455,7 +454,7 @@ Slices 2-4 then follow Module Boundaries §8 unchanged - no further setup work i
 | `prettier-plugin-tailwindcss` | house convention, `BillBoard-Hub` |
 | `drizzle/` excluded from Prettier; no `db:push` | ERD 2.1, so `db:verify` diffs against Appendix A byte-for-byte |
 | Container-based integration tests on `postgres:15-alpine` | ERD header (verified on 15 and 17) |
-| Invite-only auth + server-side allowlist on every request | NFR-005, ERD sections 2 and 4.1 |
+| Open sign-up + mandatory email verification (no allowlist) | NFR-005, ERD sections 2 and 4.1, Appendix B round 9 |
 | Private Storage bucket, signed URLs | ERD 4.16, TR 5.1 |
 
 ---
@@ -496,4 +495,6 @@ What actually happened, kept here so this document stays accurate rather than as
 16. Verified against the live database, not just asserted: `list_tables` confirms `app_user` exists with `rls_enabled: true`; `get_advisors(type: security)` returns exactly one INFO-level finding - "RLS enabled, no policies" - which is the intended deny-all posture, not a problem; `information_schema.columns` matches Appendix A column-for-column.
 17. `.env.local` created (gitignored, never committed) with what the Supabase MCP could supply: project URL and the public anon key (both public by design). `DATABASE_URL`/`DIRECT_DATABASE_URL` have the pooler hostnames but a `[YOUR-DB-PASSWORD]` placeholder, and `SUPABASE_SERVICE_ROLE_KEY` is empty - neither the DB password nor the service-role key is retrievable through any Supabase MCP tool, by design. Get both from the dashboard: Project Settings -> Database (password) and Project Settings -> API (service_role secret key).
 
-**Still not started:** Supabase Auth configuration itself (invite-only sign-up, disabling public sign-up - NFR-005; this is a project setting, not a migration, and wasn't part of "create the app_user table"). The other 15 ERD tables, triggers, and `impact()` (slice 2). CI has still never actually run (the workflow file exists but no push/PR has triggered it). Vercel deploy (step 12).
+**Done since (auth access gate, NFR-005 - ERD Appendix B round 9):** Supabase Auth confirmed configured for open sign-up with mandatory email verification (verified live via the project's `/auth/v1/settings` endpoint: `disable_signup: false`, `mailer_autoconfirm: false`, `external.email: true`) - not invite-only + allowlist as originally specified through round 8; that was a user decision ("I'll let anyone create an account and signup"), and the allowlist has been removed from every document that referenced it (TR NFR-005, ERD sections 2/4.1/12/15, Module Boundaries `auth`, API Contracts, Jira Plan E1-S6, this document) rather than left silently stale in only one.
+
+**Still not started:** the other 15 ERD tables, triggers, and `impact()` (slice 2). CI has still never actually run (the workflow file exists but no push/PR has triggered it). Vercel deploy (step 12). The `auth` module's actual code (`getVerifiedUser`/`upsertAppUser`/`requireProjectOwner`) and the sign-up/sign-in UI.

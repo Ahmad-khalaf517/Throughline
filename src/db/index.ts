@@ -5,4 +5,6 @@
 //
 // Nothing outside this folder may import a file that is not re-exported here
 // (Module Boundaries section 7).
-export {};
+export { db } from './client';
+export { withProjectLock, withTx, type Tx } from './lock';
+export * as schema from './schema';

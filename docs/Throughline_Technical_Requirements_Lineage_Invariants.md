@@ -1,10 +1,14 @@
 # Throughline - Technical Requirements & Lineage Invariants
 
-**Document version:** 1.3  
+**Document version:** 1.4  
 **Project type:** AI-assisted software project initialization platform  
 **Delivery context:** Solo capstone project, 8 full-time development days  
-**Status:** Technical baseline aligned with Throughline BRD v2.2 and ERD/Data Model v1.4; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation  
+**Status:** Technical baseline aligned with Throughline BRD v2.2 and ERD/Data Model v1.6; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v1.4: NFR-005 changed from invite-only + server-side allowlist to open sign-up + mandatory email verification (accepted-risk note added) - see ERD Appendix B round 9.  
 **Primary audience:** Developer, technical reviewers, and AI coding agents
+
+### Revision 1.4 alignment
+
+Authentication access gate changed (round 9, implementation-driven): public sign-up is now open rather than invite-only, and the server-side email allowlist is removed. Email verification (Supabase `mailer_autoconfirm` off) is the access gate instead. NFR-005 records the accepted risk this trades away. No other requirement changed.
 
 ### Revision 1.3 alignment
 
@@ -136,7 +140,7 @@ The capstone implementation has the following fixed constraints:
 |---|---|
 | Application | Next.js / TypeScript; every read and write goes through the application server |
 | Database | PostgreSQL on Supabase (15+) |
-| Authentication | Supabase Auth, invite-only, with a server-side email allowlist |
+| Authentication | Supabase Auth, public sign-up, mandatory email verification (no allowlist - round 9) |
 | ORM / migrations | Drizzle ORM + drizzle-kit, SQL-first |
 | Object storage | Private Supabase Storage bucket for Stitch HTML/screenshots |
 | AI | One LLM provider |
@@ -1361,8 +1365,8 @@ Where practical, generated ArtifactVersions should record:
 - Secrets shall not be stored in generated repositories.
 - Generated HTML shall be sandboxed for preview.
 - External writes shall require explicit user action after preview.
-- The hosted capstone instance shall be protected by at least a basic access gate (for example, authenticated/allowlisted access) so an unknown public visitor cannot use stored GitHub, Jira, Stitch, or LLM credentials to trigger external actions or spend API budget.
-- Authentication uses Supabase Auth with public sign-up disabled (invite-only). An email allowlist is checked server-side on every request, and the user's identity is taken only from verified session data.
+- The hosted capstone instance shall be protected by at least a basic access gate: **email/password sign-up with mandatory email verification** (Supabase Auth, `mailer_autoconfirm` off) so an unverified or unauthenticated visitor cannot use stored GitHub, Jira, Stitch, or LLM credentials to trigger external actions or spend API budget. **Accepted risk (round 9):** public sign-up is open - any verified account, not only a pre-approved one, can create its own project and trigger generation/external-write actions on it. Project ownership (the next bullet) still stops one user from touching another's project or data; it does not cap how many verified users can spend the shared LLM/GitHub/Jira credentials. Revisit if API cost or abuse becomes a problem before the capstone demo.
+- Authentication uses Supabase Auth with public sign-up **enabled** and email verification required before a session is usable. The user's identity is taken only from verified session data (`auth.getUser()`, never `getSession()`). There is no server-side email allowlist - superseded by the above (was invite-only + allowlist through round 8; see ERD Appendix B round 9).
 - Every request is authorized by project ownership before any read or write.
 - The database is reachable only through the application server: the Supabase Data API is denied to its public roles for every table and function.
 - Model output is untrusted data: it never supplies identifiers, statuses or queries, and generated text is rendered as escaped text or sanitized Markdown, never as raw HTML.
@@ -1404,7 +1408,7 @@ P0 is the minimum acceptable capstone.
 - ApprovalEvent log
 - immutable history
 - selected Architecture option, with approval-time materialization of its decisions
-- invite-only authentication with server-side allowlist; Data API closed to public roles
+- authentication with mandatory email verification (public sign-up); Data API closed to public roles
 
 ### Lineage
 
