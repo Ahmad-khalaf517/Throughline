@@ -29,7 +29,7 @@ export default async function Home() {
         <IntegrationsSection />
         <FinalCtaSection />
       </main>
-      <Footer />
+      <Footer userEmail={user?.email ?? null} />
     </>
   );
 }
