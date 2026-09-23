@@ -1,26 +1,117 @@
 @import 'tailwindcss';
 
+/*
+ * Design tokens sourced from the Throughline Stitch project
+ * ("Technical Precision Archival" design system, projects/10161922138198556597).
+ * Values are copied verbatim from the project's designTheme.namedColors and
+ * from the token classes used in its rendered screens (dashboard, impact
+ * modal) - do not hand-tune a color here without checking Stitch first.
+ * Light mode only: the Stitch system has no authored dark variant.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --surface: #fef8f4;
+  --surface-dim: #ded9d5;
+  --surface-bright: #fef8f4;
+  --surface-container-lowest: #ffffff;
+  --surface-container-low: #f8f2ee;
+  --surface-container: #f3ede9;
+  --surface-container-high: #ede7e3;
+  --surface-container-highest: #e7e1dd;
+  --on-surface: #1d1b19;
+  --on-surface-variant: #58423c;
+  --inverse-surface: #32302d;
+  --inverse-on-surface: #f6f0eb;
+  --outline: #8b716a;
+  --outline-variant: #dfc0b8;
+  --primary: #a13516;
+  --on-primary: #ffffff;
+  --primary-container: #c24d2c;
+  --primary-container-hover: #a83f20;
+  --on-primary-container: #fff8f6;
+  --secondary: #605e5c;
+  --on-secondary: #ffffff;
+  --secondary-container: #e6e2df;
+  --on-secondary-container: #666462;
+  --tertiary: #8a4900;
+  --error: #ba1a1a;
+  --on-error: #ffffff;
+  --error-container: #ffdad6;
+  --on-error-container: #93000a;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --color-surface: var(--surface);
+  --color-surface-dim: var(--surface-dim);
+  --color-surface-bright: var(--surface-bright);
+  --color-surface-container-lowest: var(--surface-container-lowest);
+  --color-surface-container-low: var(--surface-container-low);
+  --color-surface-container: var(--surface-container);
+  --color-surface-container-high: var(--surface-container-high);
+  --color-surface-container-highest: var(--surface-container-highest);
+  --color-on-surface: var(--on-surface);
+  --color-on-surface-variant: var(--on-surface-variant);
+  --color-inverse-surface: var(--inverse-surface);
+  --color-inverse-on-surface: var(--inverse-on-surface);
+  --color-outline: var(--outline);
+  --color-outline-variant: var(--outline-variant);
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-primary-container: var(--primary-container);
+  --color-primary-container-hover: var(--primary-container-hover);
+  --color-on-primary-container: var(--on-primary-container);
+  --color-secondary: var(--secondary);
+  --color-on-secondary: var(--on-secondary);
+  --color-secondary-container: var(--secondary-container);
+  --color-on-secondary-container: var(--on-secondary-container);
+  --color-tertiary: var(--tertiary);
+  --color-error: var(--error);
+  --color-on-error: var(--on-error);
+  --color-error-container: var(--error-container);
+  --color-on-error-container: var(--on-error-container);
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-background: var(--surface);
+  --color-foreground: var(--on-surface);
+
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family:
+    var(--font-sans),
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+}
+
+/*
+ * Marketing display scale. The Stitch type scale (headline-xl tops out at
+ * 28px/600) is tuned for dense app chrome, not a hero. These extend it with
+ * the same family, weight, and tight tracking formula rather than inventing
+ * a new one - the one deliberate addition beyond what Stitch ships.
+ */
+@utility text-display-lg {
+  font-size: 56px;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+@utility text-display-md {
+  font-size: 40px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+@utility text-display-sm {
+  font-size: 28px;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  font-weight: 600;
+}
+
+@utility font-mono-code {
+  font-family: var(--font-mono), 'JetBrains Mono', monospace;
 }
