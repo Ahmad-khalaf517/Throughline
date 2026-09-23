@@ -102,6 +102,44 @@ export async function signOut(): Promise<void> {
   await supabase.auth.signOut();
 }
 
+/**
+ * Starts the forgot-password flow. Supabase sends a recovery email with a
+ * link back to /auth/confirm?next=/reset-password - handled by the SAME
+ * route as sign-up verification (it's already generic over the `code`/
+ * `token_hash` pattern and the email `type`), which establishes a recovery
+ * session and redirects to /reset-password.
+ *
+ * Deliberately returns { error: null } even when the email doesn't belong to
+ * an account: Supabase's own client does not distinguish "sent" from
+ * "unknown email" either, so surfacing a difference here would just
+ * reintroduce the account-enumeration leak sign-in already avoids.
+ */
+export async function requestPasswordReset(email: string): Promise<{ error: string | null }> {
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${env.NEXT_PUBLIC_SITE_URL}/auth/confirm?next=/reset-password`,
+  });
+  // A malformed email is the one case worth surfacing - it's a client-side
+  // input error, not information about which emails have accounts.
+  if (error && error.code !== 'validation_failed') {
+    return { error: null };
+  }
+  return { error: error?.message ?? null };
+}
+
+/**
+ * Sets a new password. Only succeeds with a valid session - in practice the
+ * short-lived recovery session /auth/confirm established from the reset
+ * link. No separate "am I in a recovery flow" check is needed: Supabase
+ * rejects this call outright without a session, which is exactly the guard
+ * /reset-password needs.
+ */
+export async function updatePassword(newPassword: string): Promise<{ error: string | null }> {
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  return { error: error?.message ?? null };
+}
+
 const VALID_OTP_TYPES: readonly EmailOtpType[] = [
   'signup',
   'invite',
