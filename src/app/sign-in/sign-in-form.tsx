@@ -38,9 +38,17 @@ export function SignInForm() {
         </div>
 
         <div className="flex flex-col gap-1">
-          <label htmlFor="password" className="text-sm font-medium">
-            Password
-          </label>
+          <div className="flex items-baseline justify-between">
+            <label htmlFor="password" className="text-sm font-medium">
+              Password
+            </label>
+            <Link
+              href="/forgot-password"
+              className="text-xs text-neutral-500 underline underline-offset-2"
+            >
+              Forgot password?
+            </Link>
+          </div>
           <input
             id="password"
             name="password"

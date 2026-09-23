@@ -1,7 +1,7 @@
 # Throughline - ERD / Data Model
 
-**Document version:** 1.7 - **FROZEN for implementation** (see section 14 for what may still change)
-**Status:** Derived from Throughline BRD v2.2 and Technical Requirements & Lineage Invariants v1.4, after ten review rounds (round 10: pinned `SET search_path = public` on all 7 Appendix A.2/6.3 functions - zero behavior change, closes a real Supabase advisor finding; all 16 tables, every trigger and `impact()` are now applied and verified against the live Supabase project, Project Setup section 13). Parent of Modules -> Project Setup -> API Contracts -> Jira Plan -> Implementation.
+**Document version:** 1.8 - **FROZEN for implementation** (see section 14 for what may still change)
+**Status:** Derived from Throughline BRD v2.2 and Technical Requirements & Lineage Invariants v1.4, after eleven review rounds (round 11: auth email templates switched to the `token_hash` link pattern - no schema change, a real production PKCE/cross-browser gap found while building forgot-password; round 10: pinned `SET search_path = public` on all 7 Appendix A.2/6.3 functions; all 16 tables, every trigger and `impact()` are applied and verified against the live Supabase project, Project Setup section 13). Parent of Modules -> Project Setup -> API Contracts -> Jira Plan -> Implementation.
 **Target engine:** PostgreSQL 15+ (`NULLS NOT DISTINCT` needs 15). **Verified:** the complete Appendix A DDL, all triggers, `impact()` and the Supabase hardening apply cleanly and pass the behaviour suite (Appendix C) on **PostgreSQL 15 and 17** (the versions Supabase runs), as a non-superuser table owner with Supabase's roles and default grants reproduced.
 **Platform:** Supabase Auth + Supabase Postgres (sections 2 and 4.1). **ORM:** Drizzle ORM + drizzle-kit (section 2.1).
 **Primary audience:** Developer, technical reviewers, and AI coding agents.
@@ -1620,6 +1620,19 @@ No behavior change - every function's body is untouched; `SET search_path = publ
 |---|---|---|
 | R10-1 | `SET search_path = public` added to `forbid_mutation`, `artifact_version_insert_guard`, `artifact_version_guard`, `membership_draft_only`, `project_seed_frozen`, `touch_updated_at`, `impact` | Closed the Supabase advisor's `function_search_path_mutable` WARN (`get_advisors(security)`), found while verifying slice 2 against the live project. Applied live via `ALTER FUNCTION ... SET search_path = public` (a new migration, `0007_pin_function_search_path.sql`), not `CREATE OR REPLACE`, so no function body was touched |
 | R10-2 | Slice 2's schema (the 15 tables beyond `app_user`, all triggers, `impact()`) applied to the live `throughline` Supabase project and verified: `list_tables` shows all 16 tables with RLS enabled; `get_advisors(security)` returns exactly the expected 16 `rls_enabled_no_policy` INFO findings after R10-1, nothing else; a real transactional test (rolled back) confirmed the append-only trigger fires with the ERD's exact error text; `impact()` runs cleanly against a nonexistent project | This is DDL **application**, not a decision - the tables/triggers/`impact()` text itself did not change from what Appendix A/A.2/6.3 already specified. Recorded here because it's the same "verified, not just generated" bar every other round in this appendix holds itself to. Full detail: Project Setup document section 13 |
+
+---
+
+### Round 11 (v1.7 -> v1.8: auth email templates switch from Supabase's default `{{ .ConfirmationURL }}` link to the `token_hash` pattern - not a schema/table change, recorded for the same reason round 10's non-DDL items were)
+
+Found while building forgot-password and testing it live: submitting the reset form and clicking the emailed link from two different browser contexts fails with Supabase's own `bad_code_verifier` GoTrue error (confirmed via `query_logs(source: auth_logs)`). Root cause: Supabase's default email template links through its own hosted verify page, which redirects back with a PKCE `code` param tied to a `code_verifier` cookie local to whichever browser started the flow. This is a real production concern, not a test artifact - email links are routinely opened in a different browser/app than the one that requested them. Sign-up verification happened to survive an earlier version of this same mismatch only because Supabase confirms the email at its own hosted page regardless of the later exchange; password recovery has no such fallback, since establishing a session **is** the entire flow.
+
+| Ref | Change | Note |
+|---|---|---|
+| R11-1 | Both the "Confirm signup" and "Reset Password" Supabase email templates changed from `{{ .ConfirmationURL }}` to `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type={{ .Type }}` (`&next=/reset-password` added on the reset template) | `verifyOtp`/`token_hash` verification is fully server-side with no local browser-state dependency, so it isn't sensitive to which browser clicks the link - the actual fix, not a workaround |
+| R11-2 | No code change required | `src/auth.verifyEmailOtp` and the generic `/auth/confirm` route (which already branches on `code` vs `token_hash`+`type`) were built to handle exactly this path from the start (Module Boundaries `auth` module spec already documented it as "the pattern this project's own email templates use" once this round landed) |
+
+This is an Auth **configuration** change (Supabase Dashboard -> Authentication -> Email Templates), not a database migration - no MCP tool exposes it (confirmed via `ToolSearch`), so it is a manual step for the project owner. Not yet re-verified end-to-end pending that change; see Project Setup document section 13.
 
 ---
 

@@ -30,5 +30,12 @@ export async function GET(request: Request) {
     return NextResponse.redirect(new URL(next, origin));
   }
 
-  return NextResponse.redirect(new URL('/sign-in?error=verification_failed', origin));
+  // Route the failure back to whichever flow sent the user here, so the
+  // error shown matches what actually failed (a sign-up link vs. a
+  // password-reset link) instead of always saying "sign up again."
+  const failureUrl =
+    next === '/reset-password'
+      ? '/forgot-password?error=link_failed'
+      : '/sign-in?error=verification_failed';
+  return NextResponse.redirect(new URL(failureUrl, origin));
 }

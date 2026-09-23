@@ -1,7 +1,7 @@
 # Throughline - Module Boundaries
 
-**Document version:** 1.1
-**Status:** Derived from ERD/Data Model v1.7 and Technical Requirements & Lineage Invariants v1.4. Parent of API Contracts -> Jira Plan -> Implementation. v1.1: `getVerifiedUser` no longer checks an email allowlist - ERD Appendix B round 9.
+**Document version:** 1.2
+**Status:** Derived from ERD/Data Model v1.8 and Technical Requirements & Lineage Invariants v1.4. Parent of API Contracts -> Jira Plan -> Implementation. v1.2: `auth` module's export list filled in for real (signUpWithEmail/signInWithEmail/signOut/requestPasswordReset/updatePassword/verifyEmailOtp/exchangeCodeForSession/updateSession) - it had drifted since being built, listing only the original three. v1.1: `getVerifiedUser` no longer checks an email allowlist - ERD Appendix B round 9.
 **Target stack:** Next.js / TypeScript, Drizzle ORM, Supabase Postgres.
 **Primary audience:** Developer, AI coding agents implementing modules.
 
@@ -94,10 +94,35 @@ getVerifiedUser(request): Promise<{ id: string; email: string } | null>
 upsertAppUser(supabaseUser): Promise<void>
   // INSERT ... ON CONFLICT (id) DO UPDATE, called once per authenticated request or on login
 requireProjectOwner(userId: string, projectId: string): Promise<void>
-  // throws 403 unless project.owner_user_id = userId; the ONLY project-ownership check in the codebase
+  // throws 403 unless project.owner_user_id = userId; the ONLY project-ownership check in the codebase.
+  // NOT YET IMPLEMENTED - throws unconditionally until the `project` table exists (slice 2's
+  // artifact-lifecycle module).
+signUpWithEmail(opts: { email: string; password: string }): Promise<{ error: string | null }>
+  // starts open sign-up; Supabase emails a verification link to /auth/confirm (mandatory -
+  // mailer_autoconfirm off, ERD Appendix B round 9)
+signInWithEmail(opts: { email: string; password: string }): Promise<{ error: string | null }>
+signOut(): Promise<void>
+requestPasswordReset(email: string): Promise<{ error: string | null }>
+  // starts the forgot-password flow; always returns { error: null } for an unknown email too -
+  // Supabase itself doesn't distinguish "sent" from "unknown email", so this function doesn't either
+  // (account-enumeration protection, same reasoning as the sign-in error message)
+updatePassword(newPassword: string): Promise<{ error: string | null }>
+  // sets a new password; only succeeds with a valid session (in practice the short-lived recovery
+  // session /auth/confirm establishes from a reset link) - no separate flow-state check needed
+verifyEmailOtp(tokenHash: string, type: string): Promise<{ error: string | null }>
+  // verifies a token_hash from an email link - the pattern this project's own email templates use
+  // (ERD Appendix B round 11), not tied to which browser clicks the link
+exchangeCodeForSession(code: string): Promise<{ error: string | null }>
+  // exchanges a PKCE `code` param - the path Supabase's DEFAULT (uncustomized) email template uses.
+  // Sensitive to which browser clicks the link (Supabase ties the code to a code_verifier cookie set
+  // by whoever started the flow) - kept for a template that reverts to the default; this project's
+  // own templates use verifyEmailOtp above instead (ERD Appendix B round 11)
+updateSession(request: NextRequest): Promise<NextResponse>
+  // called only from middleware.ts (project root) to refresh the session cookie on every request;
+  // never call this expecting it to authorize anything (ERD section 2: never trust getSession())
 ```
 
-**Rule:** every route handler in `api` calls `getVerifiedUser` then `requireProjectOwner` before calling into any other module. No other module re-checks ownership - that would be a second source of truth for an authorization decision (ERD section 2, Authorization).
+**Rule:** every route handler in `api` calls `getVerifiedUser` then `requireProjectOwner` before calling into any other module. No other module re-checks ownership - that would be a second source of truth for an authorization decision (ERD section 2, Authorization). `@supabase/*` (the SSR/auth client) is importable from exactly one module - this one (eslint-enforced via `no-restricted-imports`); UI code calls these exports instead of constructing its own client.
 
 ---
 
