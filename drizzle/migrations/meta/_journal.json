@@ -15,6 +15,41 @@
       "when": 1790116876977,
       "tag": "0001_app_user_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790164553570,
+      "tag": "0002_remaining_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790164706165,
+      "tag": "0003_lineage_partial_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790164748632,
+      "tag": "0004_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790164798664,
+      "tag": "0005_impact_function",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790164853015,
+      "tag": "0006_remaining_tables_hardening",
+      "breakpoints": true
     }
   ]
 }
