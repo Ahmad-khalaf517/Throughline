@@ -1,7 +1,7 @@
 # Throughline - Module Boundaries
 
 **Document version:** 1.1
-**Status:** Derived from ERD/Data Model v1.6 and Technical Requirements & Lineage Invariants v1.4. Parent of API Contracts -> Jira Plan -> Implementation. v1.1: `getVerifiedUser` no longer checks an email allowlist - ERD Appendix B round 9.
+**Status:** Derived from ERD/Data Model v1.7 and Technical Requirements & Lineage Invariants v1.4. Parent of API Contracts -> Jira Plan -> Implementation. v1.1: `getVerifiedUser` no longer checks an email allowlist - ERD Appendix B round 9.
 **Target stack:** Next.js / TypeScript, Drizzle ORM, Supabase Postgres.
 **Primary audience:** Developer, AI coding agents implementing modules.
 

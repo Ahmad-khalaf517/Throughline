@@ -1,7 +1,7 @@
 # Throughline - API Contracts
 
 **Document version:** 1.1
-**Status:** Derived from ERD/Data Model v1.6, Technical Requirements & Lineage Invariants v1.4, and Module Boundaries v1.1. Parent of Jira Plan -> Implementation. v1.1: dropped the allowlist gate/`403 NOT_ALLOWLISTED` - ERD Appendix B round 9 (sign-up is open, gated by email verification only).
+**Status:** Derived from ERD/Data Model v1.7, Technical Requirements & Lineage Invariants v1.4, and Module Boundaries v1.1. Parent of Jira Plan -> Implementation. v1.1: dropped the allowlist gate/`403 NOT_ALLOWLISTED` - ERD Appendix B round 9 (sign-up is open, gated by email verification only).
 **Style:** REST over HTTPS, JSON bodies, implemented as Next.js Route Handlers under `app/api/` (Module Boundaries layer 6).
 **Primary audience:** Developer, AI coding agents implementing route handlers.
 
