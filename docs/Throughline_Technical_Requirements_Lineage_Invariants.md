@@ -3,7 +3,7 @@
 **Document version:** 1.4  
 **Project type:** AI-assisted software project initialization platform  
 **Delivery context:** Solo capstone project, 8 full-time development days  
-**Status:** Technical baseline aligned with Throughline BRD v2.2 and ERD/Data Model v1.6; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v1.4: NFR-005 changed from invite-only + server-side allowlist to open sign-up + mandatory email verification (accepted-risk note added) - see ERD Appendix B round 9.  
+**Status:** Technical baseline aligned with Throughline BRD v2.2 and ERD/Data Model v1.7; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v1.4: NFR-005 changed from invite-only + server-side allowlist to open sign-up + mandatory email verification (accepted-risk note added) - see ERD Appendix B round 9.  
 **Primary audience:** Developer, technical reviewers, and AI coding agents
 
 ### Revision 1.4 alignment

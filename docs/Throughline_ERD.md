@@ -1,7 +1,7 @@
 # Throughline - ERD / Data Model
 
-**Document version:** 1.6 - **FROZEN for implementation** (see section 14 for what may still change)
-**Status:** Derived from Throughline BRD v2.2 and Technical Requirements & Lineage Invariants v1.4, after nine review rounds (round 9: auth access gate changed from invite-only+allowlist to open sign-up+mandatory email verification; no DDL/table change - `app_user` already had no unique-email constraint, section 4.1, so this round needed no schema edit). Parent of Modules -> Project Setup -> API Contracts -> Jira Plan -> Implementation.
+**Document version:** 1.7 - **FROZEN for implementation** (see section 14 for what may still change)
+**Status:** Derived from Throughline BRD v2.2 and Technical Requirements & Lineage Invariants v1.4, after ten review rounds (round 10: pinned `SET search_path = public` on all 7 Appendix A.2/6.3 functions - zero behavior change, closes a real Supabase advisor finding; all 16 tables, every trigger and `impact()` are now applied and verified against the live Supabase project, Project Setup section 13). Parent of Modules -> Project Setup -> API Contracts -> Jira Plan -> Implementation.
 **Target engine:** PostgreSQL 15+ (`NULLS NOT DISTINCT` needs 15). **Verified:** the complete Appendix A DDL, all triggers, `impact()` and the Supabase hardening apply cleanly and pass the behaviour suite (Appendix C) on **PostgreSQL 15 and 17** (the versions Supabase runs), as a non-superuser table owner with Supabase's roles and default grants reproduced.
 **Platform:** Supabase Auth + Supabase Postgres (sections 2 and 4.1). **ORM:** Drizzle ORM + drizzle-kit (section 2.1).
 **Primary audience:** Developer, technical reviewers, and AI coding agents.
@@ -653,7 +653,7 @@ This makes GitHub/Stitch drift **item-level**: re-approving Architecture with no
 CREATE FUNCTION impact(p_project_id uuid, p_candidate_version_id uuid DEFAULT NULL)
 RETURNS TABLE (subject_kind text, subject_id uuid, root_item_version_id uuid,
                depth int, path uuid[], acknowledged boolean)
-LANGUAGE sql STABLE AS $$
+LANGUAGE sql STABLE SET search_path = public AS $$
 WITH RECURSIVE
 current_m AS MATERIALIZED (              -- current = member of an approved version; a candidate REPLACES
   SELECT m.logical_item_id, m.item_version_id   -- its own artifact's approved version (section 5.2)
@@ -1324,7 +1324,7 @@ Indexes deliberately **not** created: `item_version(logical_item_id)` (covered b
 
 ```sql
 -- T1. Append-only tables
-CREATE FUNCTION forbid_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION forbid_mutation() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
 BEGIN
   RAISE EXCEPTION '% on % is not allowed (append-only)', TG_OP, TG_TABLE_NAME;
 END $$;
@@ -1343,7 +1343,7 @@ CREATE TRIGGER architecture_option_append_only    BEFORE UPDATE OR DELETE ON arc
   FOR EACH ROW EXECUTE FUNCTION forbid_mutation();
 
 -- T2. A version is born only as draft (normal) or rejected (stale generation, and only that)
-CREATE FUNCTION artifact_version_insert_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION artifact_version_insert_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
 BEGIN
   IF NEW.status NOT IN ('draft','rejected') THEN
     RAISE EXCEPTION 'artifact_version must be created as draft or rejected, not %', NEW.status;
@@ -1360,7 +1360,7 @@ CREATE TRIGGER artifact_version_insert_guard BEFORE INSERT ON artifact_version
   FOR EACH ROW EXECUTE FUNCTION artifact_version_insert_guard();
 
 -- T3. Lifecycle guard: legal transitions, frozen once non-draft, architecture selection rules
-CREATE FUNCTION artifact_version_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION artifact_version_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
 DECLARE t text;
 BEGIN
   IF NEW.artifact_id <> OLD.artifact_id OR NEW.version_number <> OLD.version_number THEN
@@ -1406,7 +1406,7 @@ CREATE TRIGGER artifact_version_guard BEFORE UPDATE ON artifact_version
   FOR EACH ROW EXECUTE FUNCTION artifact_version_guard();
 
 -- T4. Membership mutable only while its version is a draft
-CREATE FUNCTION membership_draft_only() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION membership_draft_only() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
 DECLARE s text;
 BEGIN
   SELECT status INTO s FROM artifact_version
@@ -1420,7 +1420,7 @@ CREATE TRIGGER membership_draft_only BEFORE INSERT OR UPDATE OR DELETE
   ON artifact_version_item_membership FOR EACH ROW EXECUTE FUNCTION membership_draft_only();
 
 -- T5. The brief is the seed of all lineage: frozen once any Requirements version exists
-CREATE FUNCTION project_seed_frozen() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION project_seed_frozen() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
 BEGIN
   IF (NEW.brief IS DISTINCT FROM OLD.brief OR NEW.input_context IS DISTINCT FROM OLD.input_context)
      AND EXISTS (SELECT 1 FROM artifact_version av JOIN artifact a ON a.id = av.artifact_id
@@ -1434,7 +1434,7 @@ CREATE TRIGGER project_seed_frozen BEFORE UPDATE ON project
 
 -- T6. updated_at is maintained by the database, never by callers. external_operation's stale-pending
 --     rule (section 7.2) depends on it: a retry that forgot to bump it would look instantly stale.
-CREATE FUNCTION touch_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION touch_updated_at() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
 BEGIN
   NEW.updated_at := now();
   RETURN NEW;
@@ -1609,6 +1609,17 @@ No DDL, trigger or `impact()` change - the freeze holds. `app_user` already had 
 | R9-4 | **Accepted-risk note added to NFR-005** (TR v1.4): any verified user, not only a pre-approved one, can create a project and spend the shared LLM/GitHub/Jira credentials on it. Project ownership still isolates users from each other's data | Not a schema or invariant change; a stated tradeoff the user should see written down, not discover later |
 
 `ALLOWLISTED_EMAILS` is removed from `.env.example`/`.env.local` and from `src/lib/env.ts`'s Zod schema (Project Setup document, updated in the same step this round was made).
+
+---
+
+### Round 10 (v1.6 -> v1.7: pin `search_path` on all 7 functions; slice 2 schema applied and verified live)
+
+No behavior change - every function's body is untouched; `SET search_path = public` only removes the theoretical risk of an attacker-controlled schema earlier in a session's search_path shadowing an unqualified table/function reference inside these bodies. All 7 `CREATE FUNCTION` statements in Appendix A.2 and section 6.3 above now read `LANGUAGE plpgsql SET search_path = public AS $$`/`LANGUAGE sql STABLE SET search_path = public AS $$` so a fresh deployment from this document gets the hardening from the start, not just this project's live instance.
+
+| Ref | Change | Note |
+|---|---|---|
+| R10-1 | `SET search_path = public` added to `forbid_mutation`, `artifact_version_insert_guard`, `artifact_version_guard`, `membership_draft_only`, `project_seed_frozen`, `touch_updated_at`, `impact` | Closed the Supabase advisor's `function_search_path_mutable` WARN (`get_advisors(security)`), found while verifying slice 2 against the live project. Applied live via `ALTER FUNCTION ... SET search_path = public` (a new migration, `0007_pin_function_search_path.sql`), not `CREATE OR REPLACE`, so no function body was touched |
+| R10-2 | Slice 2's schema (the 15 tables beyond `app_user`, all triggers, `impact()`) applied to the live `throughline` Supabase project and verified: `list_tables` shows all 16 tables with RLS enabled; `get_advisors(security)` returns exactly the expected 16 `rls_enabled_no_policy` INFO findings after R10-1, nothing else; a real transactional test (rolled back) confirmed the append-only trigger fires with the ERD's exact error text; `impact()` runs cleanly against a nonexistent project | This is DDL **application**, not a decision - the tables/triggers/`impact()` text itself did not change from what Appendix A/A.2/6.3 already specified. Recorded here because it's the same "verified, not just generated" bar every other round in this appendix holds itself to. Full detail: Project Setup document section 13 |
 
 ---
 
