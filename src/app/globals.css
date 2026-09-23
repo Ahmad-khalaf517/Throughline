@@ -37,6 +37,23 @@
   --on-error: #ffffff;
   --error-container: #ffdad6;
   --on-error-container: #93000a;
+
+  /*
+   * Status badge colors, copied verbatim from "Throughline - Project
+   * Dashboard Overview (Semantic Status Colors)" - the one Stitch screen
+   * that colors the four artifact_version.status values semantically
+   * (green/neutral/grey/red) instead of the monochrome inverse-surface
+   * treatment used elsewhere. Kept as their own tokens since they're this
+   * screen's own literal values, not derived from the M3 palette above.
+   */
+  --status-approved-bg: #1b4332;
+  --status-approved-text: #ffffff;
+  --status-draft-border: #a8a29e;
+  --status-draft-bg: #faf8f5;
+  --status-draft-text: #57534e;
+  --status-superseded-bg: #e7e5e4;
+  --status-superseded-text: #44403c;
+  --status-rejected: #b91c1c;
 }
 
 @theme inline {
@@ -68,6 +85,15 @@
   --color-on-error: var(--on-error);
   --color-error-container: var(--error-container);
   --color-on-error-container: var(--on-error-container);
+
+  --color-status-approved-bg: var(--status-approved-bg);
+  --color-status-approved-text: var(--status-approved-text);
+  --color-status-draft-border: var(--status-draft-border);
+  --color-status-draft-bg: var(--status-draft-bg);
+  --color-status-draft-text: var(--status-draft-text);
+  --color-status-superseded-bg: var(--status-superseded-bg);
+  --color-status-superseded-text: var(--status-superseded-text);
+  --color-status-rejected: var(--status-rejected);
 
   --color-background: var(--surface);
   --color-foreground: var(--on-surface);

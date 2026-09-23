@@ -24,6 +24,7 @@ const elementTypes = [
   'layer6-api',
   'app',
   'lib',
+  'components',
 ];
 
 const eslintConfig = defineConfig([
@@ -54,6 +55,10 @@ const eslintConfig = defineConfig([
         { type: 'layer6-api', pattern: 'src/app/api/**' },
         { type: 'app', pattern: 'src/app/**' },
         { type: 'lib', pattern: 'src/lib/**' },
+        // Presentational only - no table ownership, no domain layer (Module
+        // Boundaries doesn't cover UI yet because none existed). Treated like
+        // `lib`: framework/presentation glue, reachable only from `app`.
+        { type: 'components', pattern: 'src/components/**' },
       ],
     },
     plugins: { boundaries },
@@ -151,6 +156,7 @@ const eslintConfig = defineConfig([
             },
             { from: ['app'], allow: elementTypes },
             { from: ['lib'], allow: ['layer0-db'] },
+            { from: ['components'], allow: ['lib'] },
           ],
         },
       ],

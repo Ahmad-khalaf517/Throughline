@@ -1,40 +1,35 @@
-import Link from 'next/link';
 import { getVerifiedUser } from '@/auth';
+import { ApprovalSection } from '@/components/marketing/approval-section';
+import { FinalCtaSection } from '@/components/marketing/final-cta-section';
+import { Footer } from '@/components/marketing/footer';
+import { Hero } from '@/components/marketing/hero';
+import { ImpactSection } from '@/components/marketing/impact-section';
+import { IntegrationsSection } from '@/components/marketing/integrations-section';
+import { LineageSection } from '@/components/marketing/lineage-section';
+import { Navbar } from '@/components/marketing/navbar';
+import { ProblemSection } from '@/components/marketing/problem-section';
+import { VersionHistorySection } from '@/components/marketing/version-history-section';
+import { WorkflowSection } from '@/components/marketing/workflow-section';
 import { signOutAction } from './actions';
 
 export default async function Home() {
   const user = await getVerifiedUser();
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-8">
-      <h1 className="text-2xl font-semibold">Throughline</h1>
-
-      {user ? (
-        <div className="flex flex-col items-center gap-2 text-sm">
-          <p>
-            Signed in as <span className="font-medium">{user.email}</span>
-          </p>
-          <form action={signOutAction}>
-            <button
-              type="submit"
-              className="rounded border border-neutral-300 px-3 py-1.5 text-sm focus:ring-2 focus:ring-neutral-900 focus:outline-none"
-            >
-              Sign out
-            </button>
-          </form>
-        </div>
-      ) : (
-        <div className="flex gap-3 text-sm">
-          <Link href="/sign-in" className="underline underline-offset-2">
-            Sign in
-          </Link>
-          <Link href="/sign-up" className="underline underline-offset-2">
-            Sign up
-          </Link>
-        </div>
-      )}
-
-      <p className="text-sm text-neutral-500">Slice 1 scaffold - project screens not built yet.</p>
-    </main>
+    <>
+      <Navbar userEmail={user?.email ?? null} onSignOut={signOutAction} />
+      <main className="flex-1">
+        <Hero />
+        <ProblemSection />
+        <WorkflowSection />
+        <LineageSection />
+        <ImpactSection />
+        <VersionHistorySection />
+        <ApprovalSection />
+        <IntegrationsSection />
+        <FinalCtaSection />
+      </main>
+      <Footer />
+    </>
   );
 }
