@@ -1,7 +1,7 @@
 # Throughline - Jira Implementation Plan
 
-**Document version:** 1.2
-**Status:** Derived from ERD/Data Model v1.5, Technical Requirements & Lineage Invariants v1.3, Module Boundaries v1.0, API Contracts v1.0, and Project Setup & Configuration Plan v1.2. Parent of the day-by-day implementation plan and of coding.
+**Document version:** 1.3
+**Status:** Derived from ERD/Data Model v1.6, Technical Requirements & Lineage Invariants v1.4, Module Boundaries v1.1, API Contracts v1.1, and Project Setup & Configuration Plan v1.4. Parent of the day-by-day implementation plan and of coding. v1.3: E1-S6 updated for open sign-up + mandatory email verification, replacing invite-only + allowlist (ERD Appendix B round 9).
 **Purpose:** The ticket breakdown for building **Throughline itself** over the 8-day capstone window - not the in-product Jira *integration* (that is FR-070..074, delivered by Epic 4 below). This plan is what gets created in a real Jira project to run the build.
 **CSV export:** `Throughline_Jira_Import.csv` is not kept in the repo - it was a mechanical, always-derivable restatement of the table below with no decisions of its own. Regenerate it from this plan (same 68 issues, Jira's CSV import format) immediately before the actual bulk-import, rather than carrying a second copy that can drift from this table.
 
@@ -119,7 +119,7 @@ Applying option 1 drops evaluation's 21h out of the 8-day build window, leaving 
 | E1-S3 | Story | Custom migration: `impact()` function (section 6.3) | ERD 6.3 | E1-S2 | 1h |
 | E1-S4 | Story | Custom migration: Supabase hardening (Appendix A.3) | ERD Appendix A.3; T34 | E1-S3 | 1h |
 | E1-S5 | Task | Port ERD Appendix C (T1-T43) into `tests/integration` as executable stubs; **T14, T27, T28, T34 pass in this slice** - the rest turn green as their owning slice lands (E2-S9, E3-T1, E4-T3 each re-run this same suite, not a copy of it) | ERD Appendix C; Project Setup section 10 step 9; T14, T27, T28, T34 | E1-S4 | 5h |
-| E1-S6 | Story | `auth` module + `POST /api/session/bootstrap`: invite-only sign-up, server-side allowlist, `app_user` upsert | TR NFR-005; Module Boundaries `auth`; API Contracts section 2 | E1-S4 | 3h |
+| E1-S6 | Story | `auth` module + `POST /api/session/bootstrap`: open sign-up with mandatory email verification, `app_user` upsert | TR NFR-005; Module Boundaries `auth`; API Contracts section 2 | E1-S4 | 3h |
 | E1-S8 | Story | `artifact-lifecycle.createProject` (minimal - project + its 4 blank artifact rows, no generation) + `POST/GET /api/projects`, `GET/PATCH /api/projects/:projectId` | TR FR-001, FR-002, INV-007; Module Boundaries `artifact-lifecycle`; API Contracts section 3; T33 (brief immutability, via `PATCH`'s `project_seed_frozen` guard) | E1-S4, E1-S6 | 1.5h |
 | E1-S7 | Story | CI workflow (GitHub Actions): typecheck, lint, format:check, unit + integration tests on every PR | Project Setup section 9; step 11 | E1-S5 | 2h |
 | E1-T2 | Task | First hosted deployment (Vercel + Supabase, Supavisor transaction pooler); confirm the access gate blocks an unauthenticated visitor | TR section 43; ERD 2.1 rule 3; step 12 | E1-S6, E1-S7 | 2h |

@@ -1,7 +1,7 @@
 # Throughline - Module Boundaries
 
-**Document version:** 1.0
-**Status:** Derived from ERD/Data Model v1.4 and Technical Requirements & Lineage Invariants v1.3. Parent of API Contracts -> Jira Plan -> Implementation.
+**Document version:** 1.1
+**Status:** Derived from ERD/Data Model v1.6 and Technical Requirements & Lineage Invariants v1.4. Parent of API Contracts -> Jira Plan -> Implementation. v1.1: `getVerifiedUser` no longer checks an email allowlist - ERD Appendix B round 9.
 **Target stack:** Next.js / TypeScript, Drizzle ORM, Supabase Postgres.
 **Primary audience:** Developer, AI coding agents implementing modules.
 
@@ -88,7 +88,9 @@ withTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T>     // plain transaction, no l
 **Exports:**
 ```ts
 getVerifiedUser(request): Promise<{ id: string; email: string } | null>
-  // auth.getUser() against Supabase, never getSession(); returns null if unverified or not allowlisted
+  // auth.getUser() against Supabase, never getSession(); returns null if unverified. No allowlist
+  // check (ERD Appendix B round 9) - sign-up is open, gated only by Supabase's own email
+  // verification (mailer_autoconfirm off), not by this function.
 upsertAppUser(supabaseUser): Promise<void>
   // INSERT ... ON CONFLICT (id) DO UPDATE, called once per authenticated request or on login
 requireProjectOwner(userId: string, projectId: string): Promise<void>
