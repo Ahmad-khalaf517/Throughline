@@ -1,8 +1,9 @@
+import type { ArtifactVersionStatus } from '@/lib/serialize';
+import { StatusBadge } from '@/components/status/status-badge';
 import { Reveal } from './motion/reveal';
 import { StaggerGroup, StaggerItem } from './motion/stagger';
-import { StatusBadge, type ArtifactStatus } from './status-badge';
 
-const STATES: { status: ArtifactStatus; body: string }[] = [
+const STATES: { status: ArtifactVersionStatus; body: string }[] = [
   { status: 'draft', body: 'Generated, not yet reviewed.' },
   { status: 'approved', body: 'A human signed off — with or without a flag present.' },
   { status: 'superseded', body: 'Replaced by a newer version of the same item.' },

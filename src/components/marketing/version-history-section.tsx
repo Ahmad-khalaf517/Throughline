@@ -1,6 +1,6 @@
 import { Reveal } from './motion/reveal';
 import { StaggerGroup, StaggerItem } from './motion/stagger';
-import { StatusBadge } from './status-badge';
+import { StatusBadge } from '@/components/status/status-badge';
 
 const VERSIONS = [
   {

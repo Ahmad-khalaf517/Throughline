@@ -2,22 +2,23 @@
 
 import { motion } from 'framer-motion';
 import { Check, Pencil, Redo2, TriangleAlert, X } from 'lucide-react';
+import type { ArtifactVersionStatus } from '@/lib/serialize';
 import { cn } from '@/lib/utils';
-
-/**
- * The four real artifact_version.status values (ERD CHECK constraint) - never
- * a fifth "stale" state. Each is distinguished by shape/icon, not color alone.
- */
-export type ArtifactStatus = 'draft' | 'approved' | 'superseded' | 'rejected';
 
 /*
  * Colors copied verbatim from "Throughline - Project Dashboard Overview
  * (Semantic Status Colors)" - the Stitch screen that colors each status
  * semantically (green/neutral/grey/red) rather than monochrome. See the
  * --status-* tokens in globals.css.
+ *
+ * `ArtifactVersionStatus` (the four real artifact_version.status values,
+ * ERD CHECK constraint - never a fifth "stale" state) now lives in
+ * lib/serialize.ts, promoted out of this file (E5-S2) so components/review
+ * can share the same type the fixtures/DTOs use instead of a second,
+ * locally-defined union that could drift.
  */
 const STATUS_CONFIG: Record<
-  ArtifactStatus,
+  ArtifactVersionStatus,
   { label: string; icon: typeof Check; className: string }
 > = {
   approved: {
@@ -44,7 +45,7 @@ const STATUS_CONFIG: Record<
 };
 
 interface StatusBadgeProps {
-  status: ArtifactStatus;
+  status: ArtifactVersionStatus;
   className?: string;
 }
 

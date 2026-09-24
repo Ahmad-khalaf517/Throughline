@@ -65,6 +65,13 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         <p className="text-on-surface mt-2 text-sm leading-relaxed whitespace-pre-wrap">
           {project.brief}
         </p>
+
+        <Link
+          href={`/projects/${project.id}/artifacts/requirements`}
+          className="text-primary-container hover:text-primary-container-hover mt-6 inline-block text-sm font-medium"
+        >
+          Review requirements →
+        </Link>
       </div>
     </main>
   );

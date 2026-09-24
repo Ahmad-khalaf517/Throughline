@@ -1,15 +1,16 @@
 'use client';
 
 import { motion, type Variants } from 'framer-motion';
+import type { ArtifactVersionStatus } from '@/lib/serialize';
 import { cn } from '@/lib/utils';
-import { FlaggedGlyph, StatusBadge, type ArtifactStatus } from './status-badge';
+import { FlaggedGlyph, StatusBadge } from '@/components/status/status-badge';
 
 export interface LineageNode {
   id: string;
   kind: string;
   title: string;
   version: string;
-  status: ArtifactStatus;
+  status: ArtifactVersionStatus;
   flagged?: boolean;
 }
 

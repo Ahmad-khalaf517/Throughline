@@ -1,7 +1,7 @@
 import { ArrowRight } from 'lucide-react';
 import { Reveal } from './motion/reveal';
 import { StaggerGroup, StaggerItem } from './motion/stagger';
-import { FlaggedGlyph, StatusBadge } from './status-badge';
+import { FlaggedGlyph, StatusBadge } from '@/components/status/status-badge';
 
 export function LineageSection() {
   return (
