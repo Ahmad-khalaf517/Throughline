@@ -40,6 +40,12 @@ export function Navbar({ userEmail, onSignOut }: NavbarProps) {
         <div className="flex items-center gap-3">
           {userEmail ? (
             <>
+              <Link
+                href="/projects"
+                className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary rounded-md text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
+              >
+                Projects
+              </Link>
               <span className="text-on-surface-variant hidden text-xs sm:inline">
                 Signed in as <span className="text-on-surface font-medium">{userEmail}</span>
               </span>
