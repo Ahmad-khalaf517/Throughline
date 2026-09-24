@@ -9,6 +9,16 @@ Design consistency and two security/correctness invariants (NFR-005, FR-085) tha
 
 Prompt every general design skill (`ui-ux-pro-max`, `emil-design-eng`, `frontend-design`) with: **dense internal data tool, not a marketing page.** The content - tables, diffs, provenance, warnings - is the product. Chrome should be quiet.
 
+## Where the actual visual design lives
+
+BRD section 9 rules Figma out of scope - the design source of record instead is a **Stitch project**, reached through the `mcp__stitch__*` tools:
+
+- Project title **"Throughline Traceability Design System"** (id `10161922138198556597` at last check - if `mcp__stitch__get_project` on that id 404s, re-find it with `mcp__stitch__list_projects` filtered `view=owned` and matched by this exact title; do not fall back to a "Remix of Zenith HR & Payroll System" project if one turns up - that's an unrelated design, not this product's).
+- Its `designTheme.designMd` is the actual token source: colors, the Inter/JetBrains-Mono type split, 4px-rhythm spacing, 6-8px radii, flat surfaces with hairline borders and no blur, the exact per-component specs (buttons, status badges, form inputs, modals). Pull it fresh rather than hand-copying values here - it is a living Stitch project and can change.
+- `mcp__stitch__list_screens` / `get_screen` on that project has actual generated reference screens for this product, including ones labeled "Throughline - Backlog Review" and "Throughline - Project Dashboard Overview (Semantic Status Colors)" - check for one matching the screen you're building before inventing a layout from scratch.
+
+The rules below (status vocabulary, four states, accessibility) are the invariants that hold regardless of visual restyling. The Stitch project is where the actual colors/type/spacing/component shapes come from - pull both.
+
 ## Status vocabulary - get this exactly right
 
 `artifact_version.status` is one of exactly four values (ERD CHECK constraint): **`draft`**, **`approved`**, **`superseded`**, **`rejected`**. There is no fifth "stale" status - **do not add one, anywhere, including in a TypeScript union type or a Tailwind class name.**
