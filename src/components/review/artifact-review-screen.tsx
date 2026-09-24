@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { CircleAlert, CircleCheck, Loader2 } from 'lucide-react';
 import type {
   ArtifactVersionDTO,
@@ -9,6 +9,7 @@ import type {
   QualityIssueDTO,
 } from '@/lib/serialize';
 import { FlaggedGlyph, StatusBadge } from '@/components/status/status-badge';
+import { cn } from '@/lib/utils';
 import { ApprovalDialog } from './approval-dialog';
 
 interface ArtifactReviewScreenProps {
@@ -53,6 +54,54 @@ function readKnownFields(payload: unknown): KnownItemFields {
   };
 }
 
+// `ArchitectureOptionDTO.stack`/`candidateDecisions`/`tradeoffs` are
+// similarly `unknown`/`unknown[]` in the shared DTO (fixtures.ts's local
+// `ArchitectureStack`/`ArchitectureCandidateDecision` types are fixture-side
+// only) - read defensively here too, same pattern as `readKnownFields` above.
+interface KnownStackFields {
+  frontend?: string | undefined;
+  backend?: string | undefined;
+  database?: string | undefined;
+  hosting?: string | undefined;
+  repositoryLayout?: string | undefined;
+}
+
+function readKnownStack(stack: unknown): KnownStackFields {
+  if (typeof stack !== 'object' || stack === null) return {};
+  const record = stack as Record<string, unknown>;
+  const pick = (key: string) =>
+    typeof record[key] === 'string' ? (record[key] as string) : undefined;
+  return {
+    frontend: pick('frontend'),
+    backend: pick('backend'),
+    database: pick('database'),
+    hosting: pick('hosting'),
+    repositoryLayout: pick('repositoryLayout'),
+  };
+}
+
+interface KnownCandidateDecisionFields {
+  decision?: string | undefined;
+  drivenBy?: string[] | undefined;
+  rationale?: string | undefined;
+}
+
+function readKnownCandidateDecision(entry: unknown): KnownCandidateDecisionFields {
+  if (typeof entry !== 'object' || entry === null) return {};
+  const record = entry as Record<string, unknown>;
+  return {
+    decision: typeof record.decision === 'string' ? record.decision : undefined,
+    drivenBy: Array.isArray(record.drivenBy)
+      ? record.drivenBy.filter((entry): entry is string => typeof entry === 'string')
+      : undefined,
+    rationale: typeof record.rationale === 'string' ? record.rationale : undefined,
+  };
+}
+
+function readTradeoffStrings(tradeoffs: unknown[]): string[] {
+  return tradeoffs.filter((entry): entry is string => typeof entry === 'string');
+}
+
 const REVISION_DISABLED_TITLE =
   "Wired up once E3-S10's generation/revision routes exist - visually complete, honestly inert until then (FR-013).";
 
@@ -70,6 +119,15 @@ export function ArtifactReviewScreen({
   const [pending, setPending] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [overrideNote, setOverrideNote] = useState<string | null>(null);
+  // Architecture-only (FR-022): `selectedOptionId` is the in-progress radio
+  // choice; `selectedArchitectureOptionId` only gets set once approval
+  // actually happens, mirroring the real DTO field of the same name (set
+  // only at approval, never before). Both stay `null` forever for every
+  // other artifact type, since `version.options` is `null` there.
+  const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
+  const [selectedArchitectureOptionId, setSelectedArchitectureOptionId] = useState<string | null>(
+    version?.selectedArchitectureOptionId ?? null,
+  );
 
   const blockingItems = useMemo(
     () => items.filter((item) => item.impact !== null && !item.impact.acknowledged),
@@ -94,8 +152,18 @@ export function ArtifactReviewScreen({
     );
   }
 
+  // FR-022: an Architecture version cannot become authoritative unless
+  // exactly one option is selected. `version.options` is `null` for every
+  // other artifact type (requirements/ui_requirements/backlog), so this is
+  // always `false` there and the rest of this gate is a no-op.
+  const requiresOptionSelection = version.options !== null;
+
   function handleApproveClick() {
     if (status !== 'draft' || pending) return;
+    // Same gate as the disabled Approve button below, defended here too -
+    // this component doesn't trust its own button state, same as the
+    // `!version` check above doesn't trust the caller.
+    if (requiresOptionSelection && !selectedOptionId) return;
 
     // FR-083: blocked while any of the version's own items are flagged and
     // unacknowledged - the dialog is the only path to approval from here,
@@ -111,6 +179,9 @@ export function ArtifactReviewScreen({
     setPending(true);
     window.setTimeout(() => {
       setStatus('approved');
+      if (requiresOptionSelection && selectedOptionId) {
+        setSelectedArchitectureOptionId(selectedOptionId);
+      }
       setPending(false);
     }, 500);
   }
@@ -127,6 +198,9 @@ export function ArtifactReviewScreen({
     );
     setStatus('approved');
     setOverrideNote(note);
+    if (requiresOptionSelection && selectedOptionId) {
+      setSelectedArchitectureOptionId(selectedOptionId);
+    }
     setDialogOpen(false);
   }
 
@@ -153,7 +227,148 @@ export function ArtifactReviewScreen({
             <span className="text-on-surface">&ldquo;{overrideNote}&rdquo;</span>
           </p>
         )}
+        {selectedArchitectureOptionId && (
+          <p className="text-on-surface-variant mt-3 text-xs leading-relaxed">
+            Selected option:{' '}
+            <span className="font-mono-code text-on-surface font-semibold">
+              {version.options?.find((option) => option.id === selectedArchitectureOptionId)
+                ?.optionKey ?? selectedArchitectureOptionId}
+            </span>{' '}
+            (FR-022 - recorded at approval).
+          </p>
+        )}
       </header>
+
+      {/* Architecture-only options section (FR-020/FR-021/FR-022) - rendered
+          only when `version.options` is non-null, so this is invisible for
+          every other artifact type and there is zero regression risk to the
+          rest of this generic screen. */}
+      {version.options && (
+        <section
+          aria-labelledby="architecture-options-heading"
+          className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6"
+        >
+          <h2
+            id="architecture-options-heading"
+            className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase"
+          >
+            Architecture options
+          </h2>
+          <p className="text-on-surface-variant mt-1 text-sm">
+            Select exactly one option before approving - an Architecture version cannot become
+            authoritative otherwise (FR-022).
+          </p>
+
+          <div
+            role="radiogroup"
+            aria-labelledby="architecture-options-heading"
+            className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2"
+          >
+            {version.options.map((option) => {
+              const stack = readKnownStack(option.stack);
+              const stackRows: Array<[string, string | undefined]> = [
+                ['Frontend', stack.frontend],
+                ['Backend', stack.backend],
+                ['Database', stack.database],
+                ['Hosting', stack.hosting],
+                ['Repository layout', stack.repositoryLayout],
+              ];
+              const decisions = option.candidateDecisions.map(readKnownCandidateDecision);
+              const tradeoffs = readTradeoffStrings(option.tradeoffs);
+              const inputId = `architecture-option-${option.id}`;
+              const isSelected = selectedOptionId === option.id;
+
+              return (
+                <label
+                  key={option.id}
+                  htmlFor={inputId}
+                  className={cn(
+                    'border-surface-dim bg-surface-container-low flex cursor-pointer flex-col gap-3 rounded-lg border p-4 transition-colors',
+                    isSelected && 'border-primary ring-primary ring-1',
+                    status !== 'draft' && 'cursor-not-allowed opacity-80',
+                  )}
+                >
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="radio"
+                      id={inputId}
+                      name="architecture-option"
+                      value={option.id}
+                      checked={isSelected}
+                      onChange={() => setSelectedOptionId(option.id)}
+                      disabled={status !== 'draft'}
+                      className="border-outline-variant text-primary focus-visible:ring-primary mt-1 size-4 shrink-0 focus-visible:ring-2 focus-visible:outline-none"
+                    />
+                    <div>
+                      <span className="font-mono-code border-surface-dim bg-surface-container-lowest text-on-surface inline-block rounded border px-1.5 py-0.5 text-[11px] font-semibold">
+                        Option {option.optionKey}
+                      </span>
+                      <h3 className="text-on-surface mt-1 text-sm font-semibold">{option.title}</h3>
+                    </div>
+                  </div>
+
+                  <p className="text-on-surface text-sm leading-relaxed">{option.summary}</p>
+
+                  {stackRows.some(([, value]) => value) && (
+                    <dl className="border-surface-dim grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-t pt-3 text-xs">
+                      {stackRows.map(([label, value]) =>
+                        value ? (
+                          <Fragment key={label}>
+                            <dt className="text-on-surface-variant font-medium">{label}</dt>
+                            <dd className="text-on-surface">{value}</dd>
+                          </Fragment>
+                        ) : null,
+                      )}
+                    </dl>
+                  )}
+
+                  {decisions.length > 0 && (
+                    <div>
+                      <h4 className="text-on-surface-variant text-[11px] font-semibold tracking-wide uppercase">
+                        Candidate decisions
+                      </h4>
+                      <ul className="mt-1.5 flex flex-col gap-1.5 text-xs leading-relaxed">
+                        {decisions.map((decision, index) =>
+                          decision.decision ? (
+                            <li key={index} className="text-on-surface">
+                              {decision.decision}
+                              {decision.rationale && (
+                                <span className="text-on-surface-variant">
+                                  {' '}
+                                  — {decision.rationale}
+                                </span>
+                              )}
+                              {decision.drivenBy && decision.drivenBy.length > 0 && (
+                                <span className="font-mono-code text-on-surface-variant">
+                                  {' '}
+                                  ({decision.drivenBy.join(', ')})
+                                </span>
+                              )}
+                            </li>
+                          ) : null,
+                        )}
+                      </ul>
+                    </div>
+                  )}
+
+                  {tradeoffs.length > 0 && (
+                    <div>
+                      <h4 className="text-on-surface-variant text-[11px] font-semibold tracking-wide uppercase">
+                        Trade-offs
+                      </h4>
+                      <ul className="text-on-surface-variant mt-1.5 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed">
+                        {tradeoffs.map((tradeoff, index) => (
+                          <li key={index}>{tradeoff}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* Quality gate (FR-012) - deterministic checks, informational: they
           are shown before approval but do not block it (only flagged/
@@ -319,7 +534,12 @@ export function ArtifactReviewScreen({
         <button
           type="button"
           onClick={handleApproveClick}
-          disabled={status !== 'draft' || pending}
+          disabled={status !== 'draft' || pending || (requiresOptionSelection && !selectedOptionId)}
+          title={
+            requiresOptionSelection && !selectedOptionId && status === 'draft'
+              ? 'Select an architecture option above before approving (FR-022).'
+              : undefined
+          }
           className="bg-primary-container text-on-primary-container hover:bg-primary-container-hover focus-visible:ring-primary flex h-11 items-center gap-2 rounded-lg px-5 text-sm font-medium shadow-sm transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
         >
           {pending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}

@@ -14,6 +14,7 @@
 // `GET /api/artifact-versions/:versionId` + quality-gate calls later is a
 // one-function change, not a screen rewrite.
 import type {
+  ArchitectureOptionDTO,
   ArtifactType,
   ArtifactVersionDTO,
   ImpactRowDTO,
@@ -45,6 +46,30 @@ export interface RequirementsArtifactPayload {
   assumptions: string[];
   unresolvedQuestions: string[];
   userJourneys: string[];
+}
+
+// Architecture option payload shapes (TR FR-020: a structured stack
+// descriptor plus candidate architecture decisions and trade-offs). Not part
+// of the shared DTOs - `ArchitectureOptionDTO` deliberately types `stack` as
+// `unknown` and `candidateDecisions`/`tradeoffs` as `unknown[]` there (API
+// Contracts 1.8) - these local types exist only so the fixture literals
+// below are checked against a real shape, same pattern as
+// `RequirementItemPayload` above.
+export interface ArchitectureStack {
+  frontend: string;
+  backend: string;
+  database: string;
+  hosting: string;
+  repositoryLayout: string;
+}
+
+export interface ArchitectureCandidateDecision {
+  decision: string;
+  // Display keys of the requirement/constraint items that actually drove
+  // this decision - FR-020: "only the requirement and constraint items that
+  // actually drove it", never every constraint on every decision.
+  drivenBy: string[];
+  rationale: string;
 }
 
 function itemVersion(
@@ -213,17 +238,142 @@ function requirementsFixture(): { version: ArtifactVersionDTO; qualityIssues: Qu
   return { version, qualityIssues: requirementsQualityIssues(items) };
 }
 
+// Architecture draft fixture (E5-S3). FR-020: exactly two options, each with
+// project-specific trade-offs tied to this project's actual constraints -
+// not generic technology comparison text - plus a structured stack
+// descriptor and its own candidate decisions ("only the requirement and
+// constraint items that actually drove it"). FR-021: each option carries a
+// stable id (`optionKey`). FR-022: nothing is selected yet - selection only
+// happens at approval, which is why `selectedArchitectureOptionId` is `null`
+// below and `items` is empty (candidate decisions are not lineage while the
+// version is a draft). Both options cite R-04 (the 5,000-concurrent-user
+// constraint established in the requirements fixture above) so the two
+// screens read as one consistent project, and each option reaches a
+// different conclusion from that same constraint - that's what makes this a
+// genuine choice rather than a strawman comparison.
+function architectureOptions(): [ArchitectureOptionDTO, ArchitectureOptionDTO] {
+  const stackA: ArchitectureStack = {
+    frontend: 'Next.js (App Router), deployed to Vercel',
+    backend: 'Next.js Route Handlers in the same application',
+    database: 'Supabase Postgres, accessed through the Supavisor connection pooler',
+    hosting: 'Vercel for the app, Supabase for the database and auth',
+    repositoryLayout: 'One repository, one Next.js app',
+  };
+  const decisionsA: ArchitectureCandidateDecision[] = [
+    {
+      decision:
+        'Use Supabase Postgres through the managed Supavisor pooler rather than self-managing a connection pool.',
+      drivenBy: ['R-04'],
+      rationale:
+        'R-04 sets a 5,000-concurrent-user target; a managed pooler absorbs that connection load without the dedicated ops work a hand-tuned pool would need before launch.',
+    },
+    {
+      decision:
+        'Serve the API as Next.js Route Handlers inside the same application rather than as a separate service.',
+      drivenBy: [],
+      rationale:
+        'One deployable keeps release and operations work inside what a single small team can own, without splitting attention across two codebases.',
+    },
+  ];
+  const tradeoffsA = [
+    'A single Next.js app is something a small team (this project has no dedicated platform engineer) can ship and operate inside a short delivery window, at the cost of coupling frontend and API release cycles together.',
+    "Supavisor pooling reaches R-04's 5,000-concurrent-user target with no self-managed pooling infrastructure, but caps out at whatever pooling limits Supabase's plan allows rather than a fully hand-tuned pool.",
+    "Vercel and Supabase both bill by usage, which keeps cost low at this MVP's scale, but neither gives the same raw scaling ceiling as a dedicated, independently-scaled backend would.",
+  ];
+
+  const stackB: ArchitectureStack = {
+    frontend: 'Next.js (App Router), deployed to Vercel',
+    backend: 'A separate Node.js API service on a dedicated container host',
+    database: 'Self-managed Postgres behind a hand-configured PgBouncer pool',
+    hosting: 'Vercel for the frontend; a dedicated host for the API and database',
+    repositoryLayout:
+      'Two repositories (or a monorepo with two deployables): frontend and API service',
+  };
+  const decisionsB: ArchitectureCandidateDecision[] = [
+    {
+      decision:
+        'Run a self-managed PgBouncer pool in front of a dedicated Postgres instance instead of a managed pooler.',
+      drivenBy: ['R-04'],
+      rationale:
+        "R-04's 5,000-concurrent-user target is comfortably inside what a self-managed pool can handle too, and owning the pool directly leaves headroom well past that number - at the cost of the pool-tuning and failover work Option A avoids.",
+    },
+    {
+      decision:
+        'Split the API into its own deployable service instead of colocating it with the frontend.',
+      drivenBy: [],
+      rationale:
+        'Lets the API scale and release independently of the frontend, which matters once a team is large enough to own that surface separately - not yet the case for the small team behind this project.',
+    },
+  ];
+  const tradeoffsB = [
+    "A separately deployed API can scale past R-04's 5,000-user target with more headroom than Option A's pooled connection budget offers, but that headroom is more than this project's stated scale currently needs.",
+    'Self-managing Postgres and PgBouncer calls for pool-tuning, failover, and patching skills the current small-team profile does not have budgeted time for, working against the same delivery deadline Option A protects.',
+    'Two deployables add deployment complexity - coordinated releases, two sets of environment configuration - in exchange for a cleaner scaling boundary between frontend and API load.',
+  ];
+
+  return [
+    {
+      id: 'fixture-architecture-option-a',
+      optionKey: 'A',
+      title: 'Managed full-stack on Vercel + Supabase',
+      summary:
+        'Keep the frontend, API, and database on the same managed platforms this project already runs on: Next.js Route Handlers for the API, Supabase Postgres through Supavisor for the database, one repository.',
+      stack: stackA,
+      candidateDecisions: decisionsA,
+      tradeoffs: tradeoffsA,
+    },
+    {
+      id: 'fixture-architecture-option-b',
+      optionKey: 'B',
+      title: 'Separate API service + self-managed Postgres',
+      summary:
+        "Split the API into its own deployable service in front of a self-managed, hand-pooled Postgres instance, trading this project's current operational simplicity for scaling headroom beyond its stated load target.",
+      stack: stackB,
+      candidateDecisions: decisionsB,
+      tradeoffs: tradeoffsB,
+    },
+  ];
+}
+
+function architectureFixture(): { version: ArtifactVersionDTO; qualityIssues: QualityIssueDTO[] } {
+  const version: ArtifactVersionDTO = {
+    id: 'fixture-version-architecture-v1',
+    artifactId: 'fixture-artifact-architecture',
+    artifactType: 'architecture',
+    versionNumber: 1, // first Architecture draft, generated once Requirements was approved
+    status: 'draft',
+    statusReason: null,
+    schemaVersion: 1,
+    baseApprovedVersionId: null, // no prior approved Architecture version exists yet
+    payload: null, // no artifact-level payload beyond `options` for this type
+    rawOutput: null,
+    items: [], // FR-020: candidate decisions aren't lineage while the version is a draft
+    options: architectureOptions(),
+    selectedArchitectureOptionId: null, // FR-022: set only at approval
+    createdAt: '2026-09-21T09:10:00.000Z',
+    updatedAt: '2026-09-21T09:10:00.000Z',
+  };
+
+  // API Contracts section 4: the quality-gate route is documented as empty
+  // for `architecture` in P0.
+  return { version, qualityIssues: [] };
+}
+
+// TODO(E3-S10): replace both `requirementsFixture`/`architectureFixture`
+// with a live artifact-lifecycle read once the generation/approval routes
+// exist - see the header comment above for why this is a one-function swap.
 /**
  * The one swap point for E3-S10/E3-S11 (see header comment). Returns
- * realistic fixture data for `requirements` only; the other three artifact
- * types return `null` until E5-S3/S4/S5 extend this same function with their
- * own fixtures - callers must treat `null` as "not yet available for this
- * artifact type", not as an error.
+ * realistic fixture data for `requirements` and `architecture`; the other
+ * two artifact types return `null` until E5-S4/S5 extend this same function
+ * with their own fixtures - callers must treat `null` as "not yet available
+ * for this artifact type", not as an error.
  */
 export function getFixtureArtifactVersion(
   type: ArtifactType,
 ): { version: ArtifactVersionDTO; qualityIssues: QualityIssueDTO[] } | null {
   if (type === 'requirements') return requirementsFixture();
+  if (type === 'architecture') return architectureFixture();
   return null;
 }
 
