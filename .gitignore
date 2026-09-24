@@ -7,6 +7,9 @@
 .claude/skills/*
 !.claude/skills/throughline-*/
 !.claude/agents/
+!.claude/settings.json
+!.claude/commands/
+!.claude/hooks/
 .agents/*
 !.agents/skills/
 .agents/skills/*
