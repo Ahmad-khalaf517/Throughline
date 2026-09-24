@@ -42,6 +42,13 @@ export default defineConfig({
           poolOptions: { threads: { singleThread: true } },
           testTimeout: 60_000,
           hookTimeout: 60_000,
+          // ONE Testcontainers postgres:15-alpine for the whole project (E1-S5):
+          // starts the container, reproduces Supabase's anon/authenticated
+          // roles + default privileges, and applies drizzle/migrations/*.sql in
+          // order exactly once, then hands every *.test.ts file the resulting
+          // connection string via provide/inject (tests/integration/support/
+          // global-setup.ts). Torn down in the function it returns.
+          globalSetup: ['tests/integration/support/global-setup.ts'],
         },
       },
     ],
