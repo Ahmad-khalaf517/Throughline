@@ -34,36 +34,49 @@
  * Every path fails OPEN with a loud systemMessage: a crashing gate that blocked
  * all editing would be worse than a gate that announces it is broken.
  */
-import { readFileSync, readSync, writeFileSync, mkdirSync, existsSync, appendFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import path from 'node:path'
+import {
+  readFileSync,
+  readSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  appendFileSync,
+} from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
-const HOOKS_DIR = path.dirname(fileURLToPath(import.meta.url))
-const CLAUDE_DIR = path.resolve(HOOKS_DIR, '..')
-const REPO_ROOT = path.resolve(CLAUDE_DIR, '..')
-const STATE_DIR = path.join(CLAUDE_DIR, 'state')
-const STATE_FILE = path.join(STATE_DIR, 'feature.json')
-const HATCH_FILE = path.join(STATE_DIR, 'gate-off')
-const PAYLOAD_LOG = path.join(STATE_DIR, 'subagent-payloads.log')
+const HOOKS_DIR = path.dirname(fileURLToPath(import.meta.url));
+const CLAUDE_DIR = path.resolve(HOOKS_DIR, '..');
+const REPO_ROOT = path.resolve(CLAUDE_DIR, '..');
+const STATE_DIR = path.join(CLAUDE_DIR, 'state');
+const STATE_FILE = path.join(STATE_DIR, 'feature.json');
+const HATCH_FILE = path.join(STATE_DIR, 'gate-off');
+const PAYLOAD_LOG = path.join(STATE_DIR, 'subagent-payloads.log');
 
-const IMPLEMENTER = 'feature-implementer'
-const VERIFIERS = ['feature-verifier', 'test-citation-checker']
+const IMPLEMENTER = 'feature-implementer';
+const VERIFIERS = ['feature-verifier', 'test-citation-checker'];
 
 /** Paths the edit gate never touches: docs, agent config, prose, dotfile hygiene. */
-const EXEMPT_PATH = [/^docs[\\/]/i, /^\.claude[\\/]/i, /^\.agents[\\/]/i, /\.md$/i, /^\.gitignore$/i]
+const EXEMPT_PATH = [
+  /^docs[\\/]/i,
+  /^\.claude[\\/]/i,
+  /^\.agents[\\/]/i,
+  /\.md$/i,
+  /^\.gitignore$/i,
+];
 
 /** Commands that must run inside a Haiku verifier subagent, not on the main thread. */
 const TEST_COMMAND =
-  /(^|[\s;&|])(pnpm|npm|npx|yarn)\s+(run\s+)?(test|test:int|test:all|vitest)\b|(^|[\s;&|])vitest\b/
+  /(^|[\s;&|])(pnpm|npm|npx|yarn)\s+(run\s+)?(test|test:int|test:all|vitest)\b|(^|[\s;&|])vitest\b/;
 
 /** Substrings shaped like an issue key that are not one. */
-const NOT_A_KEY = /^(UTF|ISO|SHA|MD|RFC|ES|HTTP|IPV|X|AES|RSA|CVE|WCAG|T)$/i
+const NOT_A_KEY = /^(UTF|ISO|SHA|MD|RFC|ES|HTTP|IPV|X|AES|RSA|CVE|WCAG|T)$/i;
 
-const IN_PROGRESS = /in\s*progress|in\s*development|doing/i
-const IN_REVIEW = /review|ready\s*for\s*(qa|test)|testing|verif/i
+const IN_PROGRESS = /in\s*progress|in\s*development|doing/i;
+const IN_REVIEW = /review|ready\s*for\s*(qa|test)|testing|verif/i;
 
 /** Fallback partition key when a payload genuinely carries no `cwd` (should not happen in practice). */
-const DEFAULT_PARTITION = '(no-cwd)'
+const DEFAULT_PARTITION = '(no-cwd)';
 
 const EMPTY_STATE = {
   ticket: null,
@@ -74,31 +87,31 @@ const EMPTY_STATE = {
   activeAgents: [],
   verifierRan: false,
   verifierRuns: [],
-}
+};
 
 /** Which cwd this hook invocation's payload says it was called from - the partition key. */
 function partitionKey(p) {
-  const cwd = p?.cwd
-  return typeof cwd === 'string' && cwd.trim() ? path.resolve(cwd.trim()) : DEFAULT_PARTITION
+  const cwd = p?.cwd;
+  return typeof cwd === 'string' && cwd.trim() ? path.resolve(cwd.trim()) : DEFAULT_PARTITION;
 }
 
 function readAll() {
   try {
-    if (!existsSync(STATE_FILE)) return {}
-    const parsed = JSON.parse(readFileSync(STATE_FILE, 'utf8'))
+    if (!existsSync(STATE_FILE)) return {};
+    const parsed = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
     // Migrate a pre-partition file (flat EMPTY_STATE shape) into the default partition once.
     if (parsed && typeof parsed === 'object' && !parsed.byCwd) {
-      return { [DEFAULT_PARTITION]: { ...EMPTY_STATE, ...parsed } }
+      return { [DEFAULT_PARTITION]: { ...EMPTY_STATE, ...parsed } };
     }
-    return parsed?.byCwd ?? {}
+    return parsed?.byCwd ?? {};
   } catch {
-    return {}
+    return {};
   }
 }
 
 function readState(key) {
-  const all = readAll()
-  return { ...EMPTY_STATE, ...(all[key] ?? {}) }
+  const all = readAll();
+  return { ...EMPTY_STATE, ...(all[key] ?? {}) };
 }
 
 /**
@@ -108,10 +121,10 @@ function readState(key) {
  * system - the next hook event self-corrects. Documented, not hidden.
  */
 function writeState(key, state) {
-  mkdirSync(STATE_DIR, { recursive: true })
-  const all = readAll()
-  all[key] = state
-  writeFileSync(STATE_FILE, JSON.stringify({ byCwd: all }, null, 2) + '\n', 'utf8')
+  mkdirSync(STATE_DIR, { recursive: true });
+  const all = readAll();
+  all[key] = state;
+  writeFileSync(STATE_FILE, JSON.stringify({ byCwd: all }, null, 2) + '\n', 'utf8');
 }
 
 /**
@@ -124,38 +137,38 @@ function writeState(key, state) {
  * more explicit way to drain fd 0, so it stays.
  */
 function readStdin() {
-  const chunks = []
-  const buf = Buffer.alloc(65536)
+  const chunks = [];
+  const buf = Buffer.alloc(65536);
   for (;;) {
-    let n
+    let n;
     try {
-      n = readSync(0, buf, 0, buf.length, null)
+      n = readSync(0, buf, 0, buf.length, null);
     } catch (err) {
-      if (err?.code === 'EAGAIN') break
-      throw err
+      if (err?.code === 'EAGAIN') break;
+      throw err;
     }
-    if (!n) break
-    chunks.push(Buffer.from(buf.subarray(0, n)))
+    if (!n) break;
+    chunks.push(Buffer.from(buf.subarray(0, n)));
   }
-  return Buffer.concat(chunks).toString('utf8')
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 function payload() {
   try {
-    return JSON.parse(readStdin() || '{}')
+    return JSON.parse(readStdin() || '{}');
   } catch {
-    return {}
+    return {};
   }
 }
 
 function emit(obj) {
-  process.stdout.write(JSON.stringify(obj) + '\n')
-  process.exit(0)
+  process.stdout.write(JSON.stringify(obj) + '\n');
+  process.exit(0);
 }
 
 /** Let the tool call through without saying anything. */
 function allow() {
-  process.exit(0)
+  process.exit(0);
 }
 
 function deny(reason) {
@@ -165,11 +178,11 @@ function deny(reason) {
       permissionDecision: 'deny',
       permissionDecisionReason: reason,
     },
-  })
+  });
 }
 
 function hatchOn() {
-  return existsSync(HATCH_FILE)
+  return existsSync(HATCH_FILE);
 }
 
 /**
@@ -181,19 +194,19 @@ function hatchOn() {
  * relative path.
  */
 function relTarget(input) {
-  const raw = input?.file_path || input?.path || input?.notebook_path || ''
-  if (!raw) return null
-  const abs = path.isAbsolute(raw) ? raw : path.resolve(REPO_ROOT, raw)
-  const rel = path.relative(REPO_ROOT, abs)
+  const raw = input?.file_path || input?.path || input?.notebook_path || '';
+  if (!raw) return null;
+  const abs = path.isAbsolute(raw) ? raw : path.resolve(REPO_ROOT, raw);
+  const rel = path.relative(REPO_ROOT, abs);
   if (rel.startsWith('..')) {
     // Absolute path outside REPO_ROOT - very likely a worktree path
     // (.claude/worktrees/<name>/src/...). Strip down to the part after the
     // worktree name so the exemption regexes still see a normal repo-relative
     // shape instead of bailing out and allowing everything through.
-    const m = raw.replace(/\\/g, '/').match(/\.claude\/worktrees\/[^/]+\/(.*)$/)
-    return m ? m[1] : null
+    const m = raw.replace(/\\/g, '/').match(/\.claude\/worktrees\/[^/]+\/(.*)$/);
+    return m ? m[1] : null;
   }
-  return rel
+  return rel;
 }
 
 /**
@@ -212,16 +225,16 @@ function agentName(p) {
     'agentType',
     'agent',
     'name',
-  ]
+  ];
   for (const k of keys) {
-    const v = p?.[k] ?? p?.tool_input?.[k] ?? p?.agent?.[k]
-    if (typeof v === 'string' && v.trim()) return v.trim()
+    const v = p?.[k] ?? p?.tool_input?.[k] ?? p?.agent?.[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
   }
-  const blob = JSON.stringify(p ?? {})
+  const blob = JSON.stringify(p ?? {});
   for (const known of [IMPLEMENTER, ...VERIFIERS]) {
-    if (blob.includes(known)) return known
+    if (blob.includes(known)) return known;
   }
-  return null
+  return null;
 }
 
 /**
@@ -240,57 +253,57 @@ function findIssueKey(p) {
   // mentioned in an `editJiraIssue` description update) for the transition
   // target - a real risk with the blob scan below, since this repo's own
   // docs are full of hyphenated ids that look exactly like a Jira key.
-  const direct = p?.tool_input?.issueIdOrKey
+  const direct = p?.tool_input?.issueIdOrKey;
   if (typeof direct === 'string') {
-    const m = direct.trim().match(/^([A-Z][A-Z0-9]{0,9})-(\d+)$/)
-    if (m && !NOT_A_KEY.test(m[1])) return m[1] + '-' + m[2]
+    const m = direct.trim().match(/^([A-Z][A-Z0-9]{0,9})-(\d+)$/);
+    if (m && !NOT_A_KEY.test(m[1])) return m[1] + '-' + m[2];
   }
 
   // Fallback for any other transition-shaped tool (movejira/setstatus-style
   // hedges in TRANSITION_TOOL) that doesn't use that field name.
-  const blob = JSON.stringify(p?.tool_input ?? {})
+  const blob = JSON.stringify(p?.tool_input ?? {});
   for (const m of blob.matchAll(/\b([A-Z][A-Z0-9]{0,9})-(\d+)\b/g)) {
-    if (!NOT_A_KEY.test(m[1])) return m[1] + '-' + m[2]
+    if (!NOT_A_KEY.test(m[1])) return m[1] + '-' + m[2];
   }
-  return null
+  return null;
 }
 
 function findStatus(p) {
-  const input = p?.tool_input ?? {}
+  const input = p?.tool_input ?? {};
   for (const k of ['transition', 'status', 'transitionName', 'statusName', 'to', 'target']) {
-    const v = input[k]
-    if (typeof v === 'string' && v.trim()) return v.trim()
-    if (v && typeof v === 'object' && typeof v.name === 'string') return v.name.trim()
+    const v = input[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (v && typeof v === 'object' && typeof v.name === 'string') return v.name.trim();
   }
-  return null
+  return null;
 }
 
 // ---------------------------------------------------------------- subcommands
 
 function precheck() {
-  const p = payload()
-  const key = partitionKey(p)
-  const tool = p.tool_name || ''
-  const state = readState(key)
+  const p = payload();
+  const key = partitionKey(p);
+  const tool = p.tool_name || '';
+  const state = readState(key);
 
   if (tool === 'Bash' || tool === 'PowerShell') {
-    const cmd = p.tool_input?.command || ''
-    if (!TEST_COMMAND.test(cmd)) allow()
-    if (hatchOn()) allow()
-    if (state.activeAgents.some((a) => VERIFIERS.includes(a))) allow()
+    const cmd = p.tool_input?.command || '';
+    if (!TEST_COMMAND.test(cmd)) allow();
+    if (hatchOn()) allow();
+    if (state.activeAgents.some((a) => VERIFIERS.includes(a))) allow();
     deny(
       'The test suite runs on Haiku, inside a verifier subagent - not on the main thread. Delegate to the ' +
         '"feature-verifier" agent (or "test-citation-checker" for ERD T## coverage) and let it run: ' +
         cmd,
-    )
+    );
   }
 
-  if (tool !== 'Edit' && tool !== 'Write' && tool !== 'NotebookEdit') allow()
+  if (tool !== 'Edit' && tool !== 'Write' && tool !== 'NotebookEdit') allow();
 
-  const rel = relTarget(p.tool_input)
-  if (!rel) allow()
-  if (EXEMPT_PATH.some((re) => re.test(rel))) allow()
-  if (hatchOn()) allow()
+  const rel = relTarget(p.tool_input);
+  if (!rel) allow();
+  if (EXEMPT_PATH.some((re) => re.test(rel))) allow();
+  if (hatchOn()) allow();
 
   if (!state.ticket || !state.inProgress) {
     deny(
@@ -300,7 +313,7 @@ function precheck() {
         'Run /feature <TICKET-KEY> <what to build>: plan against the cited docs first, then move the ticket to ' +
         'In Progress via the Atlassian connector - that transition is what unlocks editing.\n' +
         'For deliberate ad-hoc work outside the pipeline, create .claude/state/gate-off (the Stop hook announces it).',
-    )
+    );
   }
 
   if (!state.activeAgents.includes(IMPLEMENTER)) {
@@ -311,28 +324,28 @@ function precheck() {
         '" subagent, not on the Opus main thread. Delegate the implementation of ' +
         rel +
         ' to that agent.',
-    )
+    );
   }
 
-  allow()
+  allow();
 }
 
 /** Tool names that actually move a ticket, as opposed to reading or searching one. */
-const TRANSITION_TOOL = /transition|updatejiraissue|editjiraissue|movejira|setstatus/i
+const TRANSITION_TOOL = /transition|updatejiraissue|editjiraissue|movejira|setstatus/i;
 
 function recordJira() {
-  const p = payload()
-  const key = partitionKey(p)
-  logPayload('PostToolUse:' + (p.tool_name || '?'), p)
+  const p = payload();
+  const key = partitionKey(p);
+  logPayload('PostToolUse:' + (p.tool_name || '?'), p);
 
-  const resp = p.tool_response
-  if (resp && (resp.isError === true || resp.is_error === true)) allow()
-  if (!TRANSITION_TOOL.test(p.tool_name || '')) allow()
+  const resp = p.tool_response;
+  if (resp && (resp.isError === true || resp.is_error === true)) allow();
+  if (!TRANSITION_TOOL.test(p.tool_name || '')) allow();
 
-  const issueKey = findIssueKey(p)
-  if (!issueKey) allow()
-  const status = findStatus(p)
-  const state = readState(key)
+  const issueKey = findIssueKey(p);
+  if (!issueKey) allow();
+  const status = findStatus(p);
+  const state = readState(key);
 
   if (status && IN_REVIEW.test(status) && !IN_PROGRESS.test(status)) {
     writeState(key, {
@@ -342,7 +355,7 @@ function recordJira() {
       verifierRan: state.verifierRan,
       verifierRuns: state.verifierRuns,
       activeAgents: state.activeAgents,
-    })
+    });
     emit({
       systemMessage:
         'Pipeline: ' +
@@ -350,7 +363,7 @@ function recordJira() {
         ' moved to "' +
         status +
         '". Edit gate re-armed for this worktree - you move it to Done manually.',
-    })
+    });
   }
 
   if (status && IN_PROGRESS.test(status)) {
@@ -361,16 +374,20 @@ function recordJira() {
       inProgress: true,
       startedAt: new Date().toISOString(),
       activeAgents: state.activeAgents,
-    })
+    });
     emit({
       systemMessage:
-        'Pipeline: ' + issueKey + ' is In Progress. Edits unlocked in this worktree inside the ' + IMPLEMENTER + ' subagent.',
-    })
+        'Pipeline: ' +
+        issueKey +
+        ' is In Progress. Edits unlocked in this worktree inside the ' +
+        IMPLEMENTER +
+        ' subagent.',
+    });
   }
 
   // A transition we do not recognise: record it, change no gate.
-  writeState(key, { ...state, ticket: state.ticket || issueKey, status: status || state.status })
-  allow()
+  writeState(key, { ...state, ticket: state.ticket || issueKey, status: status || state.status });
+  allow();
 }
 
 /**
@@ -382,72 +399,78 @@ function recordJira() {
  */
 function logPayload(event, p) {
   try {
-    mkdirSync(STATE_DIR, { recursive: true })
+    mkdirSync(STATE_DIR, { recursive: true });
     const meta = {
       cwd: p?.cwd,
       tool: p?.tool_name,
       agent: p?.agent_type,
       keys: Object.keys(p?.tool_input ?? {}),
-    }
-    appendFileSync(PAYLOAD_LOG, new Date().toISOString() + ' ' + event + ' ' + JSON.stringify(meta) + '\n', 'utf8')
+    };
+    appendFileSync(
+      PAYLOAD_LOG,
+      new Date().toISOString() + ' ' + event + ' ' + JSON.stringify(meta) + '\n',
+      'utf8',
+    );
   } catch {
     /* best effort */
   }
 }
 
 function subagentStart() {
-  const p = payload()
-  const key = partitionKey(p)
-  logPayload('SubagentStart', p)
-  const name = agentName(p)
-  if (!name) allow()
-  const state = readState(key)
-  if (!state.activeAgents.includes(name)) state.activeAgents.push(name)
-  writeState(key, state)
-  allow()
+  const p = payload();
+  const key = partitionKey(p);
+  logPayload('SubagentStart', p);
+  const name = agentName(p);
+  if (!name) allow();
+  const state = readState(key);
+  if (!state.activeAgents.includes(name)) state.activeAgents.push(name);
+  writeState(key, state);
+  allow();
 }
 
 function subagentStop() {
-  const p = payload()
-  const key = partitionKey(p)
-  logPayload('SubagentStop', p)
-  const name = agentName(p)
-  if (!name) allow()
-  const state = readState(key)
-  state.activeAgents = state.activeAgents.filter((a) => a !== name)
+  const p = payload();
+  const key = partitionKey(p);
+  logPayload('SubagentStop', p);
+  const name = agentName(p);
+  if (!name) allow();
+  const state = readState(key);
+  state.activeAgents = state.activeAgents.filter((a) => a !== name);
   if (VERIFIERS.includes(name)) {
-    state.verifierRan = true
-    state.verifierRuns = [...new Set([...state.verifierRuns, name])]
+    state.verifierRan = true;
+    state.verifierRuns = [...new Set([...state.verifierRuns, name])];
   }
-  writeState(key, state)
-  allow()
+  writeState(key, state);
+  allow();
 }
 
 function stopReport() {
-  const p = payload()
-  const key = partitionKey(p)
-  const state = readState(key)
-  const notes = []
+  const p = payload();
+  const key = partitionKey(p);
+  const state = readState(key);
+  const notes = [];
 
   if (hatchOn()) {
     notes.push(
       'The edit gate is OFF (.claude/state/gate-off exists) - code changes are not being gated. Delete that file to re-arm it.',
-    )
+    );
   }
   if (state.ticket && state.inProgress) {
     if (!state.verifierRan) {
-      notes.push(state.ticket + ' is In Progress and the Haiku verifier has not run - tests are unverified.')
+      notes.push(
+        state.ticket + ' is In Progress and the Haiku verifier has not run - tests are unverified.',
+      );
     }
     if (!state.reviewed) {
       notes.push(
         state.ticket +
           ' has not been moved to review yet (post the implementation-summary comment first; never move it to Done).',
-      )
+      );
     }
   }
 
-  if (!notes.length) emit({ suppressOutput: true })
-  emit({ systemMessage: 'Pipeline outstanding:\n- ' + notes.join('\n- ') })
+  if (!notes.length) emit({ suppressOutput: true });
+  emit({ systemMessage: 'Pipeline outstanding:\n- ' + notes.join('\n- ') });
 }
 
 // -------------------------------------------------------------------- dispatch
@@ -458,16 +481,16 @@ const COMMANDS = {
   'subagent-start': subagentStart,
   'subagent-stop': subagentStop,
   'stop-report': stopReport,
-}
+};
 
-const sub = process.argv[2]
+const sub = process.argv[2];
 try {
-  const fn = COMMANDS[sub]
+  const fn = COMMANDS[sub];
   if (!fn) {
-    process.stderr.write('gate.mjs: unknown subcommand ' + JSON.stringify(sub) + '\n')
-    process.exit(0)
+    process.stderr.write('gate.mjs: unknown subcommand ' + JSON.stringify(sub) + '\n');
+    process.exit(0);
   }
-  fn()
+  fn();
 } catch (err) {
   // Fail open, loudly. A broken gate must not make the repo uneditable.
   emit({
@@ -476,5 +499,5 @@ try {
       sub +
       ') errored and is FAILING OPEN - this turn is not gated. Fix .claude/hooks/gate.mjs: ' +
       (err?.message ?? err),
-  })
+  });
 }
