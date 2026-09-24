@@ -7,6 +7,7 @@
 // (Module Boundaries section 7).
 import { alias } from 'drizzle-orm/pg-core';
 import { and, desc, eq, type SQL } from 'drizzle-orm';
+import postgres from 'postgres';
 import { db, schema, withTx } from '@/db';
 import { ARTIFACT_TYPES, type ArtifactSummaryDTO, type ArtifactType } from '@/lib/serialize';
 
@@ -140,31 +141,46 @@ export async function updateProject(
 ): Promise<ProjectWithArtifacts> {
   const changesSeed = updates.brief !== undefined || updates.inputContext !== undefined;
 
-  await withTx(async (tx) => {
-    if (changesSeed) {
-      const [requirementsVersion] = await tx
-        .select({ id: schema.artifactVersion.id })
-        .from(schema.artifactVersion)
-        .innerJoin(schema.artifact, eq(schema.artifact.id, schema.artifactVersion.artifactId))
-        .where(
-          and(eq(schema.artifact.projectId, projectId), eq(schema.artifact.type, 'requirements')),
-        )
-        .limit(1);
+  try {
+    await withTx(async (tx) => {
+      if (changesSeed) {
+        const [requirementsVersion] = await tx
+          .select({ id: schema.artifactVersion.id })
+          .from(schema.artifactVersion)
+          .innerJoin(schema.artifact, eq(schema.artifact.id, schema.artifactVersion.artifactId))
+          .where(
+            and(eq(schema.artifact.projectId, projectId), eq(schema.artifact.type, 'requirements')),
+          )
+          .limit(1);
 
-      if (requirementsVersion) {
-        throw new BriefFrozenError(projectId);
+        if (requirementsVersion) {
+          throw new BriefFrozenError(projectId);
+        }
       }
-    }
 
-    const setValues: Partial<typeof schema.project.$inferInsert> = {};
-    if (updates.name !== undefined) setValues.name = updates.name;
-    if (updates.brief !== undefined) setValues.brief = updates.brief;
-    if (updates.inputContext !== undefined) setValues.inputContext = updates.inputContext;
+      const setValues: Partial<typeof schema.project.$inferInsert> = {};
+      if (updates.name !== undefined) setValues.name = updates.name;
+      if (updates.brief !== undefined) setValues.brief = updates.brief;
+      if (updates.inputContext !== undefined) setValues.inputContext = updates.inputContext;
 
-    if (Object.keys(setValues).length > 0) {
-      await tx.update(schema.project).set(setValues).where(eq(schema.project.id, projectId));
+      if (Object.keys(setValues).length > 0) {
+        await tx.update(schema.project).set(setValues).where(eq(schema.project.id, projectId));
+      }
+    });
+  } catch (error) {
+    // The pre-check above cannot close the race under READ COMMITTED: a
+    // concurrent transaction can insert the first Requirements
+    // artifact_version between that SELECT and this UPDATE committing. The
+    // `project_seed_frozen` trigger (drizzle/migrations/0004_triggers.sql)
+    // is the real backstop for that window - translate its raw exception
+    // into the same BriefFrozenError the pre-check throws, so the route's
+    // mapping to 409 BRIEF_FROZEN (API Contracts section 11) covers this
+    // path too instead of surfacing as an unhandled 500.
+    if (isProjectSeedFrozenError(error)) {
+      throw new BriefFrozenError(projectId);
     }
-  });
+    throw error;
+  }
 
   const project = await getProjectById(projectId);
   if (!project) {
@@ -173,4 +189,16 @@ export async function updateProject(
     throw new Error(`project ${projectId} not found immediately after update`);
   }
   return project;
+}
+
+// Matches on the trigger's own message, not just SQLSTATE P0001, because
+// every plain `RAISE EXCEPTION` in that migration (forbid_mutation,
+// membership_draft_only, artifact_version_guard, ...) shares that same
+// generic code - message text is the only reliable way to tell them apart.
+function isProjectSeedFrozenError(error: unknown): boolean {
+  return (
+    error instanceof postgres.PostgresError &&
+    error.code === 'P0001' &&
+    error.message.includes('brief and input_context are frozen')
+  );
 }

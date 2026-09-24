@@ -1,7 +1,7 @@
 # Throughline - API Contracts
 
-**Document version:** 1.2
-**Status:** Derived from ERD/Data Model v1.8, Technical Requirements & Lineage Invariants v1.4, and Module Boundaries v1.3. Parent of Jira Plan -> Implementation. v1.1: dropped the allowlist gate/`403 NOT_ALLOWLISTED` - ERD Appendix B round 9 (sign-up is open, gated by email verification only). v1.2: added the missing `BRIEF_FROZEN` (409) row to the section 11 error code table (E1-S8) - already documented inline on `PATCH /api/projects/:projectId` (section 3) but omitted from the reference table; no behavior change.
+**Document version:** 1.3
+**Status:** Derived from ERD/Data Model v1.8, Technical Requirements & Lineage Invariants v1.4, and Module Boundaries v1.3. Parent of Jira Plan -> Implementation. v1.1: dropped the allowlist gate/`403 NOT_ALLOWLISTED` - ERD Appendix B round 9 (sign-up is open, gated by email verification only). v1.2: added the missing `BRIEF_FROZEN` (409) row to the section 11 error code table (E1-S8) - already documented inline on `PATCH /api/projects/:projectId` (section 3) but omitted from the reference table; no behavior change. v1.3: added the missing `INTERNAL_ERROR` (500) row to section 11 - `src/lib/errors.ts`'s `errorResponse` has always emitted it for any caught error that isn't an `ApiError`, but it was never in the table; no behavior change.
 **Style:** REST over HTTPS, JSON bodies, implemented as Next.js Route Handlers under `app/api/` (Module Boundaries layer 6).
 **Primary audience:** Developer, AI coding agents implementing route handlers.
 
@@ -440,6 +440,7 @@ A `manual_fallback` result is `200`, not an error: FR-054 requires the workflow 
 | `IMPACT_NOT_ACKNOWLEDGED` | 409 | External write attempted without confirming shown impact (TR FR-085) |
 | `ALREADY_GENERATED` | 409 | One Stitch output per UI Requirements version |
 | `REQUEST_CONFLICT` | 409 | A retry's inputs no longer match the stored operation's request hash |
+| `INTERNAL_ERROR` | 500 | Every route's catch-all for a caught error that is not one of the above - logged server-side, never leaks internals into the response body |
 
 ---
 
