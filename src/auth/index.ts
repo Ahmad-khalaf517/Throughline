@@ -1,8 +1,14 @@
 import type { EmailOtpType } from '@supabase/supabase-js';
 import { eq } from 'drizzle-orm';
 import { db, schema, withTx } from '@/db';
+import { ApiError } from '@/lib/errors';
 import { env } from '@/lib/env';
 import { createServerSupabaseClient } from './supabase-server';
+
+// A `projectId` never has any other legal shape (uuid primary key) - checked
+// up front so a malformed id fails closed as 404 instead of surfacing a raw
+// Postgres "invalid input syntax for type uuid" error.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export { updateSession } from './supabase-middleware';
 
@@ -55,19 +61,33 @@ export async function upsertAppUser(user: {
 }
 
 /**
- * Throws 403 unless project.owner_user_id = userId; the ONLY
- * project-ownership check in the codebase (Module Boundaries 4.1).
+ * The ONLY project-ownership check in the codebase (Module Boundaries 4.1).
+ * Throws `ApiError('NOT_FOUND')` - never a 403 - for both "no such project"
+ * and "project exists but isn't the caller's": API Contracts 1.1 rule 2 and
+ * 1.4 are deliberate that these two cases must be indistinguishable to the
+ * caller, so an id can never be confirmed to exist in a project it doesn't
+ * own (this overrides Module Boundaries' own "throws 403" comment - API
+ * Contracts is the more specific, later-reasoned rule here).
  *
- * NOT YET IMPLEMENTED: the `project` table does not exist until slice 2
- * (ERD Appendix A.1, artifact-lifecycle module owns it). Deliberately throws
- * rather than silently allowing every request - a stub that returns
- * successfully here would be a real authorization bug waiting to happen.
+ * Reads `project` directly - `auth` is layer 0 and does not import
+ * `artifact-lifecycle` (layer 2); this is the one documented place a
+ * lower-layer module reads a table it doesn't own (ERD "Authorization" row,
+ * Module Boundaries 4.1).
  */
-export async function requireProjectOwner(_userId: string, _projectId: string): Promise<void> {
-  throw new Error(
-    'requireProjectOwner is not implemented - the `project` table does not exist yet ' +
-      '(slice 2, artifact-lifecycle module). No caller should depend on this until then.',
-  );
+export async function requireProjectOwner(userId: string, projectId: string): Promise<void> {
+  if (!UUID_RE.test(projectId)) {
+    throw new ApiError('NOT_FOUND', 'Project not found.');
+  }
+
+  const [row] = await db
+    .select({ ownerUserId: schema.project.ownerUserId })
+    .from(schema.project)
+    .where(eq(schema.project.id, projectId))
+    .limit(1);
+
+  if (!row || row.ownerUserId !== userId) {
+    throw new ApiError('NOT_FOUND', 'Project not found.');
+  }
 }
 
 /**

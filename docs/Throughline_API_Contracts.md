@@ -1,7 +1,7 @@
 # Throughline - API Contracts
 
-**Document version:** 1.1
-**Status:** Derived from ERD/Data Model v1.8, Technical Requirements & Lineage Invariants v1.4, and Module Boundaries v1.2. Parent of Jira Plan -> Implementation. v1.1: dropped the allowlist gate/`403 NOT_ALLOWLISTED` - ERD Appendix B round 9 (sign-up is open, gated by email verification only).
+**Document version:** 1.2
+**Status:** Derived from ERD/Data Model v1.8, Technical Requirements & Lineage Invariants v1.4, and Module Boundaries v1.3. Parent of Jira Plan -> Implementation. v1.1: dropped the allowlist gate/`403 NOT_ALLOWLISTED` - ERD Appendix B round 9 (sign-up is open, gated by email verification only). v1.2: added the missing `BRIEF_FROZEN` (409) row to the section 11 error code table (E1-S8) - already documented inline on `PATCH /api/projects/:projectId` (section 3) but omitted from the reference table; no behavior change.
 **Style:** REST over HTTPS, JSON bodies, implemented as Next.js Route Handlers under `app/api/` (Module Boundaries layer 6).
 **Primary audience:** Developer, AI coding agents implementing route handlers.
 
@@ -422,6 +422,7 @@ A `manual_fallback` result is `200`, not an error: FR-054 requires the workflow 
 | `VALIDATION_ERROR` | 400 | Request body failed schema validation |
 | `UNAUTHENTICATED` | 401 | No verified Supabase session (includes an account that has not completed email verification) |
 | `NOT_FOUND` | 404 | Object does not exist, or belongs to another project (section 1.4) |
+| `BRIEF_FROZEN` | 409 | `PATCH /api/projects/:projectId` attempted to change `brief`/`inputContext` after a Requirements `artifact_version` already exists (ERD INV-007; `project_seed_frozen` trigger is the backstop) |
 | `PREREQUISITE_NOT_APPROVED` | 409 | TR FR-080 - an upstream artifact is not yet approved |
 | `DRAFT_EXISTS` | 409 | Reserved; default behavior replaces the draft instead (ERD `draft_replaced`) |
 | `NO_APPROVED_VERSION` | 409 | Manual revision attempted with nothing approved yet |

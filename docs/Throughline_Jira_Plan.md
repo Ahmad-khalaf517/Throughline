@@ -1,7 +1,7 @@
 # Throughline - Jira Implementation Plan
 
 **Document version:** 1.3
-**Status:** Derived from ERD/Data Model v1.8, Technical Requirements & Lineage Invariants v1.4, Module Boundaries v1.2, API Contracts v1.1, and Project Setup & Configuration Plan v1.4. Parent of the day-by-day implementation plan and of coding. v1.3: E1-S6 updated for open sign-up + mandatory email verification, replacing invite-only + allowlist (ERD Appendix B round 9).
+**Status:** Derived from ERD/Data Model v1.8, Technical Requirements & Lineage Invariants v1.4, Module Boundaries v1.3, API Contracts v1.2, and Project Setup & Configuration Plan v1.4. Parent of the day-by-day implementation plan and of coding. v1.3: E1-S6 updated for open sign-up + mandatory email verification, replacing invite-only + allowlist (ERD Appendix B round 9).
 **Purpose:** The ticket breakdown for building **Throughline itself** over the 8-day capstone window - not the in-product Jira *integration* (that is FR-070..074, delivered by Epic 4 below). This plan is what gets created in a real Jira project to run the build.
 **CSV export:** `Throughline_Jira_Import.csv` is not kept in the repo - it was a mechanical, always-derivable restatement of the table below with no decisions of its own. Regenerate it from this plan (same 68 issues, Jira's CSV import format) immediately before the actual bulk-import, rather than carrying a second copy that can drift from this table.
 
