@@ -191,6 +191,34 @@ const eslintConfig = defineConfig([
   // Exceptions to the blanket no-restricted-imports ban above, for the one
   // module each rule allows.
   {
+    // scripts/** is tooling, not a module in the layer graph (Module
+    // Boundaries's import-direction rules govern src/ only - `boundaries/
+    // include` above is scoped to 'src/**/*'). E2-T1 (Jira Plan; TR section
+    // 42 Spike A) explicitly calls the openai SDK directly from
+    // scripts/spike-structured-output.ts rather than building src/ai-client
+    // early - see that file's header comment.
+    files: ['scripts/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/db/lock', '**/db/lock.ts'],
+              message:
+                'withProjectLock is imported from src/artifact-lifecycle only (Module Boundaries principle 3).',
+            },
+            {
+              group: ['@supabase/*'],
+              message:
+                'Only src/auth may import @supabase/* auth/SSR clients (Module Boundaries 4.1).',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['src/ai-client/**'],
     rules: {
       'no-restricted-imports': [
