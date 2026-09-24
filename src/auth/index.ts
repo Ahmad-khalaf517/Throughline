@@ -1,5 +1,6 @@
 import type { EmailOtpType } from '@supabase/supabase-js';
 import { eq } from 'drizzle-orm';
+import { cache } from 'react';
 import { db, schema, withTx } from '@/db';
 import { ApiError } from '@/lib/errors';
 import { env } from '@/lib/env';
@@ -25,24 +26,34 @@ export { updateSession } from './supabase-middleware';
  * Accepts an optional request for the documented scripted-testing path
  * (API Contracts 1.1: `Authorization: Bearer <token>`); omitted, it reads
  * the httpOnly session cookie via next/headers instead.
+ *
+ * Wrapped in `React.cache` so more than one call in the same request (e.g.
+ * `projects/layout.tsx`'s auth guard plus a page's own call for `user.id`)
+ * shares one Supabase round trip instead of paying for it twice. Also safe
+ * for the route handlers that call this with a `request` argument: outside
+ * an active Server Component render there's no cache scope to key into, so
+ * `cache()` just calls straight through with no memoization - no
+ * behavioral change there.
  */
-export async function getVerifiedUser(
-  request?: Request,
-): Promise<{ id: string; email: string; displayName: string | null } | null> {
-  const bearer = request?.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1];
-  const supabase = await createServerSupabaseClient();
-  const { data, error } = bearer
-    ? await supabase.auth.getUser(bearer)
-    : await supabase.auth.getUser();
+export const getVerifiedUser = cache(
+  async (
+    request?: Request,
+  ): Promise<{ id: string; email: string; displayName: string | null } | null> => {
+    const bearer = request?.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1];
+    const supabase = await createServerSupabaseClient();
+    const { data, error } = bearer
+      ? await supabase.auth.getUser(bearer)
+      : await supabase.auth.getUser();
 
-  if (error || !data.user?.email) return null;
-  const displayName = data.user.user_metadata?.display_name;
-  return {
-    id: data.user.id,
-    email: data.user.email,
-    displayName: typeof displayName === 'string' ? displayName : null,
-  };
-}
+    if (error || !data.user?.email) return null;
+    const displayName = data.user.user_metadata?.display_name;
+    return {
+      id: data.user.id,
+      email: data.user.email,
+      displayName: typeof displayName === 'string' ? displayName : null,
+    };
+  },
+);
 
 /**
  * INSERT ... ON CONFLICT (id) DO UPDATE, called once per authenticated

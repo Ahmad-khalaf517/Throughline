@@ -1,3 +1,5 @@
+import { FieldShell } from './field-shell';
+
 interface TextFieldProps {
   id: string;
   name: string;
@@ -22,10 +24,7 @@ export function TextField({
   errorText,
 }: TextFieldProps) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-on-surface text-sm font-medium">
-        {label}
-      </label>
+    <FieldShell id={id} label={label} helperText={helperText} errorText={errorText}>
       <input
         id={id}
         name={name}
@@ -35,11 +34,6 @@ export function TextField({
         placeholder={placeholder}
         className="border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus:border-primary focus:bg-surface-container-low focus:ring-primary h-11 w-full rounded-lg border px-3.5 text-sm transition-colors focus:ring-1 focus:outline-none"
       />
-      {(helperText || errorText) && (
-        <p className={errorText ? 'text-error text-xs' : 'text-secondary text-xs'}>
-          {errorText || helperText}
-        </p>
-      )}
-    </div>
+    </FieldShell>
   );
 }
