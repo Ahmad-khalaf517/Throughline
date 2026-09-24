@@ -137,7 +137,10 @@ function requirementsItems(): ItemVersionDTO[] {
           subjectId: 'fixture-item-version-r-06',
           rootItemVersionId: R04_SCALE_CONSTRAINT.itemVersionId,
           rootDisplayKey: 'R-04',
-          depth: 1,
+          // Direct impact (depth 0, per ERD section 6.1's depth convention -
+          // R-06 depends on R-04 directly, with no intermediate item on the
+          // path). Was `1` before this story's fix.
+          depth: 0,
           path: ['R-04', 'R-06'],
           acknowledged: false,
         },
@@ -222,4 +225,46 @@ export function getFixtureArtifactVersion(
 ): { version: ArtifactVersionDTO; qualityIssues: QualityIssueDTO[] } | null {
   if (type === 'requirements') return requirementsFixture();
   return null;
+}
+
+/**
+ * Fixture data for the warning panel (E5-S6). E3-S11 (the impact routes)
+ * doesn't exist yet - this stands in for `GET /api/projects/:projectId/impact`
+ * -> `{ warnings: ImpactRowDTO[] }` (API Contracts section 6), typed against
+ * the real `ImpactRowDTO` shape so the panel can be built and reviewed now.
+ * `projectId` is accepted but unused, only so the call site already reads
+ * like the real route it will become.
+ *
+ * Two rows, both caused by R-04's change (see `R04_SCALE_CONSTRAINT` above):
+ * a direct one that mirrors R-06's own impact row exactly, and a transitive
+ * one showing a downstream external ref two hops out - INV-022's "never
+ * flatten direct and transitive into one list" needs both kinds present in
+ * the fixture to be demonstrable at all.
+ *
+ * TODO(E3-S11): replace with a live `impact.getWarnings` read once that
+ * module exists - `WarningPanel` only ever consumes `ImpactRowDTO[]`, so
+ * this is a one-function swap, not a screen rewrite.
+ */
+export function getFixtureImpactWarnings(projectId: string): ImpactRowDTO[] {
+  void projectId;
+  return [
+    {
+      subjectKind: 'item_version',
+      subjectId: 'fixture-item-version-r-06',
+      rootItemVersionId: R04_SCALE_CONSTRAINT.itemVersionId,
+      rootDisplayKey: 'R-04',
+      depth: 0,
+      path: ['R-04', 'R-06'],
+      acknowledged: false,
+    },
+    {
+      subjectKind: 'external_ref',
+      subjectId: 'fixture-external-ref-github-readme',
+      rootItemVersionId: R04_SCALE_CONSTRAINT.itemVersionId,
+      rootDisplayKey: 'R-04',
+      depth: 1,
+      path: ['R-04', 'R-06', 'GitHub: README.md'],
+      acknowledged: false,
+    },
+  ];
 }
