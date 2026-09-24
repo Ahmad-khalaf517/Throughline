@@ -7,7 +7,7 @@ Implement the Jira story **$1**. What the user asked for: $ARGUMENTS
 
 Run the phases below in order. The gate in `.claude/hooks/gate.mjs` enforces the order mechanically - if you skip ahead, your Edit or Bash call is denied and you will be told why. Do not try to work around a denial; it means a phase was skipped.
 
-## Phase 0 - Worktree (you, on Opus)
+## Phase 0 - Worktree (you, on Haiku)
 
 Before anything else, call `EnterWorktree` (name it after the ticket, e.g. `feature/$1`) so this whole run happens off `main`. This is a standing project instruction - see `CLAUDE.md` - so `EnterWorktree` is authorized without asking the user each time.
 
@@ -49,7 +49,7 @@ Both run on Haiku. You may not run the test commands yourself; the gate denies t
 
 If anything fails, go back to Phase 3 with the failure - do not patch it from the main thread.
 
-## Phase 5 - Review (you, on Opus)
+## Phase 5 - Review (you, on Sonnet)
 
 1. If the diff adds a file under `src/` or changes an import, run `boundary-auditor`. If it touches `src/lineage/**`, `src/artifact-lifecycle/**` or `src/artifact-types/**`, run `invariant-reviewer`.
 2. Post an implementation-summary comment on **$1**: files touched, key decisions, which `T##`/FR/INV ids are now covered, and anything stubbed or deferred.
