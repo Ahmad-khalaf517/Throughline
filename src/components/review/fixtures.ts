@@ -1,4 +1,7 @@
-// Presentation-layer fixture data for the artifact review screens (E5-S2).
+// Presentation-layer fixture data for the artifact review screens (E5-S2/
+// S3/S4/S5). As of E5-S4 (UI Requirements, the last gap) all four
+// `ArtifactType` values have real fixture data here - see
+// `getFixtureArtifactVersion`'s own doc comment below.
 //
 // E3-S10 (the artifact generate/approve/quality-gate routes) and E3-S11 (the
 // impact routes) do not exist yet - this module stands in for both, typed
@@ -90,6 +93,30 @@ export interface BacklogItemPayload {
   acceptanceCriteria?: string[];
   priority?: string;
   sourceRefs?: string[]; // FR-062: display-key references to upstream item versions
+}
+
+// UI Requirement item payload shape (TR FR-040: "structured UI Requirements
+// containing appropriate fields such as: target users, screens, user flows,
+// navigation expectations, key components, responsive constraints,
+// accessibility constraints, RTL/localization requirements, UX priorities").
+// Not part of the shared DTOs - same reasoning and pattern as
+// `RequirementItemPayload`/`BacklogItemPayload` above: `ItemVersionDTO.payload`
+// stays `unknown` in the shared DTO, this local type only checks the fixture
+// literals below against a real shape. `title`/`description` are required
+// (every item needs something to render); the rest are FR-040's own field
+// list, left optional since not every UI Requirement item needs every one of
+// them. `sourceRefs` reuses the same generic cross-artifact reference field
+// `BacklogItemPayload` already carries (API Contracts 1.8).
+export interface UiRequirementItemPayload {
+  title: string;
+  description: string;
+  targetUsers?: string[];
+  screens?: string[];
+  navigationExpectations?: string;
+  responsiveConstraints?: string;
+  accessibilityConstraints?: string;
+  uxPriorities?: string[];
+  sourceRefs?: string[];
 }
 
 function itemVersion(
@@ -526,22 +553,153 @@ function backlogFixture(): { version: ArtifactVersionDTO; qualityIssues: Quality
   return { version, qualityIssues: backlogQualityIssues(items) };
 }
 
+// UI Requirements draft fixture (E5-S4, the last artifact-type gap in this
+// file). Same helper pattern as `itemVersion`/`backlogItemVersion` above, but
+// for `ui_requirement` items, which have no parent item of their own
+// (`parentLogicalItemId` is always `null` - only Story -> Epic is a real
+// parent relationship, API Contracts 1.8).
+function uiRequirementItemVersion(
+  displayKey: string,
+  payload: UiRequirementItemPayload,
+  opts: { impact?: ImpactRowDTO | null } = {},
+): ItemVersionDTO {
+  return {
+    itemVersionId: `fixture-item-version-${displayKey.toLowerCase()}`,
+    logicalItemId: `fixture-logical-${displayKey.toLowerCase()}`,
+    displayKey,
+    itemType: 'ui_requirement',
+    revisionNumber: 1,
+    payload,
+    parentLogicalItemId: null,
+    impact: opts.impact ?? null,
+  };
+}
+
+function uiRequirementsItems(): ItemVersionDTO[] {
+  return [
+    // UI-01: a genuinely project-specific item - it describes the actual
+    // built project-creation/brief-entry screen (E5-S1, this codebase's
+    // `/projects` route: `src/app/projects/page.tsx` +
+    // `new-project-form.tsx`), not generic placeholder UI copy. Clean, no
+    // impact.
+    uiRequirementItemVersion('UI-01', {
+      title: 'Project list + creation screen',
+      description:
+        'The first authenticated screen after sign-in: a list of the signed-in ' +
+        "Project Owner's existing projects (name and a two-line brief excerpt, " +
+        'each linking to its detail page) above a "New project" form with a ' +
+        'name field and a free-text brief textarea. Submitting takes the owner ' +
+        "straight to the new project's detail page.",
+      targetUsers: ['Project Owner'],
+      screens: ['Project list', 'New project form'],
+      navigationExpectations:
+        'Reachable immediately after sign-in; each project card links to its ' +
+        "own detail page; submitting the form navigates to the new project's " +
+        'detail page.',
+      responsiveConstraints:
+        'Single-column layout at every width (a max-width content column) - no ' +
+        'separate mobile layout needed.',
+      accessibilityConstraints:
+        'Name and brief fields are labelled form controls; the submit action ' +
+        'is reachable and operable by keyboard alone; a failed submission is ' +
+        'reported as inline text, not by color alone.',
+      uxPriorities: [
+        'Fast path from sign-in to a created project',
+        'No dead-end empty state for a first-time owner with zero projects',
+      ],
+    }),
+    // UI-02: continues the R-04 -> R-06 narrative one hop further (see
+    // `requirementsItems()`'s R-06 and `backlogItems()`'s S-02 above) - a UI
+    // Requirement item whose own behavior is sensitive to the same latency
+    // budget: the Requirements review screen itself needs to stay responsive
+    // at R-04's stated concurrency target, per R-06's p95 budget. `depth: 1`
+    // because the path runs through R-06 as an intermediate hop
+    // (R-04 -> R-06 -> UI-02) - transitive, not direct, same convention
+    // S-02 uses in `backlogItems()`.
+    uiRequirementItemVersion(
+      'UI-02',
+      {
+        title: 'Requirements review screen must stay responsive at target scale',
+        description:
+          "The Requirements review/approve screen's own interactions - " +
+          "approve, quality-gate read, impact read - must stay inside R-06's " +
+          "p95 latency budget once the system is running at R-04's stated " +
+          'concurrency, not just in a lightly-loaded demo.',
+        targetUsers: ['Requirements Reviewer'],
+        screens: ['Requirements review screen'],
+        navigationExpectations:
+          'No new navigation - applies to the existing Requirements review ' + 'screen in place.',
+        responsiveConstraints:
+          "Interaction latency stays within R-06's p95 budget at R-04's " + 'stated concurrency.',
+        uxPriorities: ['Perceived responsiveness under load, not just correctness'],
+        sourceRefs: ['R-06'],
+      },
+      {
+        impact: {
+          subjectKind: 'item_version',
+          subjectId: 'fixture-item-version-ui-02',
+          rootItemVersionId: R04_SCALE_CONSTRAINT.itemVersionId,
+          rootDisplayKey: 'R-04',
+          depth: 1,
+          path: ['R-04', 'R-06', 'UI-02'],
+          acknowledged: false,
+        },
+      },
+    ),
+  ];
+}
+
+function uiRequirementsFixture(): {
+  version: ArtifactVersionDTO;
+  qualityIssues: QualityIssueDTO[];
+} {
+  const items = uiRequirementsItems();
+  const version: ArtifactVersionDTO = {
+    id: 'fixture-version-ui-requirements-v1',
+    artifactId: 'fixture-artifact-ui-requirements',
+    artifactType: 'ui_requirements',
+    // First UI Requirements draft, generated once Requirements + Architecture
+    // were both approved (FR-041/FR-080).
+    versionNumber: 1,
+    status: 'draft',
+    statusReason: null,
+    schemaVersion: 1,
+    baseApprovedVersionId: null, // no prior approved UI Requirements version exists yet
+    payload: null, // FR-040: no artifact-level payload beyond the UI Requirement items themselves
+    rawOutput: null,
+    items,
+    options: null, // UI Requirements has no architecture-style options
+    selectedArchitectureOptionId: null,
+    createdAt: '2026-09-24T10:00:00.000Z',
+    updatedAt: '2026-09-24T10:00:00.000Z',
+  };
+
+  // API Contracts section 4: the quality-gate route is documented as empty
+  // for `ui_requirements` in P0.
+  return { version, qualityIssues: [] };
+}
+
 // TODO(E3-S10): replace `requirementsFixture`/`architectureFixture`/
-// `backlogFixture` with a live artifact-lifecycle read once the
-// generation/approval routes exist - see the header comment above for why
-// this is a one-function swap.
+// `uiRequirementsFixture`/`backlogFixture` with a live artifact-lifecycle
+// read once the generation/approval routes exist - see the header comment
+// above for why this is a one-function swap.
 /**
  * The one swap point for E3-S10/E3-S11 (see header comment). Returns
- * realistic fixture data for `requirements`, `architecture`, and `backlog`;
- * `ui_requirements` returns `null` until E5-S4 extends this same function
- * with its own fixture - callers must treat `null` as "not yet available for
- * this artifact type", not as an error.
+ * realistic fixture data for all four `ArtifactType` values -
+ * `ui_requirements` (E5-S4) was the last gap; every real artifact type now
+ * has real fixture data at this layer. `null` stays part of the return type
+ * for forward compatibility with a real "not yet available" API response
+ * (and is still what any unrecognized/future type would get), but every
+ * branch below is covered today - callers still treat `null` as "not yet
+ * available for this artifact type", not as an error, should that ever
+ * matter again.
  */
 export function getFixtureArtifactVersion(
   type: ArtifactType,
 ): { version: ArtifactVersionDTO; qualityIssues: QualityIssueDTO[] } | null {
   if (type === 'requirements') return requirementsFixture();
   if (type === 'architecture') return architectureFixture();
+  if (type === 'ui_requirements') return uiRequirementsFixture();
   if (type === 'backlog') return backlogFixture();
   return null;
 }

@@ -16,10 +16,11 @@ interface ArtifactReviewScreenProps {
   /** Human-readable artifact name for the header (e.g. "Requirements"). */
   artifactTypeName: string;
   /**
-   * `null` means "not yet available for this artifact type" - today that's
-   * every type except `requirements` (fixtures.ts), surfaced by the page as
-   * a graceful section rather than a 404. Defended here too, independently
-   * of the page-level check, per this story's spec.
+   * `null` means "not yet available for this artifact type" - as of E5-S4
+   * every real artifact type has fixture data (fixtures.ts), so this is now
+   * purely defensive: surfaced by the page as a graceful section rather than
+   * a 404 if it ever happens. Checked here too, independently of the
+   * page-level check, per this story's spec.
    */
   version: ArtifactVersionDTO | null;
   qualityIssues: QualityIssueDTO[];
@@ -46,6 +47,15 @@ interface KnownItemFields {
   description?: string | undefined;
   priority?: string | undefined;
   sourceRefs?: string[] | undefined;
+  // UI Requirement item fields (TR FR-040: target users, screens, navigation
+  // expectations, responsive/accessibility constraints, UX priorities) -
+  // same defensive, generic-across-types reading as the fields above.
+  targetUsers?: string[] | undefined;
+  screens?: string[] | undefined;
+  navigationExpectations?: string | undefined;
+  responsiveConstraints?: string | undefined;
+  accessibilityConstraints?: string | undefined;
+  uxPriorities?: string[] | undefined;
 }
 
 function readKnownFields(payload: unknown): KnownItemFields {
@@ -64,6 +74,23 @@ function readKnownFields(payload: unknown): KnownItemFields {
     priority: typeof record.priority === 'string' ? record.priority : undefined,
     sourceRefs: Array.isArray(record.sourceRefs)
       ? record.sourceRefs.filter((entry): entry is string => typeof entry === 'string')
+      : undefined,
+    targetUsers: Array.isArray(record.targetUsers)
+      ? record.targetUsers.filter((entry): entry is string => typeof entry === 'string')
+      : undefined,
+    screens: Array.isArray(record.screens)
+      ? record.screens.filter((entry): entry is string => typeof entry === 'string')
+      : undefined,
+    navigationExpectations:
+      typeof record.navigationExpectations === 'string' ? record.navigationExpectations : undefined,
+    responsiveConstraints:
+      typeof record.responsiveConstraints === 'string' ? record.responsiveConstraints : undefined,
+    accessibilityConstraints:
+      typeof record.accessibilityConstraints === 'string'
+        ? record.accessibilityConstraints
+        : undefined,
+    uxPriorities: Array.isArray(record.uxPriorities)
+      ? record.uxPriorities.filter((entry): entry is string => typeof entry === 'string')
       : undefined,
   };
 }
@@ -517,6 +544,24 @@ export function ArtifactReviewScreen({
               const parent = item.parentLogicalItemId
                 ? items.find((candidate) => candidate.logicalItemId === item.parentLogicalItemId)
                 : undefined;
+              // Short metadata line at the bottom of the card - every field
+              // here is optional and artifact-type-generic (not just
+              // backlog's or UI Requirements'), joined with a middot only
+              // for whichever of them are actually present.
+              const metaParts: string[] = [];
+              if (fields.priority) metaParts.push(`Priority: ${fields.priority}`);
+              if (fields.sourceRefs && fields.sourceRefs.length > 0) {
+                metaParts.push(`Depends on: ${fields.sourceRefs.join(', ')}`);
+              }
+              if (fields.targetUsers && fields.targetUsers.length > 0) {
+                metaParts.push(`Target users: ${fields.targetUsers.join(', ')}`);
+              }
+              if (fields.screens && fields.screens.length > 0) {
+                metaParts.push(`Screens: ${fields.screens.join(', ')}`);
+              }
+              if (fields.uxPriorities && fields.uxPriorities.length > 0) {
+                metaParts.push(`UX priorities: ${fields.uxPriorities.join(', ')}`);
+              }
               return (
                 <li key={item.itemVersionId} className="border-surface-dim rounded-lg border p-4">
                   <div className="flex flex-wrap items-center gap-2">
@@ -572,17 +617,26 @@ export function ArtifactReviewScreen({
                       ))}
                     </ul>
                   )}
-                  {(fields.priority || (fields.sourceRefs && fields.sourceRefs.length > 0)) && (
+                  {fields.navigationExpectations && (
                     <p className="text-on-surface-variant mt-2 text-xs">
-                      {fields.priority && <span>Priority: {fields.priority}</span>}
-                      {fields.priority &&
-                        fields.sourceRefs &&
-                        fields.sourceRefs.length > 0 &&
-                        ' · '}
-                      {fields.sourceRefs && fields.sourceRefs.length > 0 && (
-                        <span>Depends on: {fields.sourceRefs.join(', ')}</span>
-                      )}
+                      <span className="font-medium">Navigation:</span>{' '}
+                      {fields.navigationExpectations}
                     </p>
+                  )}
+                  {fields.responsiveConstraints && (
+                    <p className="text-on-surface-variant mt-2 text-xs">
+                      <span className="font-medium">Responsive:</span>{' '}
+                      {fields.responsiveConstraints}
+                    </p>
+                  )}
+                  {fields.accessibilityConstraints && (
+                    <p className="text-on-surface-variant mt-2 text-xs">
+                      <span className="font-medium">Accessibility:</span>{' '}
+                      {fields.accessibilityConstraints}
+                    </p>
+                  )}
+                  {metaParts.length > 0 && (
+                    <p className="text-on-surface-variant mt-2 text-xs">{metaParts.join(' · ')}</p>
                   )}
                 </li>
               );

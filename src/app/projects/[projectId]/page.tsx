@@ -80,6 +80,12 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
             Architecture →
           </Link>
           <Link
+            href={`/projects/${project.id}/artifacts/ui_requirements`}
+            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
+          >
+            UI Requirements →
+          </Link>
+          <Link
             href={`/projects/${project.id}/artifacts/backlog`}
             className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
           >
