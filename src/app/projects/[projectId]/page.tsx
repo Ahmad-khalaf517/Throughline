@@ -79,6 +79,12 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           >
             Warnings →
           </Link>
+          <Link
+            href={`/projects/${project.id}/dependencies`}
+            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
+          >
+            Dependencies →
+          </Link>
         </div>
       </div>
     </main>
