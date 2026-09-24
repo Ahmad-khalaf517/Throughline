@@ -72,6 +72,26 @@ export interface ArchitectureCandidateDecision {
   rationale: string;
 }
 
+// Backlog item payload shape (TR FR-061: "stable logical identity,
+// item-version identity, display key such as S-12, title, description,
+// acceptance criteria, priority when needed, source/dependency
+// references"). Not part of the shared DTOs - same reasoning and pattern as
+// `RequirementItemPayload`/`ArchitectureStack` above: `ItemVersionDTO.payload`
+// stays `unknown` in the shared DTO, this local type only checks the fixture
+// literals below against a real shape. Covers both Epic and Story items
+// (FR-060: Tasks/Subtasks are out of scope for the MVP) - `acceptanceCriteria`
+// /`priority`/`sourceRefs` are Story-only in practice (an Epic has neither
+// acceptance criteria nor a source Requirement of its own) but left optional
+// rather than split into two types, since the review screen reads every
+// field defensively regardless of `itemType`.
+export interface BacklogItemPayload {
+  title: string;
+  description: string;
+  acceptanceCriteria?: string[];
+  priority?: string;
+  sourceRefs?: string[]; // FR-062: display-key references to upstream item versions
+}
+
 function itemVersion(
   displayKey: string,
   payload: RequirementItemPayload,
@@ -359,21 +379,170 @@ function architectureFixture(): { version: ArtifactVersionDTO; qualityIssues: Qu
   return { version, qualityIssues: [] };
 }
 
-// TODO(E3-S10): replace both `requirementsFixture`/`architectureFixture`
-// with a live artifact-lifecycle read once the generation/approval routes
-// exist - see the header comment above for why this is a one-function swap.
+// Backlog draft fixture (E5-S5). Same helper pattern as `itemVersion` above,
+// but for Epic/Story items: `itemType` varies (epic vs story) and
+// `parentLogicalItemId` is meaningful here (Story -> Epic membership, API
+// Contracts 1.8) rather than always `null`.
+function backlogItemVersion(
+  displayKey: string,
+  itemType: 'epic' | 'story',
+  payload: BacklogItemPayload,
+  opts: { parentLogicalItemId?: string | null; impact?: ImpactRowDTO | null } = {},
+): ItemVersionDTO {
+  return {
+    itemVersionId: `fixture-item-version-${displayKey.toLowerCase()}`,
+    logicalItemId: `fixture-logical-${displayKey.toLowerCase()}`,
+    displayKey,
+    itemType,
+    revisionNumber: 1,
+    payload,
+    parentLogicalItemId: opts.parentLogicalItemId ?? null,
+    impact: opts.impact ?? null,
+  };
+}
+
+// E-01 is this backlog's one Epic (FR-060: Epics and Stories only, Tasks/
+// Subtasks out of scope); every Story below carries E-01's `logicalItemId`
+// as its `parentLogicalItemId`.
+const E01_EPIC = backlogItemVersion('E-01', 'epic', {
+  title: 'Traceable artifact review workflow',
+  description:
+    'Deliver the end-to-end review/approve experience across Requirements, Architecture, UI Requirements, and Backlog, including the quality gates and impact warnings that keep downstream work honest about its upstream sources.',
+});
+
+function backlogItems(): ItemVersionDTO[] {
+  const epicLogicalId = E01_EPIC.logicalItemId;
+  return [
+    E01_EPIC,
+    // S-01: clean - acceptance criteria present and a real source
+    // Requirement, no impact. Implements R-01 (project creation from a
+    // brief).
+    backlogItemVersion(
+      'S-01',
+      'story',
+      {
+        title: 'Create a project from a name and a brief',
+        description:
+          'Implements R-01: a Project Owner submits a project name and a free-text brief, and the project is created from it.',
+        acceptanceCriteria: [
+          'Given a name and a non-empty brief, the project is created and the user is taken to its detail page.',
+        ],
+        priority: 'P1',
+        sourceRefs: ['R-01'],
+      },
+      { parentLogicalItemId: epicLogicalId },
+    ),
+    // S-02: implements R-06's latency requirement, which is itself stated
+    // relative to R-04's concurrency target (see R04_SCALE_CONSTRAINT
+    // above) - R-04 changed, R-06 came back stale relative to it (INV-010/
+    // INV-011), and that same change now ripples one hop further into this
+    // Story: a third consumer flagged by the same root change, continuing
+    // the narrative `requirementsItems()` already established rather than
+    // inventing a new one. `depth: 1` because the path runs through R-06 as
+    // an intermediate hop (R-04 -> R-06 -> S-02) - transitive, not direct
+    // (R-06's own impact row above is `depth: 0`).
+    backlogItemVersion(
+      'S-02',
+      'story',
+      {
+        title: 'Keep p95 latency within budget at target scale',
+        description:
+          "Implements R-06's latency budget, which is itself stated relative to R-04's concurrency target.",
+        acceptanceCriteria: ['p95 API latency stays under 400ms at the scale stated in R-04.'],
+        priority: 'P1',
+        sourceRefs: ['R-06'],
+      },
+      {
+        parentLogicalItemId: epicLogicalId,
+        impact: {
+          subjectKind: 'item_version',
+          subjectId: 'fixture-item-version-s-02',
+          rootItemVersionId: R04_SCALE_CONSTRAINT.itemVersionId,
+          rootDisplayKey: 'R-04',
+          depth: 1,
+          path: ['R-04', 'R-06', 'S-02'],
+          acknowledged: false,
+        },
+      },
+    ),
+    // S-03: deliberately fails two FR-063 P0 checks - empty acceptance
+    // criteria and no source Requirement - so the quality gate section has
+    // something real to show, the same role R-04's empty
+    // `acceptanceCriteria` plays in `requirementsItems()` above.
+    backlogItemVersion(
+      'S-03',
+      'story',
+      {
+        title: 'Surface the latest AI generation run status on the dashboard',
+        description:
+          'A dashboard tile shows whether the most recent AI generation run for this project succeeded or failed.',
+        acceptanceCriteria: [],
+        priority: 'P2',
+        sourceRefs: [],
+      },
+      { parentLogicalItemId: epicLogicalId },
+    ),
+  ];
+}
+
+function backlogQualityIssues(items: ItemVersionDTO[]): QualityIssueDTO[] {
+  const byKey = new Map(items.map((item) => [item.displayKey, item]));
+  return [
+    {
+      code: 'MISSING_ACCEPTANCE_CRITERIA',
+      message: 'Story has no acceptance criteria.', // FR-063's own example wording
+      logicalItemId: byKey.get('S-03')?.logicalItemId ?? null,
+    },
+    {
+      code: 'MISSING_SOURCE_REQUIREMENT',
+      message: 'Story has no source Requirement.', // FR-063's own example wording
+      logicalItemId: byKey.get('S-03')?.logicalItemId ?? null,
+    },
+  ];
+}
+
+function backlogFixture(): { version: ArtifactVersionDTO; qualityIssues: QualityIssueDTO[] } {
+  const items = backlogItems();
+  const version: ArtifactVersionDTO = {
+    id: 'fixture-version-backlog-v1',
+    artifactId: 'fixture-artifact-backlog',
+    artifactType: 'backlog',
+    // First Backlog draft, generated once Requirements + Architecture +
+    // UI Requirements were all approved (FR-080).
+    versionNumber: 1,
+    status: 'draft',
+    statusReason: null,
+    schemaVersion: 1,
+    baseApprovedVersionId: null, // no prior approved Backlog version exists yet
+    payload: null, // FR-060/FR-061: no artifact-level payload beyond the Epic/Story items themselves
+    rawOutput: null,
+    items,
+    options: null, // Backlog has no architecture-style options
+    selectedArchitectureOptionId: null,
+    createdAt: '2026-09-23T11:05:00.000Z',
+    updatedAt: '2026-09-23T11:05:00.000Z',
+  };
+
+  return { version, qualityIssues: backlogQualityIssues(items) };
+}
+
+// TODO(E3-S10): replace `requirementsFixture`/`architectureFixture`/
+// `backlogFixture` with a live artifact-lifecycle read once the
+// generation/approval routes exist - see the header comment above for why
+// this is a one-function swap.
 /**
  * The one swap point for E3-S10/E3-S11 (see header comment). Returns
- * realistic fixture data for `requirements` and `architecture`; the other
- * two artifact types return `null` until E5-S4/S5 extend this same function
- * with their own fixtures - callers must treat `null` as "not yet available
- * for this artifact type", not as an error.
+ * realistic fixture data for `requirements`, `architecture`, and `backlog`;
+ * `ui_requirements` returns `null` until E5-S4 extends this same function
+ * with its own fixture - callers must treat `null` as "not yet available for
+ * this artifact type", not as an error.
  */
 export function getFixtureArtifactVersion(
   type: ArtifactType,
 ): { version: ArtifactVersionDTO; qualityIssues: QualityIssueDTO[] } | null {
   if (type === 'requirements') return requirementsFixture();
   if (type === 'architecture') return architectureFixture();
+  if (type === 'backlog') return backlogFixture();
   return null;
 }
 

@@ -38,6 +38,14 @@ interface KnownItemFields {
   actor?: string | undefined;
   behavior?: string | undefined;
   acceptanceCriteria?: string[] | undefined;
+  // Backlog item fields (TR FR-061: title, description, priority when
+  // needed, source/dependency references) - read the same defensive way as
+  // the Requirement-shaped fields above, generically for any artifact type
+  // whose payload happens to carry them, not just backlog's.
+  title?: string | undefined;
+  description?: string | undefined;
+  priority?: string | undefined;
+  sourceRefs?: string[] | undefined;
 }
 
 function readKnownFields(payload: unknown): KnownItemFields {
@@ -50,6 +58,12 @@ function readKnownFields(payload: unknown): KnownItemFields {
     behavior: typeof record.behavior === 'string' ? record.behavior : undefined,
     acceptanceCriteria: Array.isArray(record.acceptanceCriteria)
       ? record.acceptanceCriteria.filter((entry): entry is string => typeof entry === 'string')
+      : undefined,
+    title: typeof record.title === 'string' ? record.title : undefined,
+    description: typeof record.description === 'string' ? record.description : undefined,
+    priority: typeof record.priority === 'string' ? record.priority : undefined,
+    sourceRefs: Array.isArray(record.sourceRefs)
+      ? record.sourceRefs.filter((entry): entry is string => typeof entry === 'string')
       : undefined,
   };
 }
@@ -100,6 +114,16 @@ function readKnownCandidateDecision(entry: unknown): KnownCandidateDecisionField
 
 function readTradeoffStrings(tradeoffs: unknown[]): string[] {
   return tradeoffs.filter((entry): entry is string => typeof entry === 'string');
+}
+
+// Generic label for an item's `itemType` (e.g. `epic` -> "Epic",
+// `architecture_decision` -> "Architecture decision") - used only to label a
+// resolved parent item below, not tied to any one artifact type.
+function formatItemType(itemType: string): string {
+  return itemType
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
 }
 
 const REVISION_DISABLED_TITLE =
@@ -486,6 +510,13 @@ export function ArtifactReviewScreen({
           <ul className="mt-3 flex flex-col gap-3">
             {items.map((item) => {
               const fields = readKnownFields(item.payload);
+              // Generic parent lookup (e.g. Story -> Epic, API Contracts
+              // 1.8) - works for any item type whose `parentLogicalItemId`
+              // resolves to another item in this same version, not just
+              // backlog's Story/Epic pairing.
+              const parent = item.parentLogicalItemId
+                ? items.find((candidate) => candidate.logicalItemId === item.parentLogicalItemId)
+                : undefined;
               return (
                 <li key={item.itemVersionId} className="border-surface-dim rounded-lg border p-4">
                   <div className="flex flex-wrap items-center gap-2">
@@ -496,6 +527,11 @@ export function ArtifactReviewScreen({
                       {fields.type ?? item.itemType}
                       {fields.dimension && ` · ${fields.dimension}`}
                     </span>
+                    {parent && (
+                      <span className="text-on-surface-variant text-[11px]">
+                        {formatItemType(parent.itemType)}: {parent.displayKey}
+                      </span>
+                    )}
                     {item.impact ? (
                       item.impact.acknowledged ? (
                         <span className="text-on-surface-variant text-[11px]">Acknowledged</span>
@@ -511,10 +547,23 @@ export function ArtifactReviewScreen({
                       <span className="font-medium">Actor:</span> {fields.actor}
                     </p>
                   )}
-                  {fields.behavior && (
+                  {fields.behavior ? (
                     <p className="text-on-surface mt-2 text-sm leading-relaxed">
                       {fields.behavior}
                     </p>
+                  ) : (
+                    <>
+                      {fields.title && (
+                        <p className="text-on-surface mt-2 text-sm leading-relaxed font-medium">
+                          {fields.title}
+                        </p>
+                      )}
+                      {fields.description && (
+                        <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
+                          {fields.description}
+                        </p>
+                      )}
+                    </>
                   )}
                   {fields.acceptanceCriteria && fields.acceptanceCriteria.length > 0 && (
                     <ul className="text-on-surface-variant mt-2 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed">
@@ -522,6 +571,18 @@ export function ArtifactReviewScreen({
                         <li key={index}>{criterion}</li>
                       ))}
                     </ul>
+                  )}
+                  {(fields.priority || (fields.sourceRefs && fields.sourceRefs.length > 0)) && (
+                    <p className="text-on-surface-variant mt-2 text-xs">
+                      {fields.priority && <span>Priority: {fields.priority}</span>}
+                      {fields.priority &&
+                        fields.sourceRefs &&
+                        fields.sourceRefs.length > 0 &&
+                        ' · '}
+                      {fields.sourceRefs && fields.sourceRefs.length > 0 && (
+                        <span>Depends on: {fields.sourceRefs.join(', ')}</span>
+                      )}
+                    </p>
                   )}
                 </li>
               );
