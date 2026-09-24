@@ -7,6 +7,16 @@ Implement the Jira story **$1**. What the user asked for: $ARGUMENTS
 
 Run the phases below in order. The gate in `.claude/hooks/gate.mjs` enforces the order mechanically - if you skip ahead, your Edit or Bash call is denied and you will be told why. Do not try to work around a denial; it means a phase was skipped.
 
+## Phase 0 - Worktree (you, on Opus)
+
+Before anything else, call `EnterWorktree` (name it after the ticket, e.g. `feature/$1`) so this whole run happens off `main`. This is a standing project instruction - see `CLAUDE.md` - so `EnterWorktree` is authorized without asking the user each time.
+
+This has to be the _whole pipeline_, not just Phase 3, and the reason is mechanical, not stylistic: `.claude/hooks/gate.mjs` partitions its unlock state by the calling process's `cwd` (see the file's own header comment and the `gate-state-shared-across-worktrees` incident it documents). If you `EnterWorktree` now, every later hook event - the Phase 2 Jira transition, the Phase 3/4 subagent Edit and test calls - reports that same worktree `cwd`, so the gate stays internally consistent and unlocks correctly. **Do not** instead leave the session on `main` and spawn `feature-implementer` with `Agent(isolation: "worktree")` in Phase 3 - that creates a _second_, different worktree whose `cwd` never saw the Phase 2 transition, and the gate will deny every edit it tries to make. Plain (non-isolated) `Agent` calls in Phase 3/4 inherit the session's current directory, which is correct once you're already inside the worktree from this step.
+
+If `node_modules` doesn't exist yet in the new worktree, run `pnpm install` before Phase 3 - `feature-implementer` needs `node_modules/next/dist/docs/` for any framework-facing work (see its own instructions), and a fresh worktree checkout won't have it.
+
+Leave the worktree in place when the pipeline ends (don't call `ExitWorktree`) so the user can review the diff, push, and open a PR from it themselves.
+
 ## Phase 1 - Plan (you, on Opus)
 
 1. Read the row for **$1** in `docs/Throughline_Jira_Plan.md`. `$1` may be a plan id (`E2-S3`) or a real Jira key (`THR-17`) - resolve whichever you were given to the other before Phase 2 needs it:
