@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { defineConfig } from 'vitest/config';
 
 // Two projects (Project Setup section 5.4):
@@ -8,6 +9,15 @@ import { defineConfig } from 'vitest/config';
 //    (T1-T43), against a throwaway postgres:15-alpine container. singleThread
 //    so advisory-lock behaviour is observable and deterministic.
 export default defineConfig({
+  // Mirrors tsconfig.json's "@/*" -> "./src/*" path alias (no
+  // vite-tsconfig-paths dependency in this repo): without this, Vitest's own
+  // resolver can't find an unmocked `@/...` import (e.g. a route handler
+  // under test), even though tsc and Next's bundler both understand it fine.
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, './src'),
+    },
+  },
   test: {
     // No tests exist yet (early slice-1); don't fail the run over an empty
     // suite. Remove once tests/unit and tests/integration have real specs.
@@ -20,6 +30,14 @@ export default defineConfig({
     },
     projects: [
       {
+        // Each inline project is resolved as its own Vite config and does not
+        // inherit the root `resolve` above, so the `@/*` alias is repeated
+        // here (and below) rather than only at the root.
+        resolve: {
+          alias: {
+            '@': resolve(__dirname, './src'),
+          },
+        },
         test: {
           name: 'unit',
           include: ['tests/unit/**/*.test.ts'],
@@ -31,6 +49,11 @@ export default defineConfig({
         },
       },
       {
+        resolve: {
+          alias: {
+            '@': resolve(__dirname, './src'),
+          },
+        },
         test: {
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],

@@ -7,3 +7,6 @@ function -> serialize the result.
 No handler imports `db`, `identity`, or `artifact-lifecycle` directly except
 the project-creation route, which calls `artifact-lifecycle.createProject`
 (Module Boundaries section 4.7).
+
+Exception: `POST /api/session/bootstrap` skips `requireProjectOwner` - it is
+not project-scoped (API Contracts section 2).
