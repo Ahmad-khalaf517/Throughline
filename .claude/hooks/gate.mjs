@@ -201,8 +201,19 @@ function relTarget(input) {
  * field is `agent_type` (alongside `agent_id`). The other spellings are kept as
  * a cheap hedge against the payload changing, and the blob scan below as a last
  * resort.
+ *
+ * `allowBlobScan` defaults on but MUST be false for SubagentStop (confirmed
+ * 2026-09-24): a resumed/backgrounded agent can emit an intermediate Stop
+ * event with every structured identity field blank mid-run, before its real
+ * completion event (which does carry `agent_type` correctly). On that
+ * malformed event the blob scan matched "feature-implementer" somewhere else
+ * in the payload and evicted the still-running agent from `activeAgents`,
+ * re-locking the gate on its very next edit for no real reason. A false
+ * positive here is asymmetric with Start: Start only adds (idempotent,
+ * harmless), Stop removes (silently blocks legitimate work) - so Stop must
+ * only trust a real structured field, never a guess.
  */
-function agentName(p) {
+function agentName(p, { allowBlobScan = true } = {}) {
   const keys = [
     'agent_type',
     'agent_name',
@@ -217,6 +228,7 @@ function agentName(p) {
     const v = p?.[k] ?? p?.tool_input?.[k] ?? p?.agent?.[k]
     if (typeof v === 'string' && v.trim()) return v.trim()
   }
+  if (!allowBlobScan) return null
   const blob = JSON.stringify(p ?? {})
   for (const known of [IMPLEMENTER, ...VERIFIERS]) {
     if (blob.includes(known)) return known
@@ -261,6 +273,29 @@ function findStatus(p) {
     const v = input[k]
     if (typeof v === 'string' && v.trim()) return v.trim()
     if (v && typeof v === 'object' && typeof v.name === 'string') return v.name.trim()
+  }
+  // The real transitionJiraIssue tool takes a numeric transition `id`, not a
+  // name (confirmed 2026-09-24: `transition: {"id": "21"}` - a bare string
+  // errors, and the object never carries `.name`) - so tool_input alone
+  // can't name the resulting status for that tool, and this fell through to
+  // "unrecognised transition" every time, silently never unlocking the gate.
+  // Fall back to the tool's own response, which echoes the issue's new
+  // `fields.status.name` after a successful transition. Safe to trust here
+  // specifically (unlike a general response scan) because this function is
+  // only reached for a call already matched by TRANSITION_TOOL in
+  // recordJira - i.e. the tool itself reporting what it just did, not an
+  // arbitrary read/search result that might mention a status in passing.
+  const resp = p?.tool_response
+  if (resp) {
+    // MCP tool_response arrives as a JSON-encoded STRING here (confirmed
+    // 2026-09-24 via a one-off debug dump), not a parsed object - re-stringifying
+    // it (the object branch's approach) double-escapes every quote and makes
+    // the regex below never match. Use the string as-is; only stringify a
+    // genuine object (belt-and-braces in case some other tool's client
+    // delivers tool_response already parsed).
+    const blob = typeof resp === 'string' ? resp : JSON.stringify(resp)
+    const m = blob.match(/"status"\s*:\s*\{[^}]*?"name"\s*:\s*"([^"]+)"/)
+    if (m) return m[1]
   }
   return null
 }
@@ -411,7 +446,7 @@ function subagentStop() {
   const p = payload()
   const key = partitionKey(p)
   logPayload('SubagentStop', p)
-  const name = agentName(p)
+  const name = agentName(p, { allowBlobScan: false })
   if (!name) allow()
   const state = readState(key)
   state.activeAgents = state.activeAgents.filter((a) => a !== name)
