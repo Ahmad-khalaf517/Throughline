@@ -231,6 +231,23 @@ function agentName(p) {
  * request may.
  */
 function findIssueKey(p) {
+  // Structured field first: transitionJiraIssue and editJiraIssue (the two
+  // real tools TRANSITION_TOOL matches) both take a required, top-level
+  // `issueIdOrKey` naming the issue actually being acted on - confirmed
+  // against their tool schemas. That is the authoritative answer, and
+  // reading it means we never mistake a ticket-shaped string ELSEWHERE in
+  // the payload (an `INV-007`/`FR-080` doc citation, or another ticket
+  // mentioned in an `editJiraIssue` description update) for the transition
+  // target - a real risk with the blob scan below, since this repo's own
+  // docs are full of hyphenated ids that look exactly like a Jira key.
+  const direct = p?.tool_input?.issueIdOrKey
+  if (typeof direct === 'string') {
+    const m = direct.trim().match(/^([A-Z][A-Z0-9]{0,9})-(\d+)$/)
+    if (m && !NOT_A_KEY.test(m[1])) return m[1] + '-' + m[2]
+  }
+
+  // Fallback for any other transition-shaped tool (movejira/setstatus-style
+  // hedges in TRANSITION_TOOL) that doesn't use that field name.
   const blob = JSON.stringify(p?.tool_input ?? {})
   for (const m of blob.matchAll(/\b([A-Z][A-Z0-9]{0,9})-(\d+)\b/g)) {
     if (!NOT_A_KEY.test(m[1])) return m[1] + '-' + m[2]
