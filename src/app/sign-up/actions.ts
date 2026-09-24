@@ -8,17 +8,18 @@ export async function signUpAction(
   _prevState: SignUpState,
   formData: FormData,
 ): Promise<SignUpState> {
+  const name = String(formData.get('name') ?? '').trim();
   const email = String(formData.get('email') ?? '').trim();
   const password = String(formData.get('password') ?? '');
 
-  if (!email || !password) {
-    return { status: 'error', message: 'Email and password are required.' };
+  if (!name || !email || !password) {
+    return { status: 'error', message: 'Name, email and password are required.' };
   }
   if (password.length < 8) {
     return { status: 'error', message: 'Password must be at least 8 characters.' };
   }
 
-  const { error } = await signUpWithEmail({ email, password });
+  const { error } = await signUpWithEmail({ name, email, password });
   if (error) {
     return { status: 'error', message: error };
   }

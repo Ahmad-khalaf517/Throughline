@@ -62,7 +62,7 @@ describe('POST /api/projects', () => {
   });
 
   it('returns 400 VALIDATION_ERROR when brief is missing', async () => {
-    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com' });
+    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com', displayName: null });
 
     const response = await POST(postRequest({ name: 'x' }));
 
@@ -73,7 +73,7 @@ describe('POST /api/projects', () => {
   });
 
   it('creates the project and returns 201 with a ProjectDTO', async () => {
-    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com' });
+    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com', displayName: null });
     mockedCreateProject.mockResolvedValue(baseProjectRow);
     mockedGetProjectById.mockResolvedValue({
       ...baseProjectRow,
@@ -105,7 +105,7 @@ describe('GET /api/projects', () => {
   });
 
   it("lists only the caller's own projects", async () => {
-    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com' });
+    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com', displayName: null });
     mockedListProjectsForOwner.mockResolvedValue([
       { ...baseProjectRow, artifacts: emptyArtifactSummaries() },
     ]);

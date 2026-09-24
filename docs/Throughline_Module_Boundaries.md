@@ -87,10 +87,12 @@ withTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T>     // plain transaction, no l
 
 **Exports:**
 ```ts
-getVerifiedUser(request): Promise<{ id: string; email: string } | null>
+getVerifiedUser(request): Promise<{ id: string; email: string; displayName: string | null } | null>
   // auth.getUser() against Supabase, never getSession(); returns null if unverified. No allowlist
   // check (ERD Appendix B round 9) - sign-up is open, gated only by Supabase's own email
-  // verification (mailer_autoconfirm off), not by this function.
+  // verification (mailer_autoconfirm off), not by this function. displayName is read back from
+  // Supabase user_metadata.display_name (set at sign-up) - null if never set, matching ERD 4.1's
+  // app_user.display_name.
 upsertAppUser(supabaseUser): Promise<void>
   // INSERT ... ON CONFLICT (id) DO UPDATE, called once per authenticated request or on login
 requireProjectOwner(userId: string, projectId: string): Promise<void>

@@ -28,7 +28,7 @@ export { updateSession } from './supabase-middleware';
  */
 export async function getVerifiedUser(
   request?: Request,
-): Promise<{ id: string; email: string } | null> {
+): Promise<{ id: string; email: string; displayName: string | null } | null> {
   const bearer = request?.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1];
   const supabase = await createServerSupabaseClient();
   const { data, error } = bearer
@@ -36,7 +36,12 @@ export async function getVerifiedUser(
     : await supabase.auth.getUser();
 
   if (error || !data.user?.email) return null;
-  return { id: data.user.id, email: data.user.email };
+  const displayName = data.user.user_metadata?.display_name;
+  return {
+    id: data.user.id,
+    email: data.user.email,
+    displayName: typeof displayName === 'string' ? displayName : null,
+  };
 }
 
 /**
@@ -96,6 +101,7 @@ export async function requireProjectOwner(userId: string, projectId: string): Pr
  * Appendix B round 9). Sign-up is open, no allowlist.
  */
 export async function signUpWithEmail(opts: {
+  name: string;
   email: string;
   password: string;
 }): Promise<{ error: string | null }> {
@@ -103,7 +109,11 @@ export async function signUpWithEmail(opts: {
   const { error } = await supabase.auth.signUp({
     email: opts.email,
     password: opts.password,
-    options: { emailRedirectTo: `${env.NEXT_PUBLIC_SITE_URL}/auth/confirm` },
+    options: {
+      emailRedirectTo: `${env.NEXT_PUBLIC_SITE_URL}/auth/confirm`,
+      // Key matches app_user.display_name (ERD 4.1): "From the Supabase user metadata".
+      data: { display_name: opts.name },
+    },
   });
   return { error: error?.message ?? null };
 }

@@ -32,6 +32,15 @@ export function SignUpForm() {
       ) : (
         <form action={formAction} className="flex flex-col gap-4" noValidate>
           <TextField
+            id="name"
+            name="name"
+            label="Full name"
+            autoComplete="name"
+            required
+            placeholder="Ada Lovelace"
+          />
+
+          <TextField
             id="email"
             name="email"
             label="Email"

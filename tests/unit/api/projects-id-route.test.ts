@@ -85,7 +85,7 @@ describe('GET /api/projects/:projectId', () => {
   });
 
   it("returns 404 NOT_FOUND when the project does not exist or is not the caller's (API Contracts 1.4 - never 403)", async () => {
-    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com' });
+    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com', displayName: null });
     mockedRequireProjectOwner.mockRejectedValue(new ApiError('NOT_FOUND', 'Project not found.'));
 
     const response = await GET(
@@ -100,7 +100,7 @@ describe('GET /api/projects/:projectId', () => {
   });
 
   it('returns 200 with a ProjectDTO when the caller owns the project', async () => {
-    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com' });
+    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com', displayName: null });
     mockedRequireProjectOwner.mockResolvedValue(undefined);
     mockedGetProjectById.mockResolvedValue(baseProject);
 
@@ -133,7 +133,7 @@ describe('PATCH /api/projects/:projectId', () => {
   });
 
   it('returns 404 NOT_FOUND when the caller does not own the project', async () => {
-    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com' });
+    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com', displayName: null });
     mockedRequireProjectOwner.mockRejectedValue(new ApiError('NOT_FOUND', 'Project not found.'));
 
     const response = await PATCH(patchRequest({ name: 'Renamed' }), paramsFor('project-1'));
@@ -143,7 +143,7 @@ describe('PATCH /api/projects/:projectId', () => {
   });
 
   it('returns 400 VALIDATION_ERROR for an empty-string name', async () => {
-    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com' });
+    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com', displayName: null });
     mockedRequireProjectOwner.mockResolvedValue(undefined);
 
     const response = await PATCH(patchRequest({ name: '' }), paramsFor('project-1'));
@@ -155,7 +155,7 @@ describe('PATCH /api/projects/:projectId', () => {
   });
 
   it('returns 409 BRIEF_FROZEN when artifact-lifecycle signals the brief is frozen (INV-007/T33)', async () => {
-    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com' });
+    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com', displayName: null });
     mockedRequireProjectOwner.mockResolvedValue(undefined);
     mockedUpdateProject.mockRejectedValue(new FakeBriefFrozenError('frozen'));
 
@@ -167,7 +167,7 @@ describe('PATCH /api/projects/:projectId', () => {
   });
 
   it('returns 200 with the updated ProjectDTO on success', async () => {
-    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com' });
+    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com', displayName: null });
     mockedRequireProjectOwner.mockResolvedValue(undefined);
     mockedUpdateProject.mockResolvedValue({ ...baseProject, name: 'Renamed' });
 

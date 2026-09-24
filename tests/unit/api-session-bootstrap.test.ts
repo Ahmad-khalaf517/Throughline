@@ -36,7 +36,7 @@ describe('POST /api/session/bootstrap', () => {
   });
 
   it('upserts the verified user and returns the persisted displayName', async () => {
-    const user = { id: 'user-1', email: 'ahmadkhalaf517@gmail.com' };
+    const user = { id: 'user-1', email: 'ahmadkhalaf517@gmail.com', displayName: 'Ahmad Khalaf' };
     vi.mocked(getVerifiedUser).mockResolvedValue(user);
     vi.mocked(getAppUserById).mockResolvedValue({
       id: user.id,
@@ -55,7 +55,7 @@ describe('POST /api/session/bootstrap', () => {
   });
 
   it('returns displayName: null when the persisted app_user row has none', async () => {
-    const user = { id: 'user-2', email: 'new-user@example.com' };
+    const user = { id: 'user-2', email: 'new-user@example.com', displayName: null };
     vi.mocked(getVerifiedUser).mockResolvedValue(user);
     vi.mocked(getAppUserById).mockResolvedValue({
       id: user.id,
