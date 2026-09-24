@@ -1,7 +1,7 @@
 # Throughline - Module Boundaries
 
-**Document version:** 1.2
-**Status:** Derived from ERD/Data Model v1.8 and Technical Requirements & Lineage Invariants v1.4. Parent of API Contracts -> Jira Plan -> Implementation. v1.2: `auth` module's export list filled in for real (signUpWithEmail/signInWithEmail/signOut/requestPasswordReset/updatePassword/verifyEmailOtp/exchangeCodeForSession/updateSession) - it had drifted since being built, listing only the original three. v1.1: `getVerifiedUser` no longer checks an email allowlist - ERD Appendix B round 9.
+**Document version:** 1.3
+**Status:** Derived from ERD/Data Model v1.8 and Technical Requirements & Lineage Invariants v1.4. Parent of API Contracts -> Jira Plan -> Implementation. v1.3 (E1-S8): named two exceptions this story's implementation required and a boundary-auditor review flagged as real but undocumented - `requireProjectOwner`'s direct read of `project` (section 4.1) and every `/api/projects*` route's direct call into `artifact-lifecycle`, not just the creation route (section 4.7). Neither changes a decision: both were already implied (4.1's own "NOT YET IMPLEMENTED" note anticipated the former; `eslint.config.mjs`'s own comment already flagged the latter as an intentionally-unencoded exception) - this just states them in prose instead of leaving them for the next reader to re-derive. v1.2: `auth` module's export list filled in for real (signUpWithEmail/signInWithEmail/signOut/requestPasswordReset/updatePassword/verifyEmailOtp/exchangeCodeForSession/updateSession) - it had drifted since being built, listing only the original three. v1.1: `getVerifiedUser` no longer checks an email allowlist - ERD Appendix B round 9.
 **Target stack:** Next.js / TypeScript, Drizzle ORM, Supabase Postgres.
 **Primary audience:** Developer, AI coding agents implementing modules.
 
@@ -94,9 +94,14 @@ getVerifiedUser(request): Promise<{ id: string; email: string } | null>
 upsertAppUser(supabaseUser): Promise<void>
   // INSERT ... ON CONFLICT (id) DO UPDATE, called once per authenticated request or on login
 requireProjectOwner(userId: string, projectId: string): Promise<void>
-  // throws 403 unless project.owner_user_id = userId; the ONLY project-ownership check in the codebase.
-  // NOT YET IMPLEMENTED - throws unconditionally until the `project` table exists (slice 2's
-  // artifact-lifecycle module).
+  // Resolves to 404 NOT_FOUND (never 403) whether the project doesn't exist or isn't the caller's -
+  // API Contracts 1.4 requires the two to be indistinguishable to the caller; the ONLY
+  // project-ownership check in the codebase.
+  // Implemented in slice 2 (E1-S8) as a direct SELECT of project.owner_user_id via `db`. This is a
+  // second documented exception to principle 1 (the only other one is architecture-materialization
+  // -> identity, section 4.4/8): `auth` is layer 0 and cannot import `artifact-lifecycle` (layer 2,
+  // owner of `project`) to get this through an exported function, and the ERD's own "Authorization"
+  // row (section 2) already specifies this exact check lives here. Read-only - never writes `project`.
 signUpWithEmail(opts: { email: string; password: string }): Promise<{ error: string | null }>
   // starts open sign-up; Supabase emails a verification link to /auth/confirm (mandatory -
   // mailer_autoconfirm off, ERD Appendix B round 9)
@@ -448,7 +453,7 @@ generate(uiRequirementsVersionId: string): Promise<StitchOutput>
 
 ### 4.7 Layer 6 - API
 
-Next.js route handlers. Each handler: `getVerifiedUser` -> `requireProjectOwner` -> call exactly one layer-3/4/5 function -> serialize the result. No handler imports `db`, `identity`, or `artifact-lifecycle` directly except the project-creation route (which calls `artifact-lifecycle.createProject`).
+Next.js route handlers. Each handler: `getVerifiedUser` -> `requireProjectOwner` -> call exactly one layer-3/4/5 function -> serialize the result. No handler imports `db` or `identity` directly. `artifact-lifecycle` (layer 2) is the one layer-2 module reachable directly from `api`, and only for the four `/api/projects*` routes (E1-S8): `project`/`artifact` have no layer-3 artifact-type module of their own to route through (there's no "project" artifact type), so `POST/GET /api/projects` and `GET/PATCH /api/projects/:projectId` call `artifact-lifecycle.createProject`/`getProjectById`/`listProjectsForOwner`/`updateProject` directly - not just creation. Every other route still reaches layer 2 only indirectly, through a layer-3/4/5 function.
 
 ---
 

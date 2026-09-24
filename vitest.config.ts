@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 // Two projects (Project Setup section 5.4):
@@ -8,6 +10,11 @@ import { defineConfig } from 'vitest/config';
 //    (T1-T43), against a throwaway postgres:15-alpine container. singleThread
 //    so advisory-lock behaviour is observable and deterministic.
 export default defineConfig({
+  resolve: {
+    // Vitest doesn't read tsconfig.json's `paths` on its own - mirror the
+    // `@/*` -> `./src/*` alias by hand (NFR-008: no new dependency for this).
+    alias: { '@': path.resolve(path.dirname(fileURLToPath(import.meta.url)), './src') },
+  },
   test: {
     // No tests exist yet (early slice-1); don't fail the run over an empty
     // suite. Remove once tests/unit and tests/integration have real specs.
@@ -20,6 +27,11 @@ export default defineConfig({
     },
     projects: [
       {
+        // Inline project entries are otherwise their own isolated Vite
+        // config - `resolve.alias` (the `@/*` mapping above) is NOT
+        // inherited from the root unless `extends: true` is set here.
+        // Without it every `@/...` import in tests/unit fails to resolve.
+        extends: true,
         test: {
           name: 'unit',
           include: ['tests/unit/**/*.test.ts'],
@@ -31,6 +43,7 @@ export default defineConfig({
         },
       },
       {
+        extends: true,
         test: {
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],
