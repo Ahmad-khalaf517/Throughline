@@ -1,5 +1,10 @@
 export { matchAndPersistItems, type Candidate } from './matcher';
 export {
+  resolveDisplayKeys,
+  getSourceVersionMembers,
+  getCurrentItemVersionIds,
+} from './references';
+export {
   semanticHash,
   semanticProjection,
   contentOnlyProjection,
