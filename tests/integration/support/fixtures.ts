@@ -263,3 +263,92 @@ export async function createSemanticDependency(
     )
   `;
 }
+
+export type ExternalProvider = 'github' | 'jira' | 'stitch';
+
+// external_operation_status_check (0002): status must be one of these; the
+// completed-has-external-id check means a caller overriding status away
+// from the 'completed' default must also think about external_id.
+export type ExternalOperationStatus =
+  'pending' | 'completed' | 'failed' | 'reconciliation_required';
+
+// external_operation_jira_requires_item_check / _completed_has_external_id_check
+// (0002, src/db/schema/external-operation.ts) - operation_key must be
+// globally unique, so it defaults to a fresh uuid per call rather than a
+// counter (unlike nextDisplayKey, nothing here needs a readable sequence).
+export async function createExternalOperation(
+  sql: QueryExecutor,
+  args: {
+    projectId: string;
+    provider: ExternalProvider;
+    operationType?: string;
+    operationKey?: string;
+    status?: ExternalOperationStatus;
+    requestHash?: string;
+    sourceArtifactVersionId: string;
+    sourceItemVersionId?: string | null;
+    targetDescriptor?: JsonValue;
+    externalId?: string | null;
+  },
+): Promise<string> {
+  const status = args.status ?? 'completed';
+  const rows = await sql<{ id: string }[]>`
+    INSERT INTO external_operation
+      (project_id, provider, operation_type, operation_key, status, request_hash,
+       source_artifact_version_id, source_item_version_id, target_descriptor, external_id)
+    VALUES (
+      ${args.projectId},
+      ${args.provider},
+      ${args.operationType ?? 'create'},
+      ${args.operationKey ?? `op-${randomUUID()}`},
+      ${status},
+      ${args.requestHash ?? randomUUID()},
+      ${args.sourceArtifactVersionId},
+      ${args.sourceItemVersionId ?? null},
+      ${sql.json(args.targetDescriptor ?? {})},
+      ${args.externalId ?? (status === 'completed' ? `ext-${randomUUID()}` : null)}
+    )
+    RETURNING id
+  `;
+  return rows[0]!.id;
+}
+
+// external_ref_provider_check / _jira_requires_item_check (0002,
+// src/db/schema/external-ref.ts) - one row per real GitHub/Jira/Stitch
+// object, the completion half of the insert-first protocol (ERD 7.2).
+// Requires a real external_operation row (unique(external_operation_id)) and
+// a real membership row when source_item_version_id is set (the composite
+// FK to artifact_version_item_membership).
+export async function createExternalRef(
+  sql: QueryExecutor,
+  args: {
+    projectId: string;
+    provider: ExternalProvider;
+    externalOperationId: string;
+    sourceArtifactVersionId: string;
+    sourceItemVersionId?: string | null;
+    externalId?: string;
+    externalKey?: string | null;
+    externalUrl?: string | null;
+    metadata?: JsonValue;
+  },
+): Promise<string> {
+  const rows = await sql<{ id: string }[]>`
+    INSERT INTO external_ref
+      (project_id, provider, external_id, external_key, external_url,
+       source_artifact_version_id, source_item_version_id, external_operation_id, metadata)
+    VALUES (
+      ${args.projectId},
+      ${args.provider},
+      ${args.externalId ?? `ext-${randomUUID()}`},
+      ${args.externalKey ?? null},
+      ${args.externalUrl ?? null},
+      ${args.sourceArtifactVersionId},
+      ${args.sourceItemVersionId ?? null},
+      ${args.externalOperationId},
+      ${sql.json(args.metadata ?? {})}
+    )
+    RETURNING id
+  `;
+  return rows[0]!.id;
+}
