@@ -1,6 +1,6 @@
 import { Bell, CircleCheck } from 'lucide-react';
 import { Reveal } from './motion/reveal';
-import { FlaggedGlyph, StatusBadge } from './status-badge';
+import { FlaggedGlyph, StatusBadge } from '@/components/status/status-badge';
 
 export function ImpactSection() {
   return (

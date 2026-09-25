@@ -61,3 +61,70 @@ export function toProjectDTO(project: ProjectWithArtifactsInput): ProjectDTO {
     artifacts: project.artifacts,
   };
 }
+
+// --- Artifact version / item DTOs (API Contracts 1.8, E5-S2) --------------
+//
+// Mirrored here (not in artifact-lifecycle or an artifact-type module) for
+// the same reason ArtifactType is: `lib` is the one place every layer may
+// import from, and E3-S10's route handlers will build these same shapes
+// once they exist. Until then, `components/review/fixtures.ts` is the only
+// producer (E3-S10/E3-S11 is this story's declared, sanctioned dependency
+// gap - see that file's header comment).
+
+/** The four real `artifact_version.status` values (ERD CHECK) - never a fifth. */
+export type ArtifactVersionStatus = 'draft' | 'approved' | 'superseded' | 'rejected';
+
+export interface ImpactRowDTO {
+  subjectKind: 'item_version' | 'external_ref';
+  subjectId: string;
+  rootItemVersionId: string;
+  rootDisplayKey: string; // display key resolved server-side for readability
+  depth: number;
+  path: string[]; // display keys, root to subject, in traversal order
+  acknowledged: boolean;
+}
+
+export interface ItemVersionDTO {
+  itemVersionId: string;
+  logicalItemId: string;
+  displayKey: string; // e.g. "R-07"
+  itemType: 'requirement' | 'architecture_decision' | 'ui_requirement' | 'epic' | 'story';
+  revisionNumber: number;
+  payload: unknown;
+  parentLogicalItemId: string | null; // Story -> Epic, this version's membership only
+  impact: ImpactRowDTO | null; // populated whenever fetched via an endpoint that embeds impact
+}
+
+export interface ArchitectureOptionDTO {
+  id: string;
+  optionKey: 'A' | 'B';
+  title: string;
+  summary: string;
+  stack: unknown;
+  candidateDecisions: unknown[];
+  tradeoffs: unknown[];
+}
+
+export interface ArtifactVersionDTO {
+  id: string;
+  artifactId: string;
+  artifactType: ArtifactType;
+  versionNumber: number;
+  status: ArtifactVersionStatus;
+  statusReason: string | null;
+  schemaVersion: number;
+  baseApprovedVersionId: string | null;
+  payload: unknown;
+  rawOutput: unknown | null; // only present when statusReason='stale_generation_context'
+  items: ItemVersionDTO[];
+  options: ArchitectureOptionDTO[] | null; // architecture only, else null
+  selectedArchitectureOptionId: string | null; // architecture only, set once approved
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface QualityIssueDTO {
+  code: string;
+  message: string;
+  logicalItemId: string | null;
+}

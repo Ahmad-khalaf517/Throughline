@@ -5,4 +5,9 @@
 //
 // Nothing outside this folder may import a file that is not re-exported here
 // (Module Boundaries section 7).
-export {};
+export { generateStructured } from './generate-structured';
+export type {
+  GenerateStructuredOptions,
+  GenerateStructuredResult,
+  GenerationPurpose,
+} from './generate-structured';

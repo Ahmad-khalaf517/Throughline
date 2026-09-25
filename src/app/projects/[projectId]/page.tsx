@@ -65,6 +65,45 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         <p className="text-on-surface mt-2 text-sm leading-relaxed whitespace-pre-wrap">
           {project.brief}
         </p>
+
+        <div className="mt-6 flex flex-wrap gap-x-6 gap-y-2">
+          <Link
+            href={`/projects/${project.id}/artifacts/requirements`}
+            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
+          >
+            Review requirements →
+          </Link>
+          <Link
+            href={`/projects/${project.id}/artifacts/architecture`}
+            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
+          >
+            Architecture →
+          </Link>
+          <Link
+            href={`/projects/${project.id}/artifacts/ui_requirements`}
+            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
+          >
+            UI Requirements →
+          </Link>
+          <Link
+            href={`/projects/${project.id}/artifacts/backlog`}
+            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
+          >
+            Backlog →
+          </Link>
+          <Link
+            href={`/projects/${project.id}/warnings`}
+            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
+          >
+            Warnings →
+          </Link>
+          <Link
+            href={`/projects/${project.id}/dependencies`}
+            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
+          >
+            Dependencies →
+          </Link>
+        </div>
       </div>
     </main>
   );
