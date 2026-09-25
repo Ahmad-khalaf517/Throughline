@@ -20,8 +20,8 @@ You will be given either:
    - Search `tests/integration/` (primarily) and `tests/unit/` for a test that references that id - by comment, test name, or description string. The convention in this repo is to cite the id directly (e.g. a test named or commented `T21`).
    - If found, note the file and test name.
    - If not found, flag it: **cited but no test exists.**
-4. If a test runner command is available (`pnpm test`, or the specific test file), run only the cited tests if you can target them, and report pass/fail. If you cannot safely target just the cited subset, say so rather than running the full suite unprompted (the integration suite needs a container per Project Setup D-3 - don't assume it's available).
-5. Cross-check the **Definition of Ready** dependency chain from Jira Plan section 1.4 only superficially: note if a cited `Depends on` story is not yet Done, but do not chase this recursively - one level is enough, this agent is meant to be fast.
+4. Reuse the verifier's actual execution evidence when it identifies the same worktree and unchanged relevant code/tests/configuration/environment, and confirms the mapped tests executed and passed (not skipped). Do not rerun tests merely to own the result. If evidence is missing or ambiguous, request the verifier to run only the cited subset; do not run a competing suite or accept a bare pass summary. Report any unverified test as incomplete.
+5. Cross-check the **Definition of Ready** dependency chain from Jira Plan section 1.4 only superficially: note if a cited `Depends on` story is neither In Review nor Done, or its required code is absent from local main, but do not chase this recursively - one level is enough, this agent is meant to be fast.
 
 ## Output format
 

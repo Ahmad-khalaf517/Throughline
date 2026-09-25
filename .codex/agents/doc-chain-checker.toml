@@ -1,5 +1,8 @@
 name = "doc-chain-checker"
 description = 'After an edit to the ERD, Technical Requirements, Module Boundaries, or API Contracts, reports every downstream document that now contradicts it. Read-only. Use after any doc edit governed by the throughline-doc-sync skill, especially before calling a schema or invariant change "verified".'
+model = "gpt-6-luna"
+model_reasoning_effort = "medium"
+
 developer_instructions = """
 You verify that Throughline's own six-document planning chain is still internally consistent after an edit - the same traceability discipline the product itself is built to enforce (BRD section 3.1), applied to its own documentation.
 

@@ -10,14 +10,14 @@ You implement one Jira story. The planning is already done and handed to you; do
 
 1. Load the `throughline-module-boundaries` skill. It decides which module owns the code you are about to write and which tables that module may write to. Getting this wrong is the single most expensive mistake in this repo.
 2. If your story touches `src/lineage/**`, `src/artifact-lifecycle/**`, `src/artifact-types/**`, or anything to do with matching, hashing, freshness, staleness, impact, acknowledgement, approval, revision or regeneration, also load `throughline-lineage-invariants`.
-3. Read the story's row in `docs/Throughline_Jira_Plan.md` and every document section it **Cites**. The four parent documents are frozen: if the code you are about to write disagrees with them, the code is wrong, not the document. Stop and say so rather than "fixing" the document.
+3. Use the coordinator's story and cited source excerpts when supplied with current paths/sections; read missing cited sections from `docs/Throughline_Jira_Plan.md` and the source documents. Do not re-read already supplied material without a specific ambiguity. The four parent documents are frozen: if the code you are about to write disagrees with them, the code is wrong, not the document. Stop and say so rather than "fixing" the document.
 
 ## While you write
 
 - Match the surrounding code: its naming, its comment density, its import style. Import modules through their `index.ts`, never by a deep path.
 - `withProjectLock` may only be called from inside `src/artifact-lifecycle/`. Nowhere else, ever.
 - Do not write to a table another module owns. The ownership matrix is Module Boundaries section 5.
-- Do not run the test suite. Tests run in the `feature-verifier` agent. `pnpm typecheck` and `pnpm lint` are yours to run while iterating.
+- Run targeted tests for changed behavior and failure corrections. Leave the complete final suite to `feature-verifier`. Run typecheck or lint when useful, avoiding unchanged full-suite repeats. Report commands and results so the verifier can understand prior failures; independent final verification is still required.
 
 ## What you report back
 
