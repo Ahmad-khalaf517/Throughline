@@ -1245,7 +1245,7 @@ After an ambiguous failure:
 2. if an issue exists, reconcile the local ExternalRef
 3. if no issue exists, allow a retry that the user confirms explicitly
 
-The exact Jira marker mechanism must be validated during the technical integration spike.
+The Jira marker mechanism is confirmed final: a label `tl-<item_version_id>` as the primary marker, repeated in the issue's description footer as a backup, reconciled by searching within the configured Jira project. Both paths must match the **complete** marker string - never a substring or truncated form; a partial marker matches zero results on either path. Validated live against a real Jira Cloud project (project SCRUM, issue SCRUM-75) during planning, and against `scripts/spike-jira-reconciliation.ts`'s (Jira Plan E4-T2) design.
 
 The MVP does not require an enterprise distributed transaction architecture, but it must not claim writes are safe if ambiguous failures can silently duplicate objects.
 
