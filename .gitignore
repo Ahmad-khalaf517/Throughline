@@ -14,7 +14,10 @@
 !.agents/skills/
 .agents/skills/*
 !.agents/skills/throughline-*/
-.codex/
+.codex/*
+!.codex/agents/
+.codex/agents/*
+!.codex/agents/*.toml
 skills-lock.json
 
 # Dependencies
