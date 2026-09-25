@@ -40,8 +40,8 @@ async function draftFromBase(
   return rows[0]!.id;
 }
 
-describe('identity.matchAndPersistItems (ERD 5.3-5.4; INV-010/011/012/016)', () => {
-  it('claims base keys before writes, reuses unchanged versions, allocates revisions and never reuses an older reverted version', async () => {
+describe('identity.matchAndPersistItems (ERD 5.3-5.4; INV-010/011/012/014/016)', () => {
+  it('T32 rejects duplicate claims before inserts and preserves base-only reuse and revisions', async () => {
     const { projectId } = await fx.createProjectWithOwner(sql);
     const artifactId = await fx.createArtifact(sql, projectId, 'requirements');
     const firstDraftId = await fx.createDraftArtifactVersion(sql, artifactId);
@@ -97,11 +97,21 @@ describe('identity.matchAndPersistItems (ERD 5.3-5.4; INV-010/011/012/016)', () 
       { previousDisplayKey: 'R-01', payload: originalA, upstreamRefs: [] },
     ];
     await dbModule.withProjectLock(projectId, async (tx) => {
+      const before = {
+        logicalItems: (await tx.select().from(dbModule.schema.logicalItem)).length,
+        itemVersions: (await tx.select().from(dbModule.schema.itemVersion)).length,
+        dependencies: (await tx.select().from(dbModule.schema.semanticDependency)).length,
+        memberships: (await tx.select().from(dbModule.schema.artifactVersionItemMembership)).length,
+      };
       await expect(
         identity.matchAndPersistItems(tx, { ...secondOptions, candidates: duplicate }),
       ).rejects.toThrow('Duplicate previousDisplayKey');
-      const rows = await tx.select().from(dbModule.schema.artifactVersionItemMembership);
-      expect(rows.filter((row) => row.artifactVersionId === secondDraftId)).toHaveLength(0);
+      expect({
+        logicalItems: (await tx.select().from(dbModule.schema.logicalItem)).length,
+        itemVersions: (await tx.select().from(dbModule.schema.itemVersion)).length,
+        dependencies: (await tx.select().from(dbModule.schema.semanticDependency)).length,
+        memberships: (await tx.select().from(dbModule.schema.artifactVersionItemMembership)).length,
+      }).toEqual(before);
     });
 
     const changedB = { ...originalB, behavior: 'Export selected report' };
@@ -156,5 +166,195 @@ describe('identity.matchAndPersistItems (ERD 5.3-5.4; INV-010/011/012/016)', () 
       { revision_number: number }[]
     >`SELECT revision_number FROM item_version WHERE id = ${reverted[0]!.itemVersionId}`;
     expect(thirdRevision[0]?.revision_number).toBe(3);
+  });
+
+  it('T31 keeps an ADR and its downstream current when its key is omitted, with explicit claims taking precedence', async () => {
+    const { projectId } = await fx.createProjectWithOwner(sql);
+    const requirementsId = await fx.createArtifact(sql, projectId, 'requirements');
+    const requirementsDraftId = await fx.createDraftArtifactVersion(sql, requirementsId);
+    const requirements = await dbModule.withProjectLock(projectId, (tx) =>
+      identity.matchAndPersistItems(tx, {
+        projectId,
+        artifactId: requirementsId,
+        draftVersionId: requirementsDraftId,
+        baseVersionId: null,
+        itemType: 'requirement',
+        candidates: [
+          { payload: { type: 'functional', behavior: 'Record work' }, upstreamRefs: [] },
+          { payload: { type: 'functional', behavior: 'Review work' }, upstreamRefs: [] },
+        ],
+        boundUpstream: new Map(),
+      }),
+    );
+    await fx.approveArtifactVersion(sql, requirementsDraftId);
+
+    const architectureId = await fx.createArtifact(sql, projectId, 'architecture');
+    const firstDraftId = await fx.createDraftArtifactVersion(sql, architectureId);
+    const adr = { decision: 'Use queues', technologyOrApproach: 'Postgres queue' };
+    const otherAdr = { decision: 'Use cache', technologyOrApproach: 'Redis' };
+    const boundUpstream = new Map([['R-01', requirements[0]!.itemVersionId]]);
+    const first = await dbModule.withProjectLock(projectId, (tx) =>
+      identity.matchAndPersistItems(tx, {
+        projectId,
+        artifactId: architectureId,
+        draftVersionId: firstDraftId,
+        baseVersionId: null,
+        itemType: 'architecture_decision',
+        candidates: [
+          { payload: adr, upstreamRefs: ['R-01'] },
+          { payload: otherAdr, upstreamRefs: ['R-01'] },
+        ],
+        boundUpstream,
+      }),
+    );
+    const firstOption = await fx.createArchitectureOption(sql, {
+      artifactVersionId: firstDraftId,
+      optionKey: 'A',
+    });
+    await fx.createArchitectureOption(sql, { artifactVersionId: firstDraftId, optionKey: 'B' });
+    await fx.approveArtifactVersion(sql, firstDraftId, {
+      selectedArchitectureOptionId: firstOption,
+    });
+
+    const uiArtifactId = await fx.createArtifact(sql, projectId, 'ui_requirements');
+    const uiDraftId = await fx.createDraftArtifactVersion(sql, uiArtifactId);
+    const uiItem = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: uiArtifactId,
+      itemType: 'ui_requirement',
+    });
+    await fx.createMembership(sql, {
+      artifactVersionId: uiDraftId,
+      artifactId: uiArtifactId,
+      logicalItemId: uiItem.logicalItemId,
+      itemVersionId: uiItem.itemVersionId,
+    });
+    await fx.createSemanticDependency(sql, {
+      projectId,
+      downstreamItemVersionId: uiItem.itemVersionId,
+      upstreamItemVersionId: first[0]!.itemVersionId,
+    });
+    await fx.approveArtifactVersion(sql, uiDraftId);
+
+    const secondDraftId = await draftFromBase(architectureId, firstDraftId, 2);
+    const second = await dbModule.withProjectLock(projectId, (tx) =>
+      identity.matchAndPersistItems(tx, {
+        projectId,
+        artifactId: architectureId,
+        draftVersionId: secondDraftId,
+        baseVersionId: firstDraftId,
+        itemType: 'architecture_decision',
+        candidates: [
+          { payload: adr, upstreamRefs: ['R-01'] },
+          { previousDisplayKey: 'ADR-02', payload: otherAdr, upstreamRefs: ['R-01'] },
+        ],
+        boundUpstream,
+      }),
+    );
+    expect(second).toEqual(first.map((item) => ({ ...item, isNew: false })));
+    const keys = await sql<{ display_key: string }[]>`
+      SELECT display_key FROM logical_item WHERE artifact_id = ${architectureId} ORDER BY display_key
+    `;
+    expect(keys.map((row) => row.display_key)).toEqual(['ADR-01', 'ADR-02']);
+    const secondOption = await fx.createArchitectureOption(sql, {
+      artifactVersionId: secondDraftId,
+      optionKey: 'A',
+    });
+    await fx.createArchitectureOption(sql, { artifactVersionId: secondDraftId, optionKey: 'B' });
+    await sql.begin(async (tx) => {
+      await tx`UPDATE artifact_version SET status = 'superseded' WHERE id = ${firstDraftId}`;
+      await fx.approveArtifactVersion(tx, secondDraftId, {
+        selectedArchitectureOptionId: secondOption,
+      });
+    });
+    const warnings = await sql<
+      { subject_id: string }[]
+    >`SELECT subject_id FROM impact(${projectId}::uuid)`;
+    expect(warnings).toHaveLength(0);
+
+    const thirdDraftId = await draftFromBase(architectureId, secondDraftId, 3);
+    const third = await dbModule.withProjectLock(projectId, (tx) =>
+      identity.matchAndPersistItems(tx, {
+        projectId,
+        artifactId: architectureId,
+        draftVersionId: thirdDraftId,
+        baseVersionId: secondDraftId,
+        itemType: 'architecture_decision',
+        candidates: [
+          { payload: otherAdr, upstreamRefs: ['R-01'] },
+          { previousDisplayKey: 'ADR-02', payload: otherAdr, upstreamRefs: ['R-01'] },
+          { previousDisplayKey: 'invalid', payload: adr, upstreamRefs: ['R-02'] },
+        ],
+        boundUpstream: new Map([
+          ['R-01', requirements[0]!.itemVersionId],
+          ['R-02', requirements[1]!.itemVersionId],
+        ]),
+      }),
+    );
+    expect(third[0]?.isNew).toBe(true);
+    expect(third[1]).toEqual({ ...first[1], isNew: false });
+    expect(third[2]?.logicalItemId).toBe(first[0]?.logicalItemId);
+    expect(third[2]?.itemVersionId).not.toBe(first[0]?.itemVersionId);
+    expect(third[2]?.isNew).toBe(false);
+    const edges = await sql<{ upstream_item_version_id: string }[]>`
+      SELECT upstream_item_version_id FROM semantic_dependency
+      WHERE downstream_item_version_id = ${third[2]!.itemVersionId}
+    `;
+    expect(edges[0]?.upstream_item_version_id).toBe(requirements[1]?.itemVersionId);
+  });
+
+  it('INV-014 creates a new identity for ambiguous matches and does not match another item type', async () => {
+    const { projectId } = await fx.createProjectWithOwner(sql);
+    const artifactId = await fx.createArtifact(sql, projectId, 'backlog');
+    const firstDraftId = await fx.createDraftArtifactVersion(sql, artifactId);
+    const payload = {
+      title: 'Reports',
+      scopeStatement: 'See reports',
+      userValueStatement: 'See reports',
+      acceptanceCriteria: [],
+      structuredBehavior: {},
+    };
+    const first = await dbModule.withProjectLock(projectId, (tx) =>
+      identity.matchAndPersistItems(tx, {
+        projectId,
+        artifactId,
+        draftVersionId: firstDraftId,
+        baseVersionId: null,
+        itemType: 'epic',
+        candidates: [
+          { payload, upstreamRefs: [] },
+          { payload, upstreamRefs: [] },
+        ],
+        boundUpstream: new Map(),
+      }),
+    );
+    await fx.approveArtifactVersion(sql, firstDraftId);
+    const secondDraftId = await draftFromBase(artifactId, firstDraftId, 2);
+    const ambiguous = await dbModule.withProjectLock(projectId, (tx) =>
+      identity.matchAndPersistItems(tx, {
+        projectId,
+        artifactId,
+        draftVersionId: secondDraftId,
+        baseVersionId: firstDraftId,
+        itemType: 'epic',
+        candidates: [{ payload, upstreamRefs: [] }],
+        boundUpstream: new Map(),
+      }),
+    );
+    expect(ambiguous[0]?.isNew).toBe(true);
+    expect(first.map((item) => item.logicalItemId)).not.toContain(ambiguous[0]?.logicalItemId);
+    const story = await dbModule.withProjectLock(projectId, (tx) =>
+      identity.matchAndPersistItems(tx, {
+        projectId,
+        artifactId,
+        draftVersionId: secondDraftId,
+        baseVersionId: firstDraftId,
+        itemType: 'story',
+        candidates: [{ payload, upstreamRefs: [] }],
+        boundUpstream: new Map(),
+      }),
+    );
+    expect(story[0]?.isNew).toBe(true);
+    expect(first.map((item) => item.logicalItemId)).not.toContain(story[0]?.logicalItemId);
   });
 });

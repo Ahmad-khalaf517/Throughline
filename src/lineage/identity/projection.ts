@@ -140,3 +140,9 @@ export function semanticHash(
     .update(JSON.stringify(semanticProjection(itemType, payload, upstreamIds)))
     .digest('hex');
 }
+
+export function contentOnlyProjection(itemType: ItemType, payload: unknown): JsonObject {
+  const projection = semanticProjection(itemType, payload);
+  delete projection.upstreamItemVersionIds;
+  return projection;
+}

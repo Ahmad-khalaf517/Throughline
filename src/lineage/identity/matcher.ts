@@ -1,6 +1,11 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { schema, type Tx } from '@/db';
-import { semanticHash, SEMANTIC_HASH_VERSION, type ItemType } from './projection';
+import {
+  contentOnlyProjection,
+  semanticHash,
+  SEMANTIC_HASH_VERSION,
+  type ItemType,
+} from './projection';
 
 export type Candidate = {
   previousDisplayKey?: string | null;
@@ -105,6 +110,7 @@ export async function matchAndPersistItems(
           displayKey: schema.logicalItem.displayKey,
           logicalItemId: schema.logicalItem.id,
           itemVersionId: schema.itemVersion.id,
+          payload: schema.itemVersion.payload,
           semanticHash: schema.itemVersion.semanticHash,
           semanticHashVersion: schema.itemVersion.semanticHashVersion,
         })
@@ -131,19 +137,6 @@ export async function matchAndPersistItems(
     }
   }
 
-  const claimed = new Set<string>();
-  const matches = candidates.map((candidate) => {
-    const member = candidate.previousDisplayKey
-      ? byKey.get(candidate.previousDisplayKey)
-      : undefined;
-    if (member) {
-      if (claimed.has(member.logicalItemId))
-        throw new Error(`Duplicate previousDisplayKey: ${member.displayKey}`);
-      claimed.add(member.logicalItemId);
-    }
-    return member;
-  });
-
   for (const candidate of candidates) {
     if (
       !candidate.payload ||
@@ -162,6 +155,39 @@ export async function matchAndPersistItems(
       throw new Error('Only stories may have an Epic parent');
     }
   }
+
+  const claimed = new Set<string>();
+  const matches = candidates.map((candidate) => {
+    const member = candidate.previousDisplayKey
+      ? byKey.get(candidate.previousDisplayKey)
+      : undefined;
+    if (member) {
+      if (claimed.has(member.logicalItemId))
+        throw new Error(`Duplicate previousDisplayKey: ${member.displayKey}`);
+      claimed.add(member.logicalItemId);
+    }
+    return member;
+  });
+  const contentProjection = (payload: unknown) =>
+    JSON.stringify(contentOnlyProjection(itemType, payload));
+  const unclaimedByContent = new Map<string, typeof baseMembers>();
+  for (const member of baseMembers) {
+    if (claimed.has(member.logicalItemId)) continue;
+    const content = contentProjection(member.payload);
+    const matching = unclaimedByContent.get(content) ?? [];
+    matching.push(member);
+    unclaimedByContent.set(content, matching);
+  }
+  candidates.forEach((candidate, index) => {
+    if (matches[index]) return;
+    const content = contentProjection(candidate.payload);
+    const matching = unclaimedByContent.get(content);
+    if (matching?.length !== 1) return;
+    const member = matching[0]!;
+    matches[index] = member;
+    claimed.add(member.logicalItemId);
+    unclaimedByContent.delete(content);
+  });
 
   const referencedIds = [
     ...new Set(

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/db/client', () => ({ db: {} }));
-import { semanticHash, semanticProjection } from '@/lineage/identity';
+import { contentOnlyProjection, semanticHash, semanticProjection } from '@/lineage/identity';
 
 describe('identity semantic projection (ERD 5.4, INV-016)', () => {
   it('normalizes prose and unordered criteria without hashing display prose', () => {
@@ -77,6 +77,27 @@ describe('identity semantic projection (ERD 5.4, INV-016)', () => {
     };
     expect(semanticHash('story', story)).toBe(
       semanticHash('story', { ...story, parentLogicalItemId: 'epic-b' }),
+    );
+  });
+
+  it('INV-014 compares normalized content without upstream ids while full hashes retain them', () => {
+    const payload = {
+      decision: 'Use queues.',
+      technologyOrApproach: 'Postgres queue',
+      significantTradeoffs: ['Operations', 'Latency'],
+    };
+    expect(contentOnlyProjection('architecture_decision', payload)).toEqual(
+      contentOnlyProjection('architecture_decision', {
+        ...payload,
+        decision: ' use  queues ',
+        significantTradeoffs: ['Latency', 'Operations'],
+      }),
+    );
+    expect(contentOnlyProjection('architecture_decision', payload)).not.toHaveProperty(
+      'upstreamItemVersionIds',
+    );
+    expect(semanticHash('architecture_decision', payload, ['requirement-a'])).not.toBe(
+      semanticHash('architecture_decision', payload, ['requirement-b']),
     );
   });
 });
