@@ -348,18 +348,6 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // Turns green with E3-T1.
   it.todo('T30');
 
-  // T31 - Architecture regeneration where the model omits
-  // previousDisplayKey on an unchanged ADR.
-  // Expected: content fallback matches it; the ADR reuses its ItemVersion;
-  // no new key, nothing flagged.
-  // Turns green with E2-S9.
-  it.todo('T31');
-
-  // T32 - Two candidates claim the same previousDisplayKey.
-  // Expected: validation error before any insert.
-  // Turns green with E2-S9.
-  it.todo('T32');
-
   // T33 - Edit the project brief before and after the first Requirements
   // generation.
   // Expected: before: allowed. After: raises (project_seed_frozen).
