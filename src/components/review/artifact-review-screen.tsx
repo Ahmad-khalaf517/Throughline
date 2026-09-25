@@ -1,7 +1,7 @@
 'use client';
 
 import { Fragment, useMemo, useState } from 'react';
-import { CircleAlert, CircleCheck, Loader2 } from 'lucide-react';
+import { CircleAlert, CircleCheck, Loader2, SquarePen } from 'lucide-react';
 import type {
   ArtifactVersionDTO,
   ArtifactVersionStatus,
@@ -11,6 +11,7 @@ import type {
 import { FlaggedGlyph, StatusBadge } from '@/components/status/status-badge';
 import { cn } from '@/lib/utils';
 import { ApprovalDialog } from './approval-dialog';
+import { ItemEditDialog } from './item-edit-dialog';
 
 interface ArtifactReviewScreenProps {
   /** Human-readable artifact name for the header (e.g. "Requirements"). */
@@ -156,6 +157,11 @@ function formatItemType(itemType: string): string {
 const REVISION_DISABLED_TITLE =
   "Wired up once E3-S10's generation/revision routes exist - visually complete, honestly inert until then (FR-013).";
 
+// Manual edit is legal only while a version is `draft` (ERD 5.3) - the Edit
+// button stays visible but disabled otherwise, same convention as the
+// revision buttons above.
+const EDIT_DISABLED_TITLE = 'Editing is only available while this version is a draft (ERD 5.3).';
+
 export function ArtifactReviewScreen({
   artifactTypeName,
   version,
@@ -170,6 +176,10 @@ export function ArtifactReviewScreen({
   const [pending, setPending] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [overrideNote, setOverrideNote] = useState<string | null>(null);
+  // E5-S8: which item (if any) the manual-edit dialog is currently open for
+  // - `null` means closed. Separate from `dialogOpen` above (the approval
+  // dialog), since both can exist independently.
+  const [editingItem, setEditingItem] = useState<ItemVersionDTO | null>(null);
   // Architecture-only (FR-022): `selectedOptionId` is the in-progress radio
   // choice; `selectedArchitectureOptionId` only gets set once approval
   // actually happens, mirroring the real DTO field of the same name (set
@@ -586,6 +596,16 @@ export function ArtifactReviewScreen({
                     ) : (
                       <span className="text-on-surface-variant/70 text-[11px]">No impact</span>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => setEditingItem(item)}
+                      disabled={status !== 'draft'}
+                      title={status === 'draft' ? `Edit ${item.displayKey}` : EDIT_DISABLED_TITLE}
+                      className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary ml-auto inline-flex items-center gap-1 rounded p-1 text-[11px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <SquarePen className="size-3.5" aria-hidden="true" />
+                      <span className="sr-only">Edit {item.displayKey}</span>
+                    </button>
                   </div>
                   {fields.actor && (
                     <p className="text-on-surface-variant mt-2 text-xs">
@@ -683,6 +703,26 @@ export function ArtifactReviewScreen({
           blockingItems={blockingItems}
           onCancel={() => setDialogOpen(false)}
           onConfirm={handleDialogConfirm}
+        />
+      )}
+
+      {editingItem && (
+        <ItemEditDialog
+          item={editingItem}
+          onCancel={() => setEditingItem(null)}
+          onSave={(updatedItem) => {
+            // Replace by `itemVersionId`, per this story's spec - no network
+            // call, no new id minted here (a real rebind mints a new
+            // ItemVersion server-side; this fixture-backed path stays a
+            // local, same-id update, same simplification the Approve flow
+            // above already makes).
+            setItems((current) =>
+              current.map((existing) =>
+                existing.itemVersionId === updatedItem.itemVersionId ? updatedItem : existing,
+              ),
+            );
+            setEditingItem(null);
+          }}
         />
       )}
     </div>

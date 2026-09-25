@@ -93,6 +93,13 @@ export interface BacklogItemPayload {
   acceptanceCriteria?: string[];
   priority?: string;
   sourceRefs?: string[]; // FR-062: display-key references to upstream item versions
+  // The version label each `sourceRefs` display key was authored against, at
+  // item-creation time (E5-S8, TR FR-082's manual-edit rebind).
+  // `previewItemEdit` below diffs each entry here against
+  // `CURRENT_ITEM_VERSION_LABELS` to compute the rebind preview. Optional
+  // and sparse - only populated where this fixture set actually demonstrates
+  // the rebind path (S-01, S-04 below).
+  sourceRefVersions?: Record<string, string>;
 }
 
 // UI Requirement item payload shape (TR FR-040: "structured UI Requirements
@@ -117,7 +124,37 @@ export interface UiRequirementItemPayload {
   accessibilityConstraints?: string;
   uxPriorities?: string[];
   sourceRefs?: string[];
+  // Same field as `BacklogItemPayload.sourceRefVersions` above (E5-S8, TR
+  // FR-082) - added here too since UI Requirement items also carry
+  // `sourceRefs` (UI-02 depends on R-06), even though no UI Requirement item
+  // in this fixture set populates it yet.
+  sourceRefVersions?: Record<string, string>;
 }
+
+// Fixture-level stand-in for "the current ItemVersion of each upstream
+// logical item" (E5-S8, TR FR-082: editing an item rebinds its upstream refs
+// to each upstream item's *current* ItemVersion). A real manual edit
+// (`artifact-lifecycle.proposeItemEdit`, not built yet - see the header
+// comment above) would look this up per logical item from the database;
+// this file has no database, so it's a flat display-key -> version-label map
+// instead. Only `R-04` is `'v2'` here - it's the only item in this fixture
+// set that has actually been revised (see `R04_SCALE_CONSTRAINT` below) -
+// every other display key stays at `'v1'`.
+const CURRENT_ITEM_VERSION_LABELS: Record<string, string> = {
+  'R-01': 'v1',
+  'R-02': 'v1',
+  'R-03': 'v1',
+  'R-04': 'v2',
+  'R-05': 'v1',
+  'R-06': 'v1',
+  'E-01': 'v1',
+  'S-01': 'v1',
+  'S-02': 'v1',
+  'S-03': 'v1',
+  'S-04': 'v1',
+  'UI-01': 'v1',
+  'UI-02': 'v1',
+};
 
 function itemVersion(
   displayKey: string,
@@ -456,6 +493,11 @@ function backlogItems(): ItemVersionDTO[] {
         ],
         priority: 'P1',
         sourceRefs: ['R-01'],
+        // R-01 hasn't changed since S-01 was authored (`CURRENT_ITEM_VERSION_
+        // LABELS['R-01']` is still `'v1'`) - this is `previewItemEdit`'s
+        // empty-diff case (E5-S8): editing S-01's text alone needs no
+        // confirmation. S-04 below is the opposite, non-empty case.
+        sourceRefVersions: { 'R-01': 'v1' },
       },
       { parentLogicalItemId: epicLogicalId },
     ),
@@ -506,6 +548,28 @@ function backlogItems(): ItemVersionDTO[] {
         acceptanceCriteria: [],
         priority: 'P2',
         sourceRefs: [],
+      },
+      { parentLogicalItemId: epicLogicalId },
+    ),
+    // S-04: authored against R-04 v1 (this backlog draft's baseline), but
+    // R-04 has since been revised to v2 (R04_SCALE_CONSTRAINT above) - so
+    // editing S-04 through the manual-edit dialog (E5-S8/FR-082) produces a
+    // real, non-empty rebind diff: "S-04 will now depend on R-04 v2 instead
+    // of v1." This is `previewItemEdit`'s one demonstrable non-empty case;
+    // S-01 above is its empty-diff counterpart (R-01 hasn't changed).
+    backlogItemVersion(
+      'S-04',
+      'story',
+      {
+        title: 'Regression test coverage for the concurrency target',
+        description:
+          "Automated regression coverage asserting the system stays available at R-04's stated concurrency target, authored against R-04 v1.",
+        acceptanceCriteria: [
+          'A load test asserts the system stays available at the concurrency target stated in R-04.',
+        ],
+        priority: 'P2',
+        sourceRefs: ['R-04'],
+        sourceRefVersions: { 'R-04': 'v1' },
       },
       { parentLogicalItemId: epicLogicalId },
     ),
@@ -744,4 +808,54 @@ export function getFixtureImpactWarnings(projectId: string): ImpactRowDTO[] {
       acknowledged: false,
     },
   ];
+}
+
+/**
+ * Fixture-side stand-in for `artifact-lifecycle.proposeItemEdit` (E5-S8;
+ * API Contracts section 5's `POST .../edit/preview`; TR FR-082). A real
+ * implementation looks up each upstream logical item's current ItemVersion
+ * from the database, inside its own transaction that's opened and rolled
+ * back (nothing persists); this file has no database, so it reads the
+ * fixture-level `CURRENT_ITEM_VERSION_LABELS` map above instead. Generic
+ * across artifact types (not backlog-specific) - reads `sourceRefVersions`
+ * off the item's payload the same defensive way `artifact-review-screen.
+ * tsx`'s `readKnownFields` reads every other payload field, since
+ * `ItemVersionDTO.payload` stays `unknown` here too.
+ *
+ * `logicalItemId` on each returned entry is a synthesized placeholder
+ * (`fixture-logical-<display-key>`, the same convention `itemVersion`/
+ * `backlogItemVersion`/`uiRequirementItemVersion` already use above for
+ * their own ids) - fixture data has no real logical-item lookup to resolve
+ * it from.
+ */
+export function previewItemEdit(
+  item: ItemVersionDTO,
+): { logicalItemId: string; displayKey: string; from: string; to: string }[] {
+  const payload =
+    typeof item.payload === 'object' && item.payload !== null
+      ? (item.payload as Record<string, unknown>)
+      : {};
+  const sourceRefVersions =
+    typeof payload.sourceRefVersions === 'object' && payload.sourceRefVersions !== null
+      ? (payload.sourceRefVersions as Record<string, unknown>)
+      : {};
+
+  const changedRefs: { logicalItemId: string; displayKey: string; from: string; to: string }[] = [];
+  for (const [displayKey, fromValue] of Object.entries(sourceRefVersions)) {
+    if (typeof fromValue !== 'string') continue;
+    const to = CURRENT_ITEM_VERSION_LABELS[displayKey];
+    // Only an actual mismatch is a change - an unrecognized display key (not
+    // in the registry) is left alone rather than treated as a diff, same
+    // "unknown stays unknown, never guessed" defensiveness as the rest of
+    // this file's readers.
+    if (to !== undefined && to !== fromValue) {
+      changedRefs.push({
+        logicalItemId: `fixture-logical-${displayKey.toLowerCase()}`,
+        displayKey,
+        from: fromValue,
+        to,
+      });
+    }
+  }
+  return changedRefs;
 }
