@@ -401,7 +401,9 @@ async function cleanupChain(label: string, chain: Chain): Promise<void> {
         .delete(schema.externalOperation)
         .where(eq(schema.externalOperation.id, chain.externalOperationId));
     }
-    await db.delete(schema.artifactVersion).where(eq(schema.artifactVersion.id, chain.artifactVersionId));
+    await db
+      .delete(schema.artifactVersion)
+      .where(eq(schema.artifactVersion.id, chain.artifactVersionId));
     await db.delete(schema.artifact).where(eq(schema.artifact.id, chain.artifactId));
     await db.delete(schema.project).where(eq(schema.project.id, chain.projectId));
     console.log(`[spike] cleanup (${label}): all rows deleted - nothing permanent left behind.`);
@@ -420,7 +422,7 @@ async function cleanupChain(label: string, chain: Chain): Promise<void> {
 
 async function main() {
   console.log(
-    '[spike] E4-T1 Spike C (GitHub) starting - see this file\'s header for what this proves and ' +
+    "[spike] E4-T1 Spike C (GitHub) starting - see this file's header for what this proves and " +
       'what it explicitly does NOT do.',
   );
 
@@ -525,18 +527,18 @@ async function main() {
   let scenario2Error: unknown;
 
   const INTERFACE_GAP_FINDING =
-    "Interface gap in src/external/operations/index.ts: ReconcileResult only has two variants, " +
-    "{found:true,...} and {found:false}. There is no way for a reconcile() closure to report " +
+    'Interface gap in src/external/operations/index.ts: ReconcileResult only has two variants, ' +
+    '{found:true,...} and {found:false}. There is no way for a reconcile() closure to report ' +
     "'I found an object at the deterministic target, but it is definitively not mine' (GitHub's " +
     "marker mismatch, ERD 7.3's name_taken_by_other). {found:false} is the only type-correct " +
-    "return for that case today, so reconcileAndFinalize() treats a definitively-foreign object " +
+    'return for that case today, so reconcileAndFinalize() treats a definitively-foreign object ' +
     "exactly like 'not found yet' and returns {status:'reconciliation_required'} - the operation " +
-    "stays retryable forever, with no way for a caller to observe the definitive failure or " +
-    "prompt the user to pick a new repo name. E4-S2 (the real github module) will need a third " +
+    'stays retryable forever, with no way for a caller to observe the definitive failure or ' +
+    'prompt the user to pick a new repo name. E4-S2 (the real github module) will need a third ' +
     "ReconcileResult variant - e.g. {found:'foreign'} or {found:true, ours:false} - that " +
     "reconcileAndFinalize() maps to {status:'failed', errorMessage:'name_taken_by_other'}, " +
     "distinct from {found:false}'s 'keep retrying' semantics. This is a protocol-type change to " +
-    "src/external/operations/index.ts and is out of scope for this Task (E4-T1) - it is only " +
+    'src/external/operations/index.ts and is out of scope for this Task (E4-T1) - it is only ' +
     "demonstrated here using the closest fit available in today's types, not patched.";
 
   // ================= Scenario 1: lost response, then adopt =================
@@ -570,9 +572,12 @@ async function main() {
     };
 
     const reconcile1 = async (): Promise<
-      { found: true; externalId: string; externalKey: string; externalUrl: string } | { found: false }
+      | { found: true; externalId: string; externalKey: string; externalUrl: string }
+      | { found: false }
     > => {
-      console.log('[spike] scenario 1 reconcile(): GET the deterministic repo, check the marker ...');
+      console.log(
+        '[spike] scenario 1 reconcile(): GET the deterministic repo, check the marker ...',
+      );
       let response;
       try {
         response = await octokit.rest.repos.get({ owner, repo: repoName1 });
@@ -678,7 +683,7 @@ async function main() {
     const persistedRef1 = await selectRefByOperationId(opRow1AfterCall1.id);
     if (!persistedRef1 || persistedRef1.externalId !== result1.ref.externalId) {
       throw new Error(
-        "scenario 1 assertion failed: independent SELECT of external_ref did not match " +
+        'scenario 1 assertion failed: independent SELECT of external_ref did not match ' +
           "runOperation's returned ref",
       );
     }
@@ -765,9 +770,12 @@ async function main() {
     // `failed`. That mismatch IS the finding this scenario exists to surface
     // - it is not patched here (out of scope for this Task).
     const reconcile2 = async (): Promise<
-      { found: true; externalId: string; externalKey: string; externalUrl: string } | { found: false }
+      | { found: true; externalId: string; externalKey: string; externalUrl: string }
+      | { found: false }
     > => {
-      console.log('[spike] scenario 2 reconcile(): GET the deterministic repo, check the marker ...');
+      console.log(
+        '[spike] scenario 2 reconcile(): GET the deterministic repo, check the marker ...',
+      );
       let response;
       try {
         response = await octokit.rest.repos.get({ owner, repo: repoName2 });
@@ -786,8 +794,9 @@ async function main() {
       }
       console.log(
         '[spike] scenario 2 reconcile(): repo EXISTS at the deterministic name but its marker does ' +
-          "NOT match ours - ERD 7.3's \"name_taken_by_other\", a DEFINITIVE outcome that should map " +
-          "to `failed`. " + INTERFACE_GAP_FINDING,
+          'NOT match ours - ERD 7.3\'s "name_taken_by_other", a DEFINITIVE outcome that should map ' +
+          'to `failed`. ' +
+          INTERFACE_GAP_FINDING,
       );
       scenario2GapConfirmed = true;
       return { found: false };
@@ -941,20 +950,21 @@ async function main() {
     '\nMarker mechanism ours-vs-foreign: ' +
       (scenario1Outcome === 'adopted' && scenario2GapConfirmed
         ? 'CORRECTLY distinguished in both directions - scenario 1 matched our own marker and ' +
-          "adopted; scenario 2 detected a marker MISMATCH against a foreign repo and did NOT adopt it."
+          'adopted; scenario 2 detected a marker MISMATCH against a foreign repo and did NOT adopt it.'
         : 'inconclusive - see per-scenario results above.'),
   );
   console.log(`\nInterface-gap finding (E4-S2 needs this):\n${INTERFACE_GAP_FINDING}`);
   console.log(
     '\nRECONCILIATION_THRESHOLD_MS (90_000ms, hardcoded in src/external/operations/index.ts for ' +
-      "github) is STILL A PROVISIONAL PLACEHOLDER after this run. Real GitHub API calls were " +
+      'github) is STILL A PROVISIONAL PLACEHOLDER after this run. Real GitHub API calls were ' +
       'explicitly declined for this spike, so no real HTTP timeout was measured - this run only ' +
       'exercised the protocol logic around whatever number is configured (waiting 91s, i.e. > the ' +
-      "90s placeholder), it does NOT validate that 90s is the right value for real GitHub traffic.",
+      '90s placeholder), it does NOT validate that 90s is the right value for real GitHub traffic.',
   );
   console.log('===================================================================\n');
 
-  const overallOk = scenario1Outcome === 'adopted' && !scenario1Error && scenario2GapConfirmed && !scenario2Error;
+  const overallOk =
+    scenario1Outcome === 'adopted' && !scenario1Error && scenario2GapConfirmed && !scenario2Error;
   process.exit(overallOk ? 0 : 1);
 }
 
