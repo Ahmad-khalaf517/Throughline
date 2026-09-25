@@ -11,6 +11,13 @@ import postgres from 'postgres';
 import { db, schema, withTx } from '@/db';
 import { ARTIFACT_TYPES, type ArtifactSummaryDTO, type ArtifactType } from '@/lib/serialize';
 
+export {
+  createDraftFromGeneration,
+  type ArtifactVersion,
+  type CreateDraftFromGenerationOptions,
+  type CreateDraftFromGenerationResult,
+} from './generation';
+
 export type Project = typeof schema.project.$inferSelect;
 
 export interface ProjectWithArtifacts extends Project {

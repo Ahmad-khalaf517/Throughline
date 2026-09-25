@@ -31,6 +31,16 @@ vi.mock('@/db', async () => {
   };
 });
 
+// `@/artifact-lifecycle`'s barrel now also pulls in `generation.ts`, which
+// imports `linkGenerationRun` from `@/ai-client` - and that barrel transitively
+// imports `@/lib/env` (eager-validated at module load). This suite never
+// exercises `createDraftFromGeneration`, so both exports are stubbed purely to
+// avoid that incidental transitive import blowing up on missing env vars.
+vi.mock('@/ai-client', () => ({
+  linkGenerationRun: vi.fn(),
+  generateStructured: vi.fn(),
+}));
+
 import { schema } from '@/db';
 import {
   BriefFrozenError,

@@ -11,3 +11,4 @@ export type {
   GenerateStructuredResult,
   GenerationPurpose,
 } from './generate-structured';
+export { linkGenerationRun } from './link-generation-run';

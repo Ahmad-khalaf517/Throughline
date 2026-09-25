@@ -264,6 +264,39 @@ export async function createSemanticDependency(
   `;
 }
 
+// ai_generation_run_purpose_check / _status_check (0002,
+// src/db/schema/ai-generation-run.ts) - `artifact_version_id` defaults to
+// null here to match what ai-client.generateStructured actually inserts at
+// call time (the version doesn't exist yet); a real row is required as the
+// FK target for artifact-lifecycle.linkGenerationRun's UPDATE (ERD line 60 /
+// 3.3 step 4), not a placeholder string id.
+export async function createAiGenerationRun(
+  sql: QueryExecutor,
+  args: {
+    projectId: string;
+    artifactVersionId?: string | null;
+    purpose?: 'generation' | 'semantic_mapping' | 'revision' | 'quality_check';
+    provider?: string;
+    model?: string;
+    status?: 'succeeded' | 'failed';
+  },
+): Promise<string> {
+  const rows = await sql<{ id: string }[]>`
+    INSERT INTO ai_generation_run
+      (project_id, artifact_version_id, purpose, provider, model, status)
+    VALUES (
+      ${args.projectId},
+      ${args.artifactVersionId ?? null},
+      ${args.purpose ?? 'generation'},
+      ${args.provider ?? 'openai'},
+      ${args.model ?? 'test-model'},
+      ${args.status ?? 'succeeded'}
+    )
+    RETURNING id
+  `;
+  return rows[0]!.id;
+}
+
 export type ExternalProvider = 'github' | 'jira' | 'stitch';
 
 // external_operation_status_check (0002): status must be one of these; the
