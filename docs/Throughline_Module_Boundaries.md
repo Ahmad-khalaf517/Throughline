@@ -1,7 +1,7 @@
 # Throughline - Module Boundaries
 
-**Document version:** 1.4
-**Status:** Derived from ERD/Data Model v1.8 and Technical Requirements & Lineage Invariants v1.4. Parent of API Contracts -> Jira Plan -> Implementation. v1.4 (E5-S1): added section 4.8, naming a real gap a boundary-auditor review surfaced - this story's Server Components (`src/app/projects/page.tsx`, `src/app/projects/[projectId]/page.tsx`) read `artifact-lifecycle` and call `requireProjectOwner` directly, which section 4.7's existing exception textually covers only for `api` route handlers, not pages. Not a new decision: pages calling `auth.getVerifiedUser` directly already predates this story (sign-up/sign-in/forgot-password), and this just extends the same "pages read; api layer still owns the one write" shape to `artifact-lifecycle`'s read exports rather than forcing a page to self-fetch its own route over HTTP. The one mutation this story has (project creation) still goes through `POST /api/projects`, unchanged. v1.3 (E1-S8): named two exceptions this story's implementation required and a boundary-auditor review flagged as real but undocumented - `requireProjectOwner`'s direct read of `project` (section 4.1) and every `/api/projects*` route's direct call into `artifact-lifecycle`, not just the creation route (section 4.7). Neither changes a decision: both were already implied (4.1's own "NOT YET IMPLEMENTED" note anticipated the former; `eslint.config.mjs`'s own comment already flagged the latter as an intentionally-unencoded exception) - this just states them in prose instead of leaving them for the next reader to re-derive. v1.2: `auth` module's export list filled in for real (signUpWithEmail/signInWithEmail/signOut/requestPasswordReset/updatePassword/verifyEmailOtp/exchangeCodeForSession/updateSession) - it had drifted since being built, listing only the original three. v1.1: `getVerifiedUser` no longer checks an email allowlist - ERD Appendix B round 9.
+**Document version:** 1.5
+**Status:** Derived from ERD/Data Model v1.8 and Technical Requirements & Lineage Invariants v1.4. Parent of API Contracts -> Jira Plan -> Implementation. v1.5 (E2-S5): resolved a self-contradiction this story's implementation surfaced - section 4.2 said `dependency-binding` calls `identity.resolveDisplayKeys`, while the module map (section 3) and the enforced eslint layer-1 peer-import ban (`eslint.config.mjs`) said `dependency-binding` depends on nothing but `db`. `checkFreshness` had the same latent problem: INV-006 "currentness" is defined entirely in terms of `identity`'s LogicalItem -> current-ItemVersion pointer (TR section 18), so both of `dependency-binding`'s functions were coupled to `identity`-owned data, not just the one the prose named. Fix: `bindUpstreamRefs` and `checkFreshness` are now pure functions - no `tx`, no `identity` import - taking already-resolved data as arguments; `identity` gains two reads (`getSourceVersionMembers`, `getCurrentItemVersionIds`) that `artifact-lifecycle` calls to compose that input before invoking either function (same shape `backlog` already uses for `resolveDisplayKeys`, section 4.4). No eslint change was needed - the peer-import ban was already correct once the module's own functions stopped needing to cross it. v1.4 (E5-S1): added section 4.8, naming a real gap a boundary-auditor review surfaced - this story's Server Components (`src/app/projects/page.tsx`, `src/app/projects/[projectId]/page.tsx`) read `artifact-lifecycle` and call `requireProjectOwner` directly, which section 4.7's existing exception textually covers only for `api` route handlers, not pages. Not a new decision: pages calling `auth.getVerifiedUser` directly already predates this story (sign-up/sign-in/forgot-password), and this just extends the same "pages read; api layer still owns the one write" shape to `artifact-lifecycle`'s read exports rather than forcing a page to self-fetch its own route over HTTP. The one mutation this story has (project creation) still goes through `POST /api/projects`, unchanged. v1.3 (E1-S8): named two exceptions this story's implementation required and a boundary-auditor review flagged as real but undocumented - `requireProjectOwner`'s direct read of `project` (section 4.1) and every `/api/projects*` route's direct call into `artifact-lifecycle`, not just the creation route (section 4.7). Neither changes a decision: both were already implied (4.1's own "NOT YET IMPLEMENTED" note anticipated the former; `eslint.config.mjs`'s own comment already flagged the latter as an intentionally-unencoded exception) - this just states them in prose instead of leaving them for the next reader to re-derive. v1.2: `auth` module's export list filled in for real (signUpWithEmail/signInWithEmail/signOut/requestPasswordReset/updatePassword/verifyEmailOtp/exchangeCodeForSession/updateSession) - it had drifted since being built, listing only the original three. v1.1: `getVerifiedUser` no longer checks an email allowlist - ERD Appendix B round 9.
 **Target stack:** Next.js / TypeScript, Drizzle ORM, Supabase Postgres.
 **Primary audience:** Developer, AI coding agents implementing modules.
 
@@ -43,7 +43,7 @@ A module in layer N may import layer < N freely. It may not import layer >= N, w
 | 2 | `auth` | 0 | `app_user` (upsert on login) | `db` |
 | 3 | `ai-client` | 0 | `ai_generation_run` | `db` |
 | 4 | `identity` | 1 | `logical_item`, `item_version`, `artifact_version_item_membership`, `semantic_dependency` | `db` |
-| 5 | `dependency-binding` | 1 | (no table; pure + reads `generation_context_ref`) | `db` |
+| 5 | `dependency-binding` | 1 | (no table; pure functions, no database access of its own) | - |
 | 6 | `impact` | 1 | `impact_acknowledgement` | `db` |
 | 7 | `artifact-lifecycle` | 2 | `project`, `artifact`, `artifact_version`, `approval_event`, `generation_context_ref` | `db`, `identity`, `dependency-binding`, `impact` |
 | 8 | `architecture-materialization` | 2 | `architecture_option` | `identity`, `artifact-lifecycle` (called by it) |
@@ -190,8 +190,20 @@ copyMembership(tx: Tx, fromVersionId: string, toVersionId: string): Promise<void
   // no new ItemVersions - this is the ONLY function that writes membership without going through matching.
 
 resolveDisplayKeys(tx: Tx, artifactId: string, keys: DisplayKey[]): Promise<Map<DisplayKey, LogicalItemId>>
-  // validates model-supplied previousDisplayKey / upstreamRefs strings against real rows; used by
-  // dependency-binding and by the two functions above. Never trusts a key it cannot resolve.
+  // validates model-supplied previousDisplayKey / upstreamRefs strings against real rows; used by the
+  // two functions above, and by artifact-lifecycle/backlog when composing input for dependency-binding
+  // or matchAndPersistItems. Never trusts a key it cannot resolve.
+
+getSourceVersionMembers(tx: Tx, sourceVersionIds: string[]): Promise<SourceVersionMember[]>
+  // membership rows (display_key, logical_item_id, item_version_id, artifact_id, project_id, status)
+  // for the given artifact_version ids - called by artifact-lifecycle to build the `members` input to
+  // dependency-binding.bindUpstreamRefs (4.2) without dependency-binding reading
+  // artifact_version_item_membership itself (principle 1: identity is its only reader)
+
+getCurrentItemVersionIds(tx: Tx, projectId: string, itemVersionIds: string[]): Promise<Set<ItemVersionId>>
+  // which of the given ItemVersion ids are still the current ItemVersion of their LogicalItem - called
+  // by artifact-lifecycle to build the `currentItemVersionIds` input to
+  // dependency-binding.checkFreshness (4.2); this is what INV-006 "currentness" actually means
 ```
 
 **Rule:** every function above takes an already-open `tx` and never opens its own transaction or takes the lock - it is always called from inside `artifact-lifecycle`'s locked transaction. `identity` has no concept of "commit"; it only ever participates in someone else's.
@@ -200,25 +212,28 @@ resolveDisplayKeys(tx: Tx, artifactId: string, keys: DisplayKey[]): Promise<Map<
 
 #### `dependency-binding`
 
-**Owns:** nothing (no table of its own); reads `generation_context_ref` and calls `identity.resolveDisplayKeys`.
+**Owns:** nothing (no table of its own). Every function here is pure - no `tx` parameter, no database access, no import from `identity` or `db`. All input is data the caller already resolved.
 
 **Exports:**
 ```ts
-bindUpstreamRefs(tx: Tx, opts: {
-  contextSourceVersionIds: string[];        // the recorded generation_context_ref sources (ERD 3.3 step 3)
+bindUpstreamRefs(opts: {
+  members: SourceVersionMember[];           // from identity.getSourceVersionMembers(tx, contextSourceVersionIds) (4.2)
   candidates: { upstreamRefs: DisplayKey[] }[];
-}): Promise<Map<DisplayKey, ItemVersionId>>
-  // resolves each ref to the EXACT ItemVersion as it exists inside the context source versions' membership -
+}): Map<DisplayKey, ItemVersionId>
+  // resolves each ref to the EXACT ItemVersion as it exists inside the supplied members -
   // never to a newer version the model did not see (INV-006). Unresolvable ref -> throws a validation error.
 
-checkFreshness(tx: Tx, opts: {
-  artifactId: string; baseVersionId: string | null; boundUpstream: Map<DisplayKey, ItemVersionId>;
-}): Promise<{ stale: true; reason: 'base_changed' | 'dependency_superseded' } | { stale: false }>
+checkFreshness(opts: {
+  approvedVersionId: string | null;         // artifact's current approved version, read by the caller
+  baseVersionId: string | null;
+  boundUpstream: Map<DisplayKey, ItemVersionId>;
+  currentItemVersionIds: Set<ItemVersionId>; // from identity.getCurrentItemVersionIds(tx, projectId, [...boundUpstream.values()]) (4.2)
+}): { stale: true; reason: 'base_changed' | 'dependency_superseded' } | { stale: false }
   // ERD 3.3 steps 2 and 4: is baseVersionId still the artifact's approved version, and is every bound
   // upstream ItemVersion still current? This is the ONLY freshness check in the codebase (INV-006).
 ```
 
-**Rule:** this module is deliberately separate from `identity` even though it is small, because it is the exact seam where TR INV-006 (generation freshness) lives, and it is the one piece of section 3.3 that has nothing to do with hashing or matching. Keeping it separate makes it independently unit-testable against the freshness scenarios (ERD T7, T20) without needing a real matching run.
+**Rule:** this module is deliberately separate from `identity` even though it is small, because it is the exact seam where TR INV-006 (generation freshness) lives, and it is the one piece of section 3.3 that has nothing to do with hashing or matching. Being pure - not just separate - is what makes the layer-1 peer-import ban (section 1, principle 2) hold without an exception here: `identity` stays the only reader of `artifact_version_item_membership`/`item_version` (principle 1), and `dependency-binding` stays independently unit-testable against the freshness scenarios (ERD T7, T20) with plain fixtures, no `tx` or real matching run needed. `artifact-lifecycle` is responsible for calling `identity.getSourceVersionMembers`/`getCurrentItemVersionIds` and assembling both functions' input - see 4.3.
 
 ---
 
@@ -276,10 +291,13 @@ createDraftFromGeneration<TItem>(opts: {
   // ^ supplied by the artifact-type module: loads context per TR FR-080, calls ai-client, validates shape
 }): Promise<{ version: ArtifactVersion; stale: false } | { version: ArtifactVersion; stale: true }>
   // ERD 3.3 in full: take lock -> capture base/context -> call generate() OUTSIDE any open transaction for
-  // the LLM part, then re-open the persist transaction -> checkFreshness -> if stale, insert rejected
-  // version with raw_output, no items, still-recorded generation_context_ref, commit, return stale:true ->
-  // else mark old draft rejected, insert new draft, call identity.matchAndPersistItems per candidate,
-  // insert generation_context_ref rows, commit.
+  // the LLM part, then re-open the persist transaction -> bind every candidate's upstreamRefs
+  // (identity.getSourceVersionMembers + dependency-binding.bindUpstreamRefs, ERD 3.3 step 3) ->
+  // checkFreshness (identity.getCurrentItemVersionIds + dependency-binding.checkFreshness, ERD 3.3 step 4)
+  // -> if stale, insert rejected version with raw_output, no items, still-recorded generation_context_ref,
+  // commit, return stale:true -> else mark old draft rejected, insert new draft, call
+  // identity.matchAndPersistItems per candidate (passing the already-bound boundUpstream map), insert
+  // generation_context_ref rows, commit.
 
 // --- manual revision (no AI call) ---
 createManualRevisionDraft(projectId: string, artifactType: ArtifactType): Promise<ArtifactVersion>
