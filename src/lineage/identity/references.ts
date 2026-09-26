@@ -81,6 +81,64 @@ export async function getSourceVersionMembers(tx: Tx, sourceVersionIds: string[]
   return rows;
 }
 
+// Added by E3-S9 (SCRUM-44): `backlog`'s own quality gate (FR-063 - "Story
+// has no source Requirement", "Requirement has no implementation Story",
+// "source item does not exist", "source reference points to an invalid
+// project/version") and its `generate()`'s regeneration-stability prompt
+// (reconstructing a base Story's own `upstreamRefs` display keys) both need
+// to read `semantic_dependency` edges by their downstream ItemVersion - no
+// existing `identity` export does this (`getSourceVersionMembers` reads
+// `artifact_version_item_membership`, not `semantic_dependency`). This is a
+// narrow, additive, read-only export of `identity`'s own owned table
+// (Module Boundaries 4.2: `identity` owns `semantic_dependency`), following
+// the same "identity gains a read, callers compose above it" shape v1.5
+// recorded for `getSourceVersionMembers`/`getCurrentItemVersionIds` and v1.8
+// recorded for `external-operations`' six reads - see this story's own
+// report for the matching Module Boundaries section 4.2 update.
+//
+// LEFT JOINs onto `item_version`/`logical_item` for the upstream side
+// deliberately, even though both are DB-enforced to resolve today (item_version
+// rows are never deleted - restrict-only FKs; semantic_dependency's own
+// composite FKs already force both ends into the same project_id) - FR-063
+// lists "source item does not exist" and "source reference points to an
+// invalid project/version" as checks a quality gate must make, so the read
+// here stays defensive (null upstream fields / a project_id mismatch) rather
+// than assuming the invariant so hard it couldn't even be checked.
+export async function getUpstreamDependencies(
+  tx: Tx,
+  downstreamItemVersionIds: string[],
+): Promise<
+  {
+    downstreamItemVersionId: string;
+    upstreamItemVersionId: string;
+    dependencyProjectId: string;
+    upstreamProjectId: string | null;
+    upstreamLogicalItemId: string | null;
+    upstreamItemType: string | null;
+    upstreamDisplayKey: string | null;
+  }[]
+> {
+  const uniqueIds = [...new Set(downstreamItemVersionIds)];
+  if (!uniqueIds.length) return [];
+  return tx
+    .select({
+      downstreamItemVersionId: schema.semanticDependency.downstreamItemVersionId,
+      upstreamItemVersionId: schema.semanticDependency.upstreamItemVersionId,
+      dependencyProjectId: schema.semanticDependency.projectId,
+      upstreamProjectId: schema.itemVersion.projectId,
+      upstreamLogicalItemId: schema.logicalItem.id,
+      upstreamItemType: schema.logicalItem.itemType,
+      upstreamDisplayKey: schema.logicalItem.displayKey,
+    })
+    .from(schema.semanticDependency)
+    .leftJoin(
+      schema.itemVersion,
+      eq(schema.itemVersion.id, schema.semanticDependency.upstreamItemVersionId),
+    )
+    .leftJoin(schema.logicalItem, eq(schema.logicalItem.id, schema.itemVersion.logicalItemId))
+    .where(inArray(schema.semanticDependency.downstreamItemVersionId, uniqueIds));
+}
+
 export async function getCurrentItemVersionIds(
   tx: Tx,
   projectId: string,

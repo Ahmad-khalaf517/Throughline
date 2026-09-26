@@ -28,12 +28,41 @@ export type ArtifactVersion = typeof schema.artifactVersion.$inferSelect;
 export interface CreateDraftFromGenerationOptions {
   projectId: string;
   artifactId: string;
-  // The same ItemType `identity.matchAndPersistItems` expects for this
-  // artifact (requirement / architecture_decision / ui_requirement / epic /
-  // story - Architecture's own ADR items aren't minted here, section 3.3's
-  // closing paragraph, but the option payload still flows through the same
-  // draft-creation path with itemType supplied by the caller).
-  itemType: ItemType;
+  // The default ItemType `identity.matchAndPersistItems` is called with for
+  // any candidate that doesn't carry its own `itemType` (requirement /
+  // architecture_decision / ui_requirement / epic / story - Architecture's
+  // own ADR items aren't minted here, section 3.3's closing paragraph, but
+  // the option payload still flows through the same draft-creation path with
+  // itemType supplied by the caller). Every artifact type except Backlog
+  // mints exactly one item type and never sets `Candidate.itemType`, so this
+  // remains the *only* type minted for them, unchanged from before this
+  // field became optional.
+  //
+  // Backlog is the one artifact type that mints two item types - `epic` and
+  // `story` - into the SAME draft artifact_version in one generation (ERD
+  // 3.3 step 5: "insert membership - Epic rows before their Stories, the
+  // parent FK is not deferrable"). Module Boundaries 4.3's documented shape
+  // for this function has exactly one ItemType per call, and `generate()`
+  // (the LLM part) runs entirely outside any open transaction (step 3
+  // above), so it structurally cannot call `identity.matchAndPersistItems`
+  // itself even once, let alone twice - only `artifact-lifecycle` may open
+  // the locked persist transaction that call needs (Module Boundaries
+  // principle 3), and layer-3 modules never call `withProjectLock`. That
+  // makes the one-itemType-per-call contract genuinely unable to express a
+  // two-item-type single-artifact draft, not just an awkward fit - a real
+  // frozen-doc contradiction (throughline project's own doc-contradiction-
+  // resolution-pattern), resolved here as a narrow additive change: instead
+  // of widening this field to a list, `Candidate` itself grew an optional
+  // `itemType` (matcher.ts) and this function groups `candidates` by their
+  // own `itemType` (falling back to this field), calling
+  // `identity.matchAndPersistItems` once per group, in a fixed
+  // epic-before-story order, all inside the ONE already-open, lock-held
+  // transaction and the ONE draft `artifact_version` row inserted below -
+  // see `groupCandidatesByType`/`ITEM_TYPE_MINT_ORDER`. `backlog`'s own
+  // `toCandidates` sets `itemType` on every candidate, so it omits this
+  // field entirely rather than supplying an arbitrary single value that
+  // would never actually be used as a fallback.
+  itemType?: ItemType;
   // The approved versions of the *other* artifacts this generation depends on
   // (e.g. Architecture's context source is Requirements' approved version) -
   // resolved by the caller, not derived here.
@@ -58,6 +87,123 @@ export type CreateDraftFromGenerationResult =
       // Every caller can still narrow on `stale: true` alone and ignore it.
       reason: 'base_changed' | 'dependency_superseded';
     };
+
+// ERD 3.3 step 5's "Epic rows before their Stories - the parent FK is not
+// deferrable": a fixed, deterministic mint order for the one case that has
+// more than one group present at once (Backlog's epic+story). Every other
+// artifact type only ever produces one group, so its position in this list
+// is otherwise irrelevant.
+const ITEM_TYPE_MINT_ORDER: readonly ItemType[] = [
+  'requirement',
+  'architecture_decision',
+  'ui_requirement',
+  'epic',
+  'story',
+];
+
+// Groups candidates by their own `itemType` (matcher.ts's optional
+// `Candidate.itemType`, added by E3-S9 alongside this function), falling
+// back to `defaultItemType` for any candidate that doesn't set one - see
+// `CreateDraftFromGenerationOptions.itemType`'s own doc comment for why this
+// exists instead of widening `matchAndPersistItems` to accept a mixed-type
+// batch. Throws rather than silently guessing if a candidate has no
+// itemType of its own and no default was supplied.
+function groupCandidatesByType(
+  candidates: Candidate[],
+  defaultItemType: ItemType | undefined,
+): Map<ItemType, Candidate[]> {
+  const groups = new Map<ItemType, Candidate[]>();
+  for (const candidate of candidates) {
+    const type = candidate.itemType ?? defaultItemType;
+    if (!type) {
+      throw new Error(
+        'Candidate has no itemType and CreateDraftFromGenerationOptions.itemType was not provided',
+      );
+    }
+    const group = groups.get(type);
+    if (group) group.push(candidate);
+    else groups.set(type, [candidate]);
+  }
+  return groups;
+}
+
+// Backlog Epic/Story parent resolution (E3-S9). A Story's `parentDisplayKey`
+// out of `backlog.toCandidates` is the model's own OUTPUT-LOCAL Epic label
+// (the Epic's `displayKey` inside that one response), not a real
+// `logical_item.display_key` - `identity.matchAndPersistItems` allocates every
+// new item's real key itself (project-wide max suffix + 1, counting replaced
+// and removed items), so a label and the real key of the Epic that carried it
+// coincide only in a fresh project's first generation. On a regeneration with
+// a base version, or after a replaced draft, they drift apart - and the
+// matcher's own parent lookup (a real display_key among this draft's Epics)
+// would either throw or, worse, silently resolve a Story to a DIFFERENT Epic
+// that happens to hold the label's number as its real key (Module Boundaries
+// principle 4: a model-supplied key is never trusted as a real identity).
+//
+// The fix lives here, not in matcher.ts, for the same reason the itemType
+// split does: this is the one place that sees the epic group's results
+// (candidate order, each with its real logicalItemId) before the story group
+// runs, inside the same lock-held transaction. Epic candidates that carry an
+// `outputKey` (Candidate.outputKey, matcher.ts) get a label -> real display
+// key map built from the draft's own membership rows; Story candidates are
+// then COPIED with `parentDisplayKey` rewritten from label to that real key
+// before `matchAndPersistItems` runs for the story group (the caller's own
+// candidate objects are never mutated - a stale-generation rejection above
+// stores them verbatim as `raw_output`).
+//
+// Backwards compatible on purpose: if NO Epic candidate carries an
+// `outputKey`, this returns null and Story candidates are persisted exactly
+// as before, `parentDisplayKey` already being a real key (callers/tests that
+// pass real keys directly).
+async function resolveEpicLabels(
+  tx: Tx,
+  draftVersionId: string,
+  epicCandidates: Candidate[],
+  epicResults: { logicalItemId: string }[],
+): Promise<Map<string, string> | null> {
+  if (!epicCandidates.some((candidate) => candidate.outputKey)) return null;
+
+  const members = await getSourceVersionMembers(tx, [draftVersionId]);
+  const realKeyByLogicalItemId = new Map<string, string>();
+  for (const member of members) {
+    if (member.logicalItemId && member.displayKey) {
+      realKeyByLogicalItemId.set(member.logicalItemId, member.displayKey);
+    }
+  }
+
+  const labelToRealKey = new Map<string, string>();
+  epicCandidates.forEach((candidate, index) => {
+    if (!candidate.outputKey) return;
+    const logicalItemId = epicResults[index]?.logicalItemId;
+    const realKey = logicalItemId ? realKeyByLogicalItemId.get(logicalItemId) : undefined;
+    if (!realKey) {
+      throw new Error(
+        `Epic labelled ${candidate.outputKey} is not a member of draft ${draftVersionId}`,
+      );
+    }
+    if (labelToRealKey.has(candidate.outputKey)) {
+      throw new Error(`Two Epic candidates share the output label ${candidate.outputKey}`);
+    }
+    labelToRealKey.set(candidate.outputKey, realKey);
+  });
+  return labelToRealKey;
+}
+
+function rewriteStoryParents(
+  storyCandidates: Candidate[],
+  labelToRealKey: Map<string, string>,
+): Candidate[] {
+  return storyCandidates.map((candidate) => {
+    if (!candidate.parentDisplayKey) return candidate;
+    const realKey = labelToRealKey.get(candidate.parentDisplayKey);
+    if (!realKey) {
+      throw new Error(
+        `Story parent "${candidate.parentDisplayKey}" matches no Epic output label in this generation`,
+      );
+    }
+    return { ...candidate, parentDisplayKey: realKey };
+  });
+}
 
 async function insertGenerationContextRefs(
   tx: Tx,
@@ -102,12 +248,33 @@ export async function createDraftFromGeneration(
   // exclusively by architecture-materialization.materialize, called from
   // approveVersion (Module Boundaries 4.3's `**Rule:**`). Guard here, before
   // ever taking the lock, so a future architecture artifact-type module
-  // can't mint them early by mistake.
-  if (itemType === 'architecture_decision' && candidates.length > 0) {
+  // can't mint them early by mistake. Checked against every candidate's
+  // *effective* itemType (its own, or the default) rather than just
+  // `itemType` itself, now that a candidate may carry its own - no caller
+  // actually mixes architecture_decision with anything else, but the guard
+  // should not quietly stop working if one ever tried.
+  if (
+    candidates.some((candidate) => (candidate.itemType ?? itemType) === 'architecture_decision')
+  ) {
     throw new Error(
       'createDraftFromGeneration must not mint architecture_decision items directly - ' +
         'ADRs are materialized only at approval via architecture-materialization.materialize (ERD 5.5)',
     );
+  }
+
+  // Group candidates by effective itemType and reject anything the mint loop
+  // below could not persist - done here, before the lock is taken and before
+  // any row is written, rather than letting the loop silently skip a group
+  // whose type is not in ITEM_TYPE_MINT_ORDER (which would drop those
+  // candidates' items from the draft with no error). Also surfaces a
+  // candidate with neither its own itemType nor a default up front.
+  const candidateGroups = groupCandidatesByType(candidates, itemType);
+  for (const type of candidateGroups.keys()) {
+    if (!ITEM_TYPE_MINT_ORDER.includes(type)) {
+      throw new Error(
+        `createDraftFromGeneration cannot mint candidates of unknown itemType "${type}"`,
+      );
+    }
   }
 
   // Step 4: re-open the persist transaction under the project lock.
@@ -190,15 +357,39 @@ export async function createDraftFromGeneration(
 
     await linkGenerationRun(tx, runId, version.id);
 
-    await matchAndPersistItems(tx, {
-      draftVersionId: version.id,
-      artifactId,
-      projectId,
-      baseVersionId,
-      itemType,
-      candidates,
-      boundUpstream,
-    });
+    // Step 8 continued: mint/reuse items. One call to
+    // `identity.matchAndPersistItems` per distinct effective itemType among
+    // `candidates`, in `ITEM_TYPE_MINT_ORDER` (epic before story), all
+    // against this SAME `version.id` inside this SAME transaction - see
+    // `groupCandidatesByType`'s and `CreateDraftFromGenerationOptions.itemType`'s
+    // own doc comments for why. Every artifact type except Backlog produces
+    // exactly one group here (unchanged from a single direct call).
+    //
+    // Between the epic group and the story group, Story `parentDisplayKey`
+    // values that are model-supplied Epic labels are rewritten to the real
+    // display keys just allocated/reused for those Epics - see
+    // `resolveEpicLabels`'s own comment. `epicLabelToRealKey` stays null
+    // (no rewrite) unless an Epic candidate carried an `outputKey`.
+    let epicLabelToRealKey: Map<string, string> | null = null;
+    for (const type of ITEM_TYPE_MINT_ORDER) {
+      const group = candidateGroups.get(type);
+      if (!group?.length) continue;
+      const results = await matchAndPersistItems(tx, {
+        draftVersionId: version.id,
+        artifactId,
+        projectId,
+        baseVersionId,
+        itemType: type,
+        candidates:
+          type === 'story' && epicLabelToRealKey
+            ? rewriteStoryParents(group, epicLabelToRealKey)
+            : group,
+        boundUpstream,
+      });
+      if (type === 'epic') {
+        epicLabelToRealKey = await resolveEpicLabels(tx, version.id, group, results);
+      }
+    }
 
     await insertGenerationContextRefs(tx, version.id, contextSourceVersionIds);
 

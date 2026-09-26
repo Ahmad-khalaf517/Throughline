@@ -3,6 +3,7 @@ export {
   resolveDisplayKeys,
   getSourceVersionMembers,
   getCurrentItemVersionIds,
+  getUpstreamDependencies,
 } from './references';
 export { copyMembership } from './copy-membership';
 export {

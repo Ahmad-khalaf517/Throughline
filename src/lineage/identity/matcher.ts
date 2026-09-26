@@ -11,8 +11,50 @@ export type Candidate = {
   previousDisplayKey?: string | null;
   payload: Record<string, unknown>;
   upstreamRefs: string[];
+  // What `matchAndPersistItems` itself accepts here is a REAL, already-
+  // allocated `logical_item.display_key` of an Epic that is a member of the
+  // draft it is persisting into (see the parent-resolution block below) - it
+  // never sees, and never trusts, a model-supplied label (Module Boundaries
+  // principle 4). A caller whose Story parent is instead the model's own
+  // output-local Epic label (backlog) sets `outputKey` on its Epic
+  // candidates (below) and lets artifact-lifecycle/generation.ts rewrite
+  // this field from label to real key after the Epics are persisted.
   parentDisplayKey?: string | null;
   position?: number | null;
+  // Added by E3-S9 (SCRUM-44), purely additive and optional: an OUTPUT-LOCAL
+  // label for this candidate - the display key the model itself gave this
+  // item in its own response (backlog's Epic `displayKey`), which is only
+  // meaningful inside that one response (a Story's parentDisplayKey names
+  // it). It is NOT the item's real `display_key`: this file always
+  // allocates a new item's real key itself (project-wide max suffix + 1,
+  // counting replaced/removed items too), so a label and the key eventually
+  // allocated coincide only by luck (a fresh project's first generation) and
+  // drift apart on any regeneration or replaced draft. Read ONLY by
+  // artifact-lifecycle/generation.ts, which uses it to translate each Story's
+  // label-valued `parentDisplayKey` into the real key of the Epic that carried
+  // that label - never by this file, and never persisted anywhere.
+  outputKey?: string;
+  // Added by E3-S9 (SCRUM-44), purely additive and optional - every existing
+  // caller (requirements/architecture/ui-requirements' own toCandidates)
+  // never sets this, so `MatchOptions.itemType` (below) remains the only
+  // item type for their calls, unchanged. `backlog` is the one artifact type
+  // that mints two item types (`epic` and `story`) into the SAME draft
+  // artifact_version in one generation (ERD 3.3 step 5: "insert membership -
+  // Epic rows before their Stories, the parent FK is not deferrable"), and
+  // `createDraftFromGeneration`'s own `itemType: ItemType` option is a single
+  // value per call (Module Boundaries 4.3's documented shape, as already
+  // implemented). This file is NOT the place that reads this field - it is
+  // read only by artifact-lifecycle/generation.ts, which groups candidates
+  // by it (falling back to the single `MatchOptions.itemType` when absent)
+  // and calls this module's own `matchAndPersistItems` once per group, in a
+  // fixed epic-before-story order, all inside the same already-open,
+  // lock-held transaction/draftVersionId - see that file's own comment for
+  // the full reasoning. Doing the split there, rather than teaching this
+  // function to accept a mixed-type candidate batch, keeps every statement
+  // below that assumes one `itemType` per call (the prefix/artifactType/
+  // allowedUpstream lookups, the historicalKeys allocator, ...) correct
+  // without restructuring this already-implemented, higher-risk module.
+  itemType?: ItemType;
 };
 
 type MatchOptions = {
