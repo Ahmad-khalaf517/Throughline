@@ -190,6 +190,34 @@ function createOctokitClient(): Octokit {
     // never automatic." @octokit/plugin-retry's automatic backoff-and-retry
     // on 5xx/network errors would silently violate that from underneath
     // this module - disabled for the same reason the spike disabled it.
+    throttle: { enabled: false },
+    // Same ERD 7.2 rule, same violation, a DIFFERENT plugin: the `octokit`
+    // "batteries-included" package also bundles @octokit/plugin-throttling,
+    // enabled by default, which (a) retries automatically on 403/429 via its
+    // own `onRateLimit`/`onSecondaryRateLimit` handlers - independent of
+    // `retry` above, so disabling only `retry` leaves this exact same
+    // "never automatic" rule violated through a second door - and (b), found
+    // empirically while diagnosing this story's own T11b/T11d order-
+    // dependent test timeouts: it routes every non-GET/HEAD request through
+    // a Bottleneck rate limiter keyed by a constant `id: "no-id"`
+    // (@octokit/plugin-throttling's own default), backed by a MODULE-SCOPE
+    // singleton `Bottleneck.Group` (dist-src/index.js's top-level `groups`
+    // object) that is shared across every `Octokit` instance in the process
+    // for its entire lifetime - i.e. across every `createOctokitClient()`
+    // call this module ever makes, test or production alike. That limiter
+    // tracks its own "next allowed request" time using `Date.now()`; a test
+    // that fakes `Date` forward (this file's own
+    // `withClockAdvancedPastThreshold`, needed to simulate ERD 7.2's
+    // reconciliation threshold T without a real 90s wait) corrupts that
+    // shared clock state for the rest of the process, not just the current
+    // test - the NEXT real Octokit network call anywhere in the file then
+    // blocks in REAL wall-clock time until the bogus future timestamp
+    // elapses (confirmed by a standalone repro: ~95s real delay on the very
+    // next write call after a +95s `Date` jump, with throttling enabled;
+    // zero delay with it disabled). `throttle: { enabled: false }` removes
+    // both problems at once - no hidden cross-instance queue, no automatic
+    // retry-on-throttle underneath a module whose own header comment
+    // already promises neither.
   });
 }
 

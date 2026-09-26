@@ -616,11 +616,22 @@ describe('github (E4-S2 / SCRUM-51)', () => {
 
       const drift = await github.checkDrift(refId);
       // Exactly one row (checkDrift's own return type is singular, not a
-      // list) with depth 0 - direct (adr1/adr3) beats transitive (adr2).
+      // list), rooted at r07's obsolete v1 (A) - direct (adr1/adr3) beats
+      // transitive (adr2) among the THREE ADRs' own item-level depths, but
+      // the ref's own depth is one hop further than whichever ADR it wins
+      // through: `impact()`'s `ref_raw` CTE (drizzle/migrations/0005_impact_
+      // function.sql) always adds +1 to a source item's own depth for a ref
+      // whose cited item is itself still current (i.e. its identity didn't
+      // change - only what it depends on did); depth 0 for a ref is reserved
+      // for the case where the ref's OWN cited item_version is the obsolete
+      // one (T13's scenario). ERD section 6.3's own results table pins this
+      // exact fixture down verbatim: "T17 - one ref, three ADRs, one
+      // obsolete root | Exactly one ref row, depth 1" (line ~1657) - this
+      // was the test's own bug (E4-S2 fixed it here), not `checkDrift`'s.
       expect(drift).toMatchObject({
         subjectKind: 'external_ref',
         rootItemVersionId: r07.itemVersionId,
-        depth: 0,
+        depth: 1,
       });
     });
   });
