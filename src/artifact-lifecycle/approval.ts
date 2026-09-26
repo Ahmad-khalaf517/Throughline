@@ -1,7 +1,8 @@
 import { and, eq } from 'drizzle-orm';
-import { db, schema, withProjectLock } from '@/db';
+import { db, schema, withProjectLock, type Tx } from '@/db';
 import { acknowledgeGateBlockers, evaluateGate, type ImpactRow } from '@/lineage/impact';
 import { getSourceVersionMembers } from '@/lineage/identity';
+import { loadArchitectureDraftContext, type ArchitectureDraftContext } from './architecture';
 
 class GateBlocked extends Error {
   constructor(readonly blocking: ImpactRow[]) {
@@ -9,21 +10,33 @@ class GateBlocked extends Error {
   }
 }
 
-export class ArchitectureMaterializationUnavailableError extends Error {
-  constructor() {
-    super('Architecture approval requires selected-option materialization before the gate');
-    this.name = 'ArchitectureMaterializationUnavailableError';
+type ArchitectureApprovalCode =
+  'OPTION_NOT_SELECTED' | 'OPTION_COUNT_INVALID' | 'STACK_UNCHANGED_DECISIONS';
+
+class ArchitectureApprovalBlocked extends Error {
+  constructor(readonly code: ArchitectureApprovalCode) {
+    super(code);
   }
 }
 
-export type ApproveVersionResult = { ok: true } | { ok: false; blocking: ImpactRow[] };
+export interface ArchitectureApproval {
+  selectedOptionId: string | undefined;
+  materialize: (
+    tx: Tx,
+    context: ArchitectureDraftContext & { selectedOptionId: string },
+  ) => Promise<{ ok: true } | { ok: false; code: ArchitectureApprovalCode }>;
+}
+
+export type ApproveVersionResult =
+  { ok: true } | { ok: false; blocking: ImpactRow[]; code?: ArchitectureApprovalCode };
 
 /** ERD 3.4 approval transaction and FR-083 currentness gate. */
 export async function approveVersion(
   versionId: string,
   actorId: string,
+  architecture?: ArchitectureApproval,
 ): Promise<ApproveVersionResult> {
-  return approveVersionInternal(versionId, actorId);
+  return approveVersionInternal(versionId, actorId, undefined, architecture);
 }
 
 /** ERD 3.5 / FR-084: satisfy the recomputed gate with cause-specific acknowledgements. */
@@ -31,10 +44,11 @@ export async function approveWithOverride(
   versionId: string,
   actorId: string,
   note: string,
-): Promise<{ ok: true }> {
+  architecture?: ArchitectureApproval,
+): Promise<ApproveVersionResult> {
   if (!note.trim()) throw new Error('override note must be non-empty');
-  const result = await approveVersionInternal(versionId, actorId, note);
-  if (!result.ok) throw new GateBlocked(result.blocking);
+  const result = await approveVersionInternal(versionId, actorId, note, architecture);
+  if (!result.ok && !result.code) throw new GateBlocked(result.blocking);
   return result;
 }
 
@@ -42,6 +56,7 @@ async function approveVersionInternal(
   versionId: string,
   actorId: string,
   overrideNote?: string,
+  architecture?: ArchitectureApproval,
 ): Promise<ApproveVersionResult> {
   const [target] = await db
     .select({ projectId: schema.artifact.projectId })
@@ -72,11 +87,18 @@ async function approveVersionInternal(
         throw new Error(`artifact_version ${versionId} is not a draft`);
       }
 
-      // E3-S3 supplies the selected option and materializes its ADRs before
-      // this gate. Approving without that step would make impact() inspect an
-      // empty candidate and silently bypass FR-083.
+      // The architecture facade supplies its peer's callback; lifecycle alone
+      // owns the lock, rollback, gate, acknowledgements and status transition.
       if (draft.type === 'architecture') {
-        throw new ArchitectureMaterializationUnavailableError();
+        if (!architecture?.selectedOptionId)
+          throw new ArchitectureApprovalBlocked('OPTION_NOT_SELECTED');
+        const result = await architecture.materialize(tx, {
+          ...(await loadArchitectureDraftContext(tx, versionId)),
+          selectedOptionId: architecture.selectedOptionId,
+        });
+        if (!result.ok) throw new ArchitectureApprovalBlocked(result.code);
+      } else if (architecture) {
+        throw new Error('Architecture selection requires an architecture draft');
       }
 
       const members = await getSourceVersionMembers(tx, [versionId]);
@@ -107,7 +129,12 @@ async function approveVersionInternal(
         );
       await tx
         .update(schema.artifactVersion)
-        .set({ status: 'approved' })
+        .set({
+          status: 'approved',
+          ...(draft.type === 'architecture'
+            ? { selectedArchitectureOptionId: architecture!.selectedOptionId! }
+            : {}),
+        })
         .where(eq(schema.artifactVersion.id, versionId));
       await tx.insert(schema.approvalEvent).values({
         artifactVersionId: versionId,
@@ -120,6 +147,8 @@ async function approveVersionInternal(
     });
   } catch (error) {
     if (error instanceof GateBlocked) return { ok: false, blocking: error.blocking };
+    if (error instanceof ArchitectureApprovalBlocked)
+      return { ok: false, blocking: [], code: error.code };
     throw error;
   }
 }

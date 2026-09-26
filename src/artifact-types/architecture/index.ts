@@ -29,3 +29,44 @@ export {
   type SelectedArchitectureOption,
   type ArchitectureDecisionItem,
 } from '@/architecture-materialization';
+
+import {
+  createOptions as persistOptions,
+  selectOption as validateSelection,
+  materialize,
+  type OptionInput,
+} from '@/architecture-materialization';
+import {
+  withArchitectureDraft,
+  approveVersion as approve,
+  approveWithOverride as override,
+} from '@/artifact-lifecycle';
+
+export { ArchitectureOptionError, type OptionInput } from '@/architecture-materialization';
+
+// Composition only: layer-2 peers never import each other. Lifecycle supplies
+// its locked transaction/metadata; materialization owns the option writes.
+export function createOptions(draftVersionId: string, options: [OptionInput, OptionInput]) {
+  return withArchitectureDraft(draftVersionId, (tx, context) =>
+    persistOptions(tx, context, options),
+  );
+}
+
+export async function selectOption(draftVersionId: string, optionId: string): Promise<void> {
+  await withArchitectureDraft(draftVersionId, (tx) =>
+    validateSelection(tx, draftVersionId, optionId),
+  );
+}
+
+export function approveVersion(versionId: string, actorId: string, selectedOptionId?: string) {
+  return approve(versionId, actorId, { selectedOptionId, materialize });
+}
+
+export function approveWithOverride(
+  versionId: string,
+  actorId: string,
+  note: string,
+  selectedOptionId?: string,
+) {
+  return override(versionId, actorId, note, { selectedOptionId, materialize });
+}

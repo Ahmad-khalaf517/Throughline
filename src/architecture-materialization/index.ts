@@ -6,19 +6,27 @@
 // Nothing outside this folder may import a file that is not re-exported here
 // (Module Boundaries section 7).
 //
-// createOptions/selectOption/materialize (the real write side - Module
-// Boundaries 4.9, TR FR-020..022) are E3-S3's job and do NOT exist yet. The
-// two read-only getters below are pulled forward by E4-S2 (SCRUM-51)
+// The option write side implements Module Boundaries 4.9 / FR-020..022.
+// The two read-only getters below were pulled forward by E4-S2 (SCRUM-51)
 // because `github.previewInit`/`initRepo` cannot function without them:
 // FR-031's scaffold-vs-docs-only decision needs the selected option's stack
 // descriptor, and FR-033/034 needs the ADR item versions an Architecture
 // version actually materialized. Both are PURE reads through this module's
 // own owned table (architecture_option) plus one documented cross-layer
 // read (see below) - neither one is a write path, a state-machine
-// transition, or anything E3-S3 will need to touch or conflict with.
+// transition.
 import { eq } from 'drizzle-orm';
 import { db, schema, withTx } from '@/db';
 import { getSourceVersionMembers } from '@/lineage/identity';
+
+export {
+  createOptions,
+  selectOption,
+  materialize,
+  ArchitectureOptionError,
+  type OptionInput,
+  type ArchitectureApprovalCode,
+} from './materialize';
 
 export type ArchitectureOption = typeof schema.architectureOption.$inferSelect;
 
@@ -88,7 +96,7 @@ export type ArchitectureDecisionItem = Awaited<ReturnType<typeof getSourceVersio
  * ONE documented exception allowed to call into `identity`
  * (Module Boundaries section 2: "architecture-materialization (layer 2)
  * calls into identity (layer 1)"), reused here for a read the same way it's
- * already used for writes elsewhere (E3-S3, not yet built). Every member of
+ * used for selected-option materialization. Every member of
  * an Architecture artifact_version is, by construction, an
  * `architecture_decision` item (an artifact only ever holds items of its
  * own type) - no extra item_type filter is needed.

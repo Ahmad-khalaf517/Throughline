@@ -502,13 +502,15 @@ describe('approveVersion (ERD 3.4/6.5; FR-083)', () => {
     });
   });
 
-  it('refuses Architecture while selected-option materialization is unavailable', async () => {
+  it('T9: refuses Architecture without a selected option and materialization callback', async () => {
     const { projectId, userId } = await fx.createProjectWithOwner(sql);
     const artifactId = await fx.createArtifact(sql, projectId, 'architecture');
     const draft = await fx.createDraftArtifactVersion(sql, artifactId);
-    await expect(lifecycle.approveVersion(draft, userId)).rejects.toBeInstanceOf(
-      lifecycle.ArchitectureMaterializationUnavailableError,
-    );
+    expect(await lifecycle.approveVersion(draft, userId)).toEqual({
+      ok: false,
+      blocking: [],
+      code: 'OPTION_NOT_SELECTED',
+    });
     expect(await status(draft)).toBe('draft');
   });
 });
