@@ -48,9 +48,23 @@ type SendResult = {
   metadata?: unknown;
 };
 
+// Module Boundaries 4.5 literally documents only the first two variants.
+// `{ found: 'foreign' }` is an additive third variant, added by E4-S2
+// (SCRUM-51) per the E4-T1 spike's own flagged INTERFACE_GAP_FINDING
+// (scripts/spike-github-reconciliation.mts, ~line 529): ERD 7.3/TR 30.1's
+// GitHub case - "existing repo without our marker -> that operation ends
+// `failed` (`name_taken_by_other`), a definitive outcome" - has no slot in
+// the original two-variant union. Without it, a provider's `reconcile()`
+// can only report "found and ours" or "not found (yet)" - a definitively
+// foreign object at the deterministic target is indistinguishable from
+// "keep waiting", so the operation would stay `reconciliation_required`
+// forever (see `reconcileAndFinalize` below, and this story's own Jira
+// summary). This is additive only: every existing caller that never
+// returns `'foreign'` is unaffected.
 type ReconcileResult =
   | { found: true; externalId: string; externalKey?: string; externalUrl?: string }
-  | { found: false };
+  | { found: false }
+  | { found: 'foreign' };
 
 // Module Boundaries 4.5's exported interface, verbatim except `provider`
 // pulled out to the named `ExternalProvider` union above.
@@ -389,6 +403,21 @@ async function reconcileAndFinalize(
   opts: RunOperationOptions,
 ): Promise<RunOperationResult> {
   const result = await opts.reconcile();
+  if (result.found === 'foreign') {
+    // ERD 7.3/TR 30.1: "exists without the marker, it belongs to someone
+    // else: the operation fails definitively" - the same `failed` +
+    // `errorMessage` finalization `sendAndFinalize` already uses for a
+    // `DefinitiveProviderError` from `send()`, so both paths to
+    // `name_taken_by_other` (an immediate 422 at send() time, or a later
+    // marker mismatch discovered here after an ambiguous send()) leave the
+    // row in the identical shape.
+    const errorMessage = 'name_taken_by_other';
+    await db
+      .update(schema.externalOperation)
+      .set({ status: 'failed', errorMessage })
+      .where(eq(schema.externalOperation.id, operationId));
+    return { status: 'failed', errorMessage };
+  }
   if (!result.found) {
     return { status: 'reconciliation_required' };
   }
@@ -456,6 +485,27 @@ export async function getRefForItem(sourceItemVersionId: string): Promise<Extern
     .select()
     .from(schema.externalRef)
     .where(eq(schema.externalRef.sourceItemVersionId, sourceItemVersionId))
+    .limit(1);
+  return ref ?? null;
+}
+
+/**
+ * One `external_ref` by its own id, or `null`. Not part of Module Boundaries
+ * 4.5's originally documented export list - added by E4-S2 (SCRUM-51)
+ * because `github.checkDrift(refId)` (Module Boundaries 4.6) is only ever
+ * given a bare `refId` and needs to resolve its `projectId` before it can
+ * call `impact.getExternalDrift(projectId, refId)` (that function's own
+ * signature requires both). `getRefsForVersion`/`getRefForItem` both need an
+ * artifact-version or item-version id already in hand, neither of which a
+ * drift check starts from - this is the narrow, additive read that closes
+ * that gap, not a new write path or a redesign of this module's table
+ * ownership.
+ */
+export async function getRefById(refId: string): Promise<ExternalRef | null> {
+  const [ref] = await db
+    .select()
+    .from(schema.externalRef)
+    .where(eq(schema.externalRef.id, refId))
     .limit(1);
   return ref ?? null;
 }
