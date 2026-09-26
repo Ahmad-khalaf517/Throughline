@@ -1308,13 +1308,9 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // Turns green with E2-S9 and E3-T1 (see T22).
   it.todo('T23');
 
-  // T24 - Manually edit a draft Story that is bound to an obsolete upstream
-  // version; confirm the shown rebinding.
-  // Expected: new ItemVersion with proposed_by='user' edges to the current
-  // upstream; no longer flagged; without confirmation, nothing is saved.
-  // Turns green with E2-S9 (identity/rebinding mechanics) and E3-T1 (the
-  // manual-revision workflow it's part of).
-  it.todo('T24');
+  // T24 - E3-S5 covers manual Story editing, rollback, confirmed user edges
+  // to current upstream versions, and cleared candidate impact in
+  // tests/integration/artifact-lifecycle-item-edit.test.ts.
 
   // T25 - Insert a dependency cycle directly (bypassing the app) and call
   // impact().

@@ -6,6 +6,12 @@ export {
 } from './references';
 export { copyMembership } from './copy-membership';
 export {
+  rebindDraftItem,
+  ItemEditError,
+  type RebindDiff,
+  type RebindDraftItemResult,
+} from './rebind';
+export {
   semanticHash,
   semanticProjection,
   contentOnlyProjection,
