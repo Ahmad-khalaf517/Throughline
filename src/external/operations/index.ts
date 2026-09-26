@@ -13,7 +13,7 @@
 // Boundaries 4.5's own "Rule"). This story (Jira SCRUM-48 / E4-S1) builds
 // only 7.1/7.2; 7.3 (GitHub), 7.4 (Jira) and 7.5 (Stitch) reconciliation
 // mechanics belong to their own provider modules in later stories.
-import { and, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, ne, sql } from 'drizzle-orm';
 import { db, schema, withTx } from '@/db';
 
 export type ExternalRef = typeof schema.externalRef.$inferSelect;
@@ -508,4 +508,43 @@ export async function getRefById(refId: string): Promise<ExternalRef | null> {
     .where(eq(schema.externalRef.id, refId))
     .limit(1);
   return ref ?? null;
+}
+
+/**
+ * Every `external_ref` for one LogicalItem, across every ItemVersion it has
+ * ever had, for one provider - most-recently-created first. Added by E4-S3
+ * (SCRUM-52): ERD 7.4's Jira parent-resolution rule ("otherwise the most
+ * recent Jira ref of any ItemVersion of that Epic LogicalItem in the
+ * configured project") and its own FR-074-extended re-export-decision check
+ * both need to look PAST the one exact ItemVersion `getRefForItem` is keyed
+ * to, across every version a LogicalItem has ever had - `getRefForItem`
+ * only ever answers "does THIS EXACT item_version have a ref", the wrong
+ * question for both of those. `jira` (the only caller so far - GitHub/Stitch
+ * refs never set `source_item_version_id`) is responsible for filtering the
+ * result down to its own currently-configured Jira project (this table has
+ * no `jira_project_key` column of its own - see that module's own comment on
+ * why it reads `metadata` instead); this function stays provider-generic and
+ * project-agnostic, same as `getRefsForVersion`/`getRefForItem` above. A
+ * narrow, additive read through this module's own owned table (`external_ref`,
+ * joined read-only to `item_version` to filter by `logical_item_id`) - not a
+ * new write path, same justification as `getRefById` (E4-S2).
+ */
+export async function getRefsForLogicalItem(
+  logicalItemId: string,
+  provider: ExternalProvider,
+): Promise<ExternalRef[]> {
+  return db
+    .select(getTableColumns(schema.externalRef))
+    .from(schema.externalRef)
+    .innerJoin(
+      schema.itemVersion,
+      eq(schema.itemVersion.id, schema.externalRef.sourceItemVersionId),
+    )
+    .where(
+      and(
+        eq(schema.itemVersion.logicalItemId, logicalItemId),
+        eq(schema.externalRef.provider, provider),
+      ),
+    )
+    .orderBy(desc(schema.externalRef.createdAt));
 }

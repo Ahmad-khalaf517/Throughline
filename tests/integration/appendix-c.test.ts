@@ -1008,7 +1008,12 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
 
   // T12 - S-12 changes after THR-42 exists, then export.
   // Expected: Skip / Create New prompt; no update, no silent duplicate.
-  // Turns green with E4-T3.
+  // E4-S3 (SCRUM-52) proves this for real at the module level - see
+  // tests/integration/external/jira.test.ts's own T12 describe block
+  // (`jira.previewExport`/`exportBacklog` against a fake Jira). Kept
+  // `it.todo` here, same deferral pattern E4-S2 established for T11/T13/
+  // T17/T18: E4-T3 (the slice-4 gate) is what closes T12 through the real
+  // API routes end to end, not this file.
   it.todo('T12');
 
   // T13 - Architecture re-approved with no ADR change; then with a changed
@@ -1321,7 +1326,10 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // project in between.
   // Expected: second export creates new operations (target-specific keys);
   // no completed operation is reused for the new target.
-  // Turns green with E4-T3.
+  // E4-S3 (SCRUM-52) proves this for real at the module level - see
+  // tests/integration/external/jira.test.ts's own T26 describe block. Kept
+  // `it.todo` here (same deferral pattern as T12 above); E4-T3 re-runs it
+  // through the real API routes.
   it.todo('T26');
 
   // T27 - real, passing this slice (E1-S5's Definition of Done).
@@ -1679,7 +1687,10 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // Expected: the Skip / Create New prompt appears for the Epic; no second
   // Jira Epic is created; its Stories are parented to the existing Jira
   // Epic of E-01.
-  // Turns green with E4-T3.
+  // E4-S3 (SCRUM-52) proves this for real at the module level - see
+  // tests/integration/external/jira.test.ts's own T41 describe block. Kept
+  // `it.todo` here (same deferral pattern as T12/T26 above); E4-T3 re-runs
+  // it through the real API routes.
   it.todo('T41');
 
   // T42 - Preview a Jira export whose Stories include a flagged Story.

@@ -24,6 +24,17 @@ export async function resolveDisplayKeys(
   return resolved;
 }
 
+// `itemType`/`parentLogicalItemId` were added by E4-S3 (SCRUM-52): `jira`
+// (Module Boundaries 4.6) needs to tell Epics from Stories and resolve a
+// Story's Epic parent within one captured Backlog version (ERD 7.4), and
+// this shared read already joins `logical_item` and
+// `artifact_version_item_membership` - the two columns' own owning tables.
+// Purely additive: every existing call site (artifact-lifecycle/approval.ts,
+// artifact-lifecycle/generation.ts, architecture-materialization, this
+// module's own dependency-binding.bindUpstreamRefs) only ever destructures
+// the fields it already used, so two more columns on the same rows change
+// nothing for them - confirmed by reading every call site before adding
+// these.
 export async function getSourceVersionMembers(tx: Tx, sourceVersionIds: string[]) {
   const uniqueSourceVersionIds = [...new Set(sourceVersionIds)];
   if (!uniqueSourceVersionIds.length) return [];
@@ -36,6 +47,8 @@ export async function getSourceVersionMembers(tx: Tx, sourceVersionIds: string[]
       logicalItemId: schema.artifactVersionItemMembership.logicalItemId,
       itemVersionId: schema.artifactVersionItemMembership.itemVersionId,
       displayKey: schema.logicalItem.displayKey,
+      itemType: schema.logicalItem.itemType,
+      parentLogicalItemId: schema.artifactVersionItemMembership.parentLogicalItemId,
     })
     .from(schema.artifactVersion)
     .innerJoin(schema.artifact, eq(schema.artifactVersion.artifactId, schema.artifact.id))
