@@ -43,8 +43,13 @@ import { eq } from 'drizzle-orm';
 import { env } from '@/lib/env';
 import { db, schema } from '@/db';
 import { getStorageServiceClient } from '@/auth';
-import { runOperation, DefinitiveProviderError, type ExternalRef } from '@/external/operations';
-import { getWarnings, type ImpactRow } from '@/lineage/impact';
+import {
+  runOperation,
+  getRefById,
+  DefinitiveProviderError,
+  type ExternalRef,
+} from '@/external/operations';
+import { getWarnings, getExternalDrift, type ImpactRow } from '@/lineage/impact';
 import {
   getUiRequirementsForPrompt,
   type UiRequirementItemForPrompt,
@@ -577,4 +582,27 @@ export async function getSignedAssetUrls(
     sign(output.screenshotStorageKey),
   ]);
   return { htmlUrl, screenshotUrl };
+}
+
+// ---------------------------------------------------------------------------
+// Drift - the missing counterpart to `github.checkDrift` (Module Boundaries
+// 4.6). Added by E4-S6 (SCRUM-55): API Contracts section 7's
+// `GET .../external-refs` calls `impact.getExternalDrift` per ref, but
+// `eslint.config.mjs`'s `layer6-api` allow-list has no `layer1-impact` entry
+// - a route handler cannot call it directly. `github.checkDrift` is already
+// the documented layer-5 delegator for exactly this case; `stitch` was
+// simply missing its own copy. Byte-for-byte the same shape: resolve `refId`
+// -> `projectId` via `external-operations.getRefById` (this module never
+// queries `external_ref` itself, Module Boundaries 4.5), then delegate
+// entirely to `impact.getExternalDrift` - the one impact engine (INV-025),
+// no separate Stitch-specific staleness logic. `null` both when the ref
+// doesn't exist and when it has no drift - a manual-fallback Stitch output
+// has no `external_ref` row to begin with, so it never reaches this
+// function with a real id in the first place.
+// ---------------------------------------------------------------------------
+
+export async function checkDrift(refId: string): Promise<ImpactRow | null> {
+  const ref = await getRefById(refId);
+  if (!ref) return null;
+  return getExternalDrift(ref.projectId, refId);
 }

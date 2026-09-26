@@ -37,10 +37,11 @@ import { env } from '@/lib/env';
 import {
   runOperation,
   getRefsForLogicalItem,
+  getRefById,
   DefinitiveProviderError,
   type ExternalRef,
 } from '@/external/operations';
-import { getWarnings, type ImpactRow } from '@/lineage/impact';
+import { getWarnings, getExternalDrift, type ImpactRow } from '@/lineage/impact';
 import { getBacklogVersionMembers, type BacklogVersionMember } from '@/artifact-types/backlog';
 
 // ---------------------------------------------------------------------------
@@ -628,4 +629,24 @@ export async function exportBacklog(
   }
 
   return created;
+}
+
+// ---------------------------------------------------------------------------
+// Drift - the missing counterpart to `github.checkDrift` (Module Boundaries
+// 4.6). Added by E4-S6 (SCRUM-55): API Contracts section 7's
+// `GET .../external-refs` calls `impact.getExternalDrift` per ref, but
+// `eslint.config.mjs`'s `layer6-api` allow-list has no `layer1-impact` entry
+// - a route handler cannot call it directly. `github.checkDrift` is already
+// the documented layer-5 delegator for exactly this case; `jira` was simply
+// missing its own copy. Byte-for-byte the same shape: resolve `refId` ->
+// `projectId` via `external-operations.getRefById` (this module never
+// queries `external_ref` itself, Module Boundaries 4.5), then delegate
+// entirely to `impact.getExternalDrift` - the one impact engine (INV-025),
+// no separate Jira-specific staleness logic.
+// ---------------------------------------------------------------------------
+
+export async function checkDrift(refId: string): Promise<ImpactRow | null> {
+  const ref = await getRefById(refId);
+  if (!ref) return null;
+  return getExternalDrift(ref.projectId, refId);
 }

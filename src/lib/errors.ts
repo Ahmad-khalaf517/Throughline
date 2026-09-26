@@ -6,13 +6,34 @@ import { NextResponse } from 'next/server';
 // Subset of API Contracts section 11 wired up so far. A later story adds a
 // code here in the same change that starts throwing it - this union is not
 // meant to get ahead of what's actually implemented.
-export type ErrorCode = 'VALIDATION_ERROR' | 'UNAUTHENTICATED' | 'NOT_FOUND' | 'BRIEF_FROZEN';
+//
+// The six codes below `BRIEF_FROZEN` are E4-S6's own addition (API Contracts
+// sections 7-10): exactly the codes the external-refs/GitHub/Jira/Stitch
+// routes actually throw, no more (`APPROVAL_BLOCKED`, `OPTION_NOT_SELECTED`,
+// etc. belong to routes this story doesn't build).
+export type ErrorCode =
+  | 'VALIDATION_ERROR'
+  | 'UNAUTHENTICATED'
+  | 'NOT_FOUND'
+  | 'BRIEF_FROZEN'
+  | 'PREREQUISITE_NOT_APPROVED'
+  | 'IMPACT_NOT_ACKNOWLEDGED'
+  | 'GITHUB_ALREADY_INITIALIZED'
+  | 'NAME_TAKEN_BY_OTHER'
+  | 'ALREADY_GENERATED'
+  | 'REQUEST_CONFLICT';
 
 const STATUS_BY_CODE: Record<ErrorCode, number> = {
   VALIDATION_ERROR: 400,
   UNAUTHENTICATED: 401,
   NOT_FOUND: 404,
   BRIEF_FROZEN: 409,
+  PREREQUISITE_NOT_APPROVED: 409,
+  IMPACT_NOT_ACKNOWLEDGED: 409,
+  GITHUB_ALREADY_INITIALIZED: 409,
+  NAME_TAKEN_BY_OTHER: 409,
+  ALREADY_GENERATED: 409,
+  REQUEST_CONFLICT: 409,
 };
 
 // The one error shape every route handler throws and every response maps

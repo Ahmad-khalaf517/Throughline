@@ -568,3 +568,98 @@ export async function getRefsForLogicalItem(
     )
     .orderBy(desc(schema.externalRef.createdAt));
 }
+
+export type ExternalOperation = typeof schema.externalOperation.$inferSelect;
+
+/**
+ * One `external_operation` by its own id, or `null`. Added by E4-S6
+ * (SCRUM-55): `GET /api/external-operations/:operationId` (API Contracts
+ * section 7, the polling target) and `POST .../retry` both start from a bare
+ * `operationId` path param and need to resolve its `projectId` before
+ * `requireProjectOwner` can even run (API Contracts 1.4's "resolve to its
+ * project first") - the same shape of gap `getRefById` (E4-S2) closed for
+ * `external_ref`, mirrored here for `external_operation`. Layer 6 (`api`)
+ * cannot read `external_operation` itself (it owns no table and may not
+ * import `db`, Module Boundaries 4.7), so this is the narrow, additive read
+ * that makes both routes possible - not a new write path.
+ */
+export async function getOperationById(operationId: string): Promise<ExternalOperation | null> {
+  const [row] = await db
+    .select()
+    .from(schema.externalOperation)
+    .where(eq(schema.externalOperation.id, operationId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Every `external_operation` row for one artifact version and provider,
+ * most-recently-updated first (same "most recent first" convention as
+ * `getRefsForLogicalItem`, but ordered by `updatedAt` rather than
+ * `createdAt` - a row's status transitions, not its creation time, are what
+ * make one row "the current one" here). Added by E4-S6 (SCRUM-55) for two
+ * distinct call sites:
+ *  - `POST .../github/init` and `POST .../stitch/generate`: when `initRepo`/
+ *    `generate` throws `*ReconciliationRequiredError`/`*OperationInFlightError`,
+ *    the route's documented `202 { status, operationId }` response (API
+ *    Contracts section 8/10) needs that operation's own id, which those
+ *    thrown errors carry only as an internal `operationKey` string, never a
+ *    database id (Module Boundaries 4.6's own signatures return `ExternalRef`
+ *    or throw, never the operation row). Filtering this list to
+ *    `status !== 'completed'` finds it - GitHub's own project-exclusivity
+ *    rule (ERD 4.15) and Stitch's one-operation-per-version key mean at most
+ *    one such row exists per (version, provider) pair at a time.
+ *  - `POST .../jira/export`: re-derives its `failures` field from the
+ *    durable `external_operation` rows plus the preview list, per
+ *    `jira.exportBacklog`'s own doc comment ("a future route... re-derives
+ *    skipped/failures from those rows... not from a redesign of this
+ *    signature") - a Backlog export's `sourceArtifactVersionId` is the same
+ *    Backlog version for every one of its ~13 Epic/Story operations (ERD
+ *    7.1), so this one call surfaces all of them at once.
+ *
+ * A precise, version+provider-scoped read - deliberately narrower than a
+ * "latest operation for the whole project" scan, which would also have to
+ * filter by target/item afterward anyway.
+ */
+export async function getOperationsForVersion(
+  sourceArtifactVersionId: string,
+  provider: ExternalProvider,
+): Promise<ExternalOperation[]> {
+  return db
+    .select()
+    .from(schema.externalOperation)
+    .where(
+      and(
+        eq(schema.externalOperation.sourceArtifactVersionId, sourceArtifactVersionId),
+        eq(schema.externalOperation.provider, provider),
+      ),
+    )
+    .orderBy(desc(schema.externalOperation.updatedAt));
+}
+
+/**
+ * `itemVersionId -> logical_item.display_key` for a batch of item versions.
+ * Added by E4-S6 (SCRUM-55): `ImpactRowDTO.rootDisplayKey`/`.path` (API
+ * Contracts 1.8) are display keys, but `lineage/impact`'s
+ * `ImpactRow.rootItemVersionId`/`.path` are `item_version` ids (that
+ * module's own `path` comment) - something has to resolve one to the other,
+ * and `lib/serialize.ts`'s `toImpactRowDTO` is deliberately pure (no DB
+ * access, this file's header rule), so the resolution happens here instead,
+ * as one batched read a route calls once per response rather than once per
+ * row. A read-only join `item_version -> logical_item` through a table this
+ * module does not own - the same precedent `getRefsForLogicalItem` (E4-S3)
+ * already set for reading into `item_version`; table ownership governs
+ * writes (Module Boundaries section 5), not reads, and this never writes
+ * either table.
+ */
+export async function getDisplayKeysForItemVersions(
+  itemVersionIds: string[],
+): Promise<Map<string, string>> {
+  if (!itemVersionIds.length) return new Map();
+  const rows = await db
+    .select({ id: schema.itemVersion.id, displayKey: schema.logicalItem.displayKey })
+    .from(schema.itemVersion)
+    .innerJoin(schema.logicalItem, eq(schema.logicalItem.id, schema.itemVersion.logicalItemId))
+    .where(inArray(schema.itemVersion.id, itemVersionIds));
+  return new Map(rows.map((row) => [row.id, row.displayKey]));
+}
