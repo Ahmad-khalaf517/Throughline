@@ -132,9 +132,18 @@ interface FakeRepo {
   htmlUrl: string;
 }
 
+// Module-level (NOT per-`createFakeGitHub()` call) so ids stay unique
+// across the WHOLE file, not just within one fake GitHub instance - every
+// test case below calls `createFakeGitHub()` fresh, and this file's tests
+// all share one real Testcontainers Postgres instance where a fake repo's
+// numeric `id` becomes `external_ref.external_id`, carrying a real unique
+// constraint on `(provider, external_id)`. A per-instance counter starting
+// at a fixed 9000 let two different test cases both mint "id 9001" and
+// collide for real; a single shared counter can't repeat.
+let nextFakeGitHubId = 9000;
+
 function createFakeGitHub(owner: string) {
   const repos = new Map<string, FakeRepo>();
-  let nextId = 9000;
 
   function repoKey(name: string): string {
     return `${owner}/${name}`;
@@ -163,7 +172,7 @@ function createFakeGitHub(owner: string) {
   function seedForeignRepo(name: string, description: string): void {
     const fullName = repoKey(name);
     repos.set(fullName, {
-      id: nextId++,
+      id: nextFakeGitHubId++,
       name,
       fullName,
       description,
@@ -194,7 +203,7 @@ function createFakeGitHub(owner: string) {
         });
       }
       const created: FakeRepo = {
-        id: nextId++,
+        id: nextFakeGitHubId++,
         name: body.name,
         fullName,
         description: body.description ?? '',
@@ -220,7 +229,7 @@ function createFakeGitHub(owner: string) {
       // minimal, valid response shape is enough.
       return jsonResponse(201, {
         content: { path: contentsMatch[3] },
-        commit: { sha: `fake-${nextId++}` },
+        commit: { sha: `fake-${nextFakeGitHubId++}` },
       });
     }
 
