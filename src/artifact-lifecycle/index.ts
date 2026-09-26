@@ -28,6 +28,7 @@ export {
 export { createManualRevisionDraft } from './manual-revision';
 export { requestRevision, rejectVersion } from './rejection';
 export { proposeItemEdit, commitItemEdit, type CommitItemEditResult } from './item-edit';
+export { getArtifactVersionPayload } from './version-payload';
 
 export type Project = typeof schema.project.$inferSelect;
 
