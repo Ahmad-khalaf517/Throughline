@@ -14,9 +14,10 @@ import { ARTIFACT_TYPES, type ArtifactSummaryDTO, type ArtifactType } from '@/li
 export {
   approveVersion,
   approveWithOverride,
-  ArchitectureMaterializationUnavailableError,
+  type ArchitectureApproval,
   type ApproveVersionResult,
 } from './approval';
+export { withArchitectureDraft, type ArchitectureDraftContext } from './architecture';
 
 export {
   createDraftFromGeneration,
