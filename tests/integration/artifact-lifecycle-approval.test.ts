@@ -117,6 +117,164 @@ describe('approveVersion (ERD 3.4/6.5; FR-083)', () => {
     expect(events).toHaveLength(0);
   });
 
+  it('T6 / FR-084 / INV-026: override acknowledges each blocker and a later change warns again', async () => {
+    const { projectId, userId } = await fx.createProjectWithOwner(sql);
+    const reqArtifactId = await fx.createArtifact(sql, projectId, 'requirements');
+    const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
+    const first = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: reqArtifactId,
+      itemType: 'requirement',
+    });
+    const second = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: reqArtifactId,
+      itemType: 'requirement',
+    });
+    const reqV1 = await fx.createDraftArtifactVersion(sql, reqArtifactId, { versionNumber: 1 });
+    await fx.createMembership(sql, {
+      artifactVersionId: reqV1,
+      artifactId: reqArtifactId,
+      ...first,
+    });
+    await fx.createMembership(sql, {
+      artifactVersionId: reqV1,
+      artifactId: reqArtifactId,
+      ...second,
+    });
+    expect(await lifecycle.approveVersion(reqV1, userId)).toEqual({ ok: true });
+
+    const firstV2 = await fx.createItemVersion(sql, {
+      projectId,
+      logicalItemId: first.logicalItemId,
+      revisionNumber: 2,
+    });
+    const secondV2 = await fx.createItemVersion(sql, {
+      projectId,
+      logicalItemId: second.logicalItemId,
+      revisionNumber: 2,
+    });
+    const reqV2 = await fx.createDraftArtifactVersion(sql, reqArtifactId, { versionNumber: 2 });
+    await fx.createMembership(sql, {
+      artifactVersionId: reqV2,
+      artifactId: reqArtifactId,
+      logicalItemId: first.logicalItemId,
+      itemVersionId: firstV2,
+    });
+    await fx.createMembership(sql, {
+      artifactVersionId: reqV2,
+      artifactId: reqArtifactId,
+      logicalItemId: second.logicalItemId,
+      itemVersionId: secondV2,
+    });
+    expect(await lifecycle.approveVersion(reqV2, userId)).toEqual({ ok: true });
+
+    const story = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: backlogArtifactId,
+      itemType: 'story',
+    });
+    for (const requirement of [first, second]) {
+      await fx.createSemanticDependency(sql, {
+        projectId,
+        downstreamItemVersionId: story.itemVersionId,
+        upstreamItemVersionId: requirement.itemVersionId,
+      });
+    }
+    const backlogDraft = await draftWithItem(backlogArtifactId, story, 1);
+    expect(await lifecycle.approveVersion(backlogDraft, userId)).toMatchObject({
+      ok: false,
+      blocking: [{ subjectId: story.itemVersionId }, { subjectId: story.itemVersionId }],
+    });
+    await expect(lifecycle.approveWithOverride(backlogDraft, userId, '  ')).rejects.toThrow(
+      'override note must be non-empty',
+    );
+    expect(await status(backlogDraft)).toBe('draft');
+    expect(
+      await sql`select id from impact_acknowledgement where project_id = ${projectId}`,
+    ).toHaveLength(0);
+
+    expect(
+      await lifecycle.approveWithOverride(backlogDraft, userId, 'Reviewed both changes'),
+    ).toEqual({ ok: true });
+    expect(await status(backlogDraft)).toBe('approved');
+    const acknowledgements = await sql<
+      {
+        subject_item_version_id: string;
+        obsolete_upstream_item_version_id: string;
+        acknowledged_against_upstream_item_version_id: string;
+        note: string;
+      }[]
+    >`
+      select subject_item_version_id, obsolete_upstream_item_version_id,
+             acknowledged_against_upstream_item_version_id, note
+      from impact_acknowledgement where project_id = ${projectId}
+    `;
+    expect(acknowledgements).toHaveLength(2);
+    expect(
+      acknowledgements.map((row) => [
+        row.subject_item_version_id,
+        row.obsolete_upstream_item_version_id,
+        row.acknowledged_against_upstream_item_version_id,
+        row.note,
+      ]),
+    ).toEqual(
+      expect.arrayContaining([
+        [story.itemVersionId, first.itemVersionId, firstV2, 'Reviewed both changes'],
+        [story.itemVersionId, second.itemVersionId, secondV2, 'Reviewed both changes'],
+      ]),
+    );
+    const [event] = await sql<
+      {
+        action: string;
+        overrode_stale_check: boolean;
+        feedback: string;
+      }[]
+    >`select action, overrode_stale_check, feedback from approval_event where artifact_version_id = ${backlogDraft}`;
+    expect(event).toEqual({
+      action: 'approved',
+      overrode_stale_check: true,
+      feedback: 'Reviewed both changes',
+    });
+    expect(
+      (await impact.getWarnings(projectId)).filter((row) => row.subjectId === story.itemVersionId),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ rootItemVersionId: first.itemVersionId, acknowledged: true }),
+        expect.objectContaining({ rootItemVersionId: second.itemVersionId, acknowledged: true }),
+      ]),
+    );
+
+    const firstV3 = await fx.createItemVersion(sql, {
+      projectId,
+      logicalItemId: first.logicalItemId,
+      revisionNumber: 3,
+    });
+    const reqV3 = await fx.createDraftArtifactVersion(sql, reqArtifactId, { versionNumber: 3 });
+    await fx.createMembership(sql, {
+      artifactVersionId: reqV3,
+      artifactId: reqArtifactId,
+      logicalItemId: first.logicalItemId,
+      itemVersionId: firstV3,
+    });
+    await fx.createMembership(sql, {
+      artifactVersionId: reqV3,
+      artifactId: reqArtifactId,
+      logicalItemId: second.logicalItemId,
+      itemVersionId: secondV2,
+    });
+    expect(await lifecycle.approveVersion(reqV3, userId)).toEqual({ ok: true });
+    const storyWarnings = (await impact.getWarnings(projectId)).filter(
+      (row) => row.subjectId === story.itemVersionId,
+    );
+    expect(storyWarnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ rootItemVersionId: first.itemVersionId, acknowledged: false }),
+        expect.objectContaining({ rootItemVersionId: second.itemVersionId, acknowledged: true }),
+      ]),
+    );
+  });
+
   it('T6 / FR-083: blocks a transitively impacted candidate member', async () => {
     const { projectId, userId } = await fx.createProjectWithOwner(sql);
     const reqArtifactId = await fx.createArtifact(sql, projectId, 'requirements');

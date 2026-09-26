@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import { db, schema, withProjectLock } from '@/db';
-import { evaluateGate, type ImpactRow } from '@/lineage/impact';
+import { acknowledgeGateBlockers, evaluateGate, type ImpactRow } from '@/lineage/impact';
 import { getSourceVersionMembers } from '@/lineage/identity';
 
 class GateBlocked extends Error {
@@ -22,6 +22,26 @@ export type ApproveVersionResult = { ok: true } | { ok: false; blocking: ImpactR
 export async function approveVersion(
   versionId: string,
   actorId: string,
+): Promise<ApproveVersionResult> {
+  return approveVersionInternal(versionId, actorId);
+}
+
+/** ERD 3.5 / FR-084: satisfy the recomputed gate with cause-specific acknowledgements. */
+export async function approveWithOverride(
+  versionId: string,
+  actorId: string,
+  note: string,
+): Promise<{ ok: true }> {
+  if (!note.trim()) throw new Error('override note must be non-empty');
+  const result = await approveVersionInternal(versionId, actorId, note);
+  if (!result.ok) throw new GateBlocked(result.blocking);
+  return result;
+}
+
+async function approveVersionInternal(
+  versionId: string,
+  actorId: string,
+  overrideNote?: string,
 ): Promise<ApproveVersionResult> {
   const [target] = await db
     .select({ projectId: schema.artifact.projectId })
@@ -63,6 +83,16 @@ export async function approveVersion(
       const candidateItemVersionIds = new Set(
         members.flatMap((member) => (member.itemVersionId ? [member.itemVersionId] : [])),
       );
+      if (overrideNote !== undefined) {
+        await acknowledgeGateBlockers(
+          tx,
+          target.projectId,
+          versionId,
+          overrideNote,
+          actorId,
+          candidateItemVersionIds,
+        );
+      }
       const blocking = await evaluateGate(tx, target.projectId, versionId, candidateItemVersionIds);
       if (blocking.length) throw new GateBlocked(blocking);
 
@@ -83,6 +113,8 @@ export async function approveVersion(
         artifactVersionId: versionId,
         actorUserId: actorId,
         action: 'approved',
+        feedback: overrideNote ?? null,
+        overrodeStaleCheck: overrideNote !== undefined,
       });
       return { ok: true };
     });
