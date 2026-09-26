@@ -4,6 +4,7 @@ export {
   getSourceVersionMembers,
   getCurrentItemVersionIds,
 } from './references';
+export { copyMembership } from './copy-membership';
 export {
   semanticHash,
   semanticProjection,

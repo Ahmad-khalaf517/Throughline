@@ -4,7 +4,6 @@
 //
 // Nothing outside src/artifact-lifecycle may import this file directly - it
 // is re-exported through ./index.ts (Module Boundaries section 7).
-import { and, desc, eq } from 'drizzle-orm';
 import { db, schema, withProjectLock, type Tx } from '@/db';
 import { linkGenerationRun } from '@/ai-client';
 import { bindUpstreamRefs, checkFreshness } from '@/lineage/dependency-binding';
@@ -15,6 +14,7 @@ import {
   type Candidate,
   type ItemType,
 } from '@/lineage/identity';
+import { getApprovedVersionId, nextVersionNumber, replaceExistingDraft } from './shared';
 
 export type ArtifactVersion = typeof schema.artifactVersion.$inferSelect;
 
@@ -58,35 +58,6 @@ export type CreateDraftFromGenerationResult =
       // Every caller can still narrow on `stale: true` alone and ignore it.
       reason: 'base_changed' | 'dependency_superseded';
     };
-
-// Shared by the pre-generate() capture (outside any transaction) and the
-// re-check inside the persist transaction (ERD 3.3 steps 1 and 2). `db` and
-// an open `Tx` share the same query-builder shape for a plain read.
-async function getApprovedVersionId(
-  executor: Tx | typeof db,
-  artifactId: string,
-): Promise<string | null> {
-  const [approved] = await executor
-    .select({ id: schema.artifactVersion.id })
-    .from(schema.artifactVersion)
-    .where(
-      and(
-        eq(schema.artifactVersion.artifactId, artifactId),
-        eq(schema.artifactVersion.status, 'approved'),
-      ),
-    );
-  return approved?.id ?? null;
-}
-
-async function nextVersionNumber(tx: Tx, artifactId: string): Promise<number> {
-  const [latest] = await tx
-    .select({ versionNumber: schema.artifactVersion.versionNumber })
-    .from(schema.artifactVersion)
-    .where(eq(schema.artifactVersion.artifactId, artifactId))
-    .orderBy(desc(schema.artifactVersion.versionNumber))
-    .limit(1);
-  return (latest?.versionNumber ?? 0) + 1;
-}
 
 async function insertGenerationContextRefs(
   tx: Tx,
@@ -202,27 +173,7 @@ export async function createDraftFromGeneration(
     // Step 8: not stale. Replace an existing draft first (the partial
     // unique index only allows one draft row per artifact at a time, so the
     // old draft must be demoted before the new one is inserted).
-    const [existingDraft] = await tx
-      .select({ id: schema.artifactVersion.id })
-      .from(schema.artifactVersion)
-      .where(
-        and(
-          eq(schema.artifactVersion.artifactId, artifactId),
-          eq(schema.artifactVersion.status, 'draft'),
-        ),
-      );
-
-    if (existingDraft) {
-      await tx
-        .update(schema.artifactVersion)
-        .set({ status: 'rejected', statusReason: 'replaced_by_regeneration' })
-        .where(eq(schema.artifactVersion.id, existingDraft.id));
-      await tx.insert(schema.approvalEvent).values({
-        artifactVersionId: existingDraft.id,
-        actorUserId,
-        action: 'draft_replaced',
-      });
-    }
+    await replaceExistingDraft(tx, artifactId, actorUserId);
 
     const [version] = await tx
       .insert(schema.artifactVersion)

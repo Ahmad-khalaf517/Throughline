@@ -23,6 +23,7 @@ export {
   type CreateDraftFromGenerationOptions,
   type CreateDraftFromGenerationResult,
 } from './generation';
+export { createManualRevisionDraft } from './manual-revision';
 
 export type Project = typeof schema.project.$inferSelect;
 
