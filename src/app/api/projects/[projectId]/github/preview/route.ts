@@ -59,7 +59,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     // ERD: one GitHub repository per project. `previewInit` has no
     // `external_ref` read of its own (Module Boundaries 4.6) - the route
     // checks this directly before ever building a preview.
-    const existingRefs = await getAllExternalRefsForProject(project);
+    const existingRefs = await getAllExternalRefsForProject(projectId);
     if (existingRefs.some((ref) => ref.provider === 'github')) {
       throw new ApiError(
         'GITHUB_ALREADY_INITIALIZED',

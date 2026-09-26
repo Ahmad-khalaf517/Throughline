@@ -19,7 +19,7 @@ vi.mock('@/artifact-lifecycle', () => ({
 }));
 
 vi.mock('@/external/operations', () => ({
-  getRefsForVersion: vi.fn(),
+  getRefsForProject: vi.fn(),
   getDisplayKeysForItemVersions: vi.fn(),
 }));
 
@@ -34,7 +34,7 @@ vi.mock('@/external/stitch', () => ({ checkDrift: vi.fn() }));
 
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
 import { getProjectById } from '@/artifact-lifecycle';
-import { getRefsForVersion, getDisplayKeysForItemVersions } from '@/external/operations';
+import { getRefsForProject, getDisplayKeysForItemVersions } from '@/external/operations';
 import { previewInit } from '@/external/github';
 import { POST } from '@/app/api/projects/[projectId]/github/preview/route';
 import { ApiError } from '@/lib/errors';
@@ -43,7 +43,7 @@ import { emptyArtifactSummaries } from '@/lib/serialize';
 const mockedGetVerifiedUser = vi.mocked(getVerifiedUser);
 const mockedRequireProjectOwner = vi.mocked(requireProjectOwner);
 const mockedGetProjectById = vi.mocked(getProjectById);
-const mockedGetRefsForVersion = vi.mocked(getRefsForVersion);
+const mockedGetRefsForProject = vi.mocked(getRefsForProject);
 const mockedGetDisplayKeys = vi.mocked(getDisplayKeysForItemVersions);
 const mockedPreviewInit = vi.mocked(previewInit);
 
@@ -82,7 +82,7 @@ describe('POST /api/projects/:projectId/github/preview', () => {
     mockedGetVerifiedUser.mockReset();
     mockedRequireProjectOwner.mockReset();
     mockedGetProjectById.mockReset();
-    mockedGetRefsForVersion.mockReset().mockResolvedValue([]);
+    mockedGetRefsForProject.mockReset().mockResolvedValue([]);
     mockedGetDisplayKeys.mockReset().mockResolvedValue(new Map());
     mockedPreviewInit.mockReset();
 
@@ -128,7 +128,7 @@ describe('POST /api/projects/:projectId/github/preview', () => {
 
   it('returns 409 GITHUB_ALREADY_INITIALIZED when the project already has a GitHub ref', async () => {
     mockedGetProjectById.mockResolvedValue(baseProject());
-    mockedGetRefsForVersion.mockResolvedValue([
+    mockedGetRefsForProject.mockResolvedValue([
       { id: 'ref-1', provider: 'github', sourceArtifactVersionId: 'arch-v1' },
     ] as never);
 

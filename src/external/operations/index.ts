@@ -569,6 +569,35 @@ export async function getRefsForLogicalItem(
     .orderBy(desc(schema.externalRef.createdAt));
 }
 
+/**
+ * Every `external_ref` a project has ever produced, across every provider -
+ * a direct read of this module's own owned table by its own `project_id`
+ * column (`external_ref.project_id` is `NOT NULL`, `src/db/schema/
+ * external-ref.ts`), no join needed. Added by E4-T3 (SCRUM-56), replacing
+ * `src/app/api/_shared/external.ts`'s old `approvedVersionIds(project) ->
+ * getRefsForVersion` merge: that merge resolved refs through each artifact
+ * type's CURRENT `approvedVersionId` only, which is lossy the moment an
+ * artifact is re-approved after a ref already exists - a GitHub ref's own
+ * `source_artifact_version_id` is pinned forever to whichever Architecture
+ * version was approved when `initRepo` ran (ERD 4.15: one repository per
+ * project, ever - there is no second `initRepo` call to ever re-point it),
+ * so the old merge silently dropped a still-real repo from both
+ * `GET .../external-refs` and `GET .../github/ref` the instant Architecture
+ * was re-approved (ERD Appendix C T13's own scenario - the gate task this
+ * story exists to close). Reading by this table's own `project_id` instead
+ * makes a ref discoverable for the lifetime of the project regardless of
+ * how many times its source artifact has since been re-approved, matching
+ * API Contracts section 7's own normative sentence ("All GitHub/Jira/Stitch
+ * references created from this project, each with its own drift flag") -
+ * the "called once per approved version and merged" phrasing right after it
+ * was an implementation hint, not the requirement, and this narrow additive
+ * read replaces it rather than adding a second write/read path (same
+ * justification shape as `getRefById`/`getRefsForLogicalItem` above).
+ */
+export async function getRefsForProject(projectId: string): Promise<ExternalRef[]> {
+  return db.select().from(schema.externalRef).where(eq(schema.externalRef.projectId, projectId));
+}
+
 export type ExternalOperation = typeof schema.externalOperation.$inferSelect;
 
 /**

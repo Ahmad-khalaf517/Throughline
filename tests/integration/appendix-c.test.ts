@@ -1,10 +1,22 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
 import type postgres from 'postgres';
 import { connect } from './support/connection';
 import * as fx from './support/fixtures';
 import { asAnon } from './support/roles';
 import { expectDeniedAsAnon } from './support/assertions';
+
+// E4-T3's own seam (this story's instructions, "Auth" section): `getVerifiedUser`
+// talks to Supabase and cannot work against this Testcontainers-only harness -
+// replaced with a plain `vi.fn()`. `requireProjectOwner` (and everything else
+// `@/auth` exports) stays REAL via `importOriginal` - it reads the real
+// `project` table and is what enforces the 404-never-403 rule (API Contracts
+// 1.4); mocking identity is a necessary seam, mocking authorization would
+// hollow out every T11/T12/T13/T18/T26/T41/T42 route test below.
+vi.mock('@/auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/auth')>()),
+  getVerifiedUser: vi.fn(),
+}));
 
 // ERD Appendix C ("Verification suite", docs/Throughline_ERD.md ~line 1641)
 // ported into tests/integration/, per Project Setup section 10 step 9 and
@@ -61,12 +73,113 @@ import { expectDeniedAsAnon } from './support/assertions';
 // scripts/verify-real-generation-t21.ts, which drives this SAME pipeline
 // through src/artifact-types/requirements + src/ai-client for real.
 
+// E4-T3 (SCRUM-56) addendum: T11, T12, T13, T18, T26, T41, T42 below are now
+// real, passing assertions - ERD 14 slice 4's gate ("T11-T13, T18, T26, T41,
+// T42", docs/Throughline_Jira_Plan.md line ~189), all seven of the ids this
+// story's own row cites. Each drives its ERD scenario through the real
+// E4-S6 API route handlers (`src/app/api/projects/[projectId]/github/*`,
+// `.../jira/*`, `.../external-refs/route.ts`) against this same
+// Testcontainers Postgres, reusing the fake-provider-via-
+// `globalThis.fetch`-swap technique tests/integration/external/github.test.ts
+// and jira.test.ts already established (adapted, not imported - this file's
+// own "every file builds its own fixture composition" convention, restated
+// at the top of this file's header comment) - those two files already prove
+// the same scenarios at the MODULE level (`github.initRepo`, `jira.
+// exportBacklog`, ...); what's added here is the HTTP leg on top: a real
+// `Request` into the route handler, asserted on both the documented response
+// shape (API Contracts sections 7-9) and the resulting `external_operation`/
+// `external_ref` rows.
+//
+// T13 was blocked by a real E4-S6 defect that this gate task found and
+// fixed - not worked around. `src/app/api/_shared/external.ts`'s
+// `getAllExternalRefsForProject` (used by both `GET .../github/ref` and
+// `GET .../external-refs`) used to resolve every ref by first collecting
+// `approvedVersionIds(project)` - literally the CURRENT `approvedVersionId`
+// per artifact type - then merging `external-operations.
+// getRefsForVersion(thatId)` over that list, an EXACT match on
+// `external_ref.source_artifact_version_id`. A GitHub ref's own
+// `source_artifact_version_id` is fixed forever at the one Architecture
+// version approved when `initRepo` ran (ERD 4.15: one repository per
+// project, ever - there is no second `initRepo` call to ever re-point it).
+// T13's own scenario is "Architecture re-approved... then with a changed
+// ADR" - i.e. it REQUIRES at least one re-approval AFTER the repo already
+// exists, which mints a brand-new `artifact_version` id and supersedes the
+// one the ref is still pinned to. The moment that happened - with or without
+// an actual ADR change, so even T13's OWN "not flagged" first half broke the
+// same way - `approvedVersionIds` no longer included the ref's origin
+// version, `getRefsForVersion` returned nothing for it, and both
+// `GET .../github/ref` (`{ ref: null }`) and `GET .../external-refs` (absent
+// from `refs[]`) lost track of a repo that genuinely still existed, whose
+// drift `github.checkDrift(refId)` would have correctly computed if either
+// route had ever reached it.
+//
+// This was a production bug, not a test bug, and this gate task's own
+// instructions are explicit that fixing a real defect the gate finds is
+// exactly what a gate task is for - the thing it must never do is bend
+// production code to make a test pass spuriously, which this is not: the
+// fix makes `getAllExternalRefsForProject` match API Contracts section 7's
+// own normative sentence ("All GitHub/Jira/Stitch references created from
+// this project, each with its own drift flag") instead of the lossy
+// per-approved-version merge that sentence's own parenthetical hinted at.
+// The fix: `external-operations.getRefsForProject(projectId)` (added this
+// story, `src/external/operations/index.ts`) reads `external_ref` directly
+// by its own `project_id` column - a ref is discoverable for the life of the
+// project regardless of how many times its source artifact has since been
+// re-approved. `getAllExternalRefsForProject` now calls it directly;
+// `approvedVersionIds` is deleted (nothing else used it). `GET .../
+// external-refs` and `GET .../github/ref` no longer call
+// `artifact-lifecycle.getProjectById` at all - `requireProjectOwner` already
+// establishes the project exists and is owned, and neither route needs an
+// approved-version id for anything else - which narrows `src/app/api/
+// README.md`'s exception 3 from eight routes to six (reported, not edited
+// here per this story's instructions). This is unrelated to T17 (already
+// closable before this fix - see below): T17 never re-approves Architecture
+// at all, only Requirements, so the ref's origin version stayed current
+// throughout and the old bug never triggered for it.
+//
+// T17 is NOT in this story's cited set (docs/Throughline_Jira_Plan.md's
+// E4-T3 row cites only T11-T13, T18, T26, T41, T42 - T17 belongs to E4-S2 per
+// that story's own row) - its stub comment above (just below) says "E4-T3
+// re-runs it through the real API routes," which is a real discrepancy
+// between that comment and the Jira Plan, flagged rather than silently
+// absorbed (this story's own instructions). It falls out naturally from the
+// `GET .../external-refs`/`github/ref` route work this story already does
+// (unlike T13, T17's Architecture version is never superseded, so the
+// `_shared/external.ts` bug fixed above never applied to it either way) -
+// closed here as a bonus, not a scope change: the Jira Plan row remains the
+// authoritative Definition of Done for this story, and it lists seven ids
+// (T11-T13, T18, T26, T41, T42), not eight.
+
 let sql: postgres.Sql;
 let lifecycle: typeof import('@/artifact-lifecycle');
 let impact: typeof import('@/lineage/impact');
 let uiRequirementsType: typeof import('@/artifact-types/ui-requirements');
 let backlogType: typeof import('@/artifact-types/backlog');
 let withTx: typeof import('@/db').withTx;
+// E4-T3 additions: the `auth` module (for its now-mocked `getVerifiedUser`),
+// `github` (for `normalizeRepoName` only - initRepo/checkDrift are reached
+// through the routes below, never called directly), and the route handlers
+// themselves.
+let authModule: typeof import('@/auth');
+let github: typeof import('@/external/github');
+let githubInitRoute: typeof import('@/app/api/projects/[projectId]/github/init/route').POST;
+let githubRefRoute: typeof import('@/app/api/projects/[projectId]/github/ref/route').GET;
+let jiraExportRoute: typeof import('@/app/api/projects/[projectId]/jira/export/route').POST;
+let jiraPreviewRoute: typeof import('@/app/api/projects/[projectId]/jira/preview/route').GET;
+let externalRefsRoute: typeof import('@/app/api/projects/[projectId]/external-refs/route').GET;
+
+// E4-T3 provider config constants - same shape as
+// tests/integration/external/github.test.ts / jira.test.ts's own constants,
+// duplicated here rather than imported (this file's own "every file builds
+// its own fixture composition" convention, restated at the top of the file).
+const FAKE_GITHUB_OWNER = 'thrln-e4t3-owner';
+// Fixed (not random-per-run) - T11's own scenarios below reconcile ACROSS two
+// separate route calls that must compute the IDENTICAL marker both times.
+const TEST_MARKER_SECRET = 'e4-t3-test-fixture-marker-secret-do-not-use-in-prod';
+const JIRA_BASE_URL = 'https://fake-jira-e4t3.example.test';
+const JIRA_EMAIL = 'throughline-e4t3-test@example.test';
+const JIRA_API_TOKEN = 'fake-jira-e4t3-token';
+const DEFAULT_JIRA_PROJECT_KEY = 'THRE4T3';
 
 beforeAll(async () => {
   sql = connect();
@@ -82,11 +195,30 @@ beforeAll(async () => {
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-key';
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-key';
   process.env.NEXT_PUBLIC_SITE_URL = 'https://example.test';
+  // E4-T3: github/jira provider config, same env vars
+  // tests/integration/external/github.test.ts and jira.test.ts already set up
+  // for the SAME modules, reached here through the route handlers instead of
+  // directly. Must land before the first import below - `@/lib/env` is a
+  // module-level singleton parsed once at import time (this file's own
+  // gotcha comment above, restated for these vars too).
+  process.env.GITHUB_OWNER = FAKE_GITHUB_OWNER;
+  process.env.GITHUB_MARKER_SECRET = TEST_MARKER_SECRET;
+  process.env.JIRA_BASE_URL = JIRA_BASE_URL;
+  process.env.JIRA_EMAIL = JIRA_EMAIL;
+  process.env.JIRA_API_TOKEN = JIRA_API_TOKEN;
+  process.env.JIRA_PROJECT_KEY = DEFAULT_JIRA_PROJECT_KEY;
   lifecycle = await import('@/artifact-lifecycle');
   impact = await import('@/lineage/impact');
   uiRequirementsType = await import('@/artifact-types/ui-requirements');
   backlogType = await import('@/artifact-types/backlog');
   withTx = (await import('@/db')).withTx;
+  authModule = await import('@/auth');
+  github = await import('@/external/github');
+  githubInitRoute = (await import('@/app/api/projects/[projectId]/github/init/route')).POST;
+  githubRefRoute = (await import('@/app/api/projects/[projectId]/github/ref/route')).GET;
+  jiraExportRoute = (await import('@/app/api/projects/[projectId]/jira/export/route')).POST;
+  jiraPreviewRoute = (await import('@/app/api/projects/[projectId]/jira/preview/route')).GET;
+  externalRefsRoute = (await import('@/app/api/projects/[projectId]/external-refs/route')).GET;
 });
 
 afterAll(async () => {
@@ -213,6 +345,337 @@ async function approveItemsVersion(
     await fx.approveArtifactVersion(sql, versionId);
   }
   return versionId;
+}
+
+// --- Shared helpers for the E4-T3 additions below ---------------------------
+
+// Backlog approval that supports `parentLogicalItemId` (Story -> Epic), which
+// `approveItemsVersion` above does not - needed for T12/T26/T41/T42's
+// Epic/Story fixtures. Same auto-incrementing-version-number convention as
+// `approveItemsVersion`, mirrors jira.test.ts's own local
+// `approveBacklogVersion` (reproduced, not imported - see this file's header).
+async function approveBacklogVersionForJira(
+  artifactId: string,
+  members: { logicalItemId: string; itemVersionId: string; parentLogicalItemId?: string | null }[],
+): Promise<string> {
+  const [latest] = await sql<{ version_number: number | null }[]>`
+    SELECT MAX(version_number) AS version_number FROM artifact_version WHERE artifact_id = ${artifactId}
+  `;
+  const versionId = await fx.createDraftArtifactVersion(sql, artifactId, {
+    versionNumber: (latest?.version_number ?? 0) + 1,
+  });
+  for (const member of members) {
+    await fx.createMembership(sql, {
+      artifactVersionId: versionId,
+      artifactId,
+      logicalItemId: member.logicalItemId,
+      itemVersionId: member.itemVersionId,
+      parentLogicalItemId: member.parentLogicalItemId ?? null,
+    });
+  }
+  const [current] = await sql<{ id: string }[]>`
+    SELECT id FROM artifact_version WHERE artifact_id = ${artifactId} AND status = 'approved'
+  `;
+  if (current) await supersede(current.id);
+  await fx.approveArtifactVersion(sql, versionId);
+  return versionId;
+}
+
+async function githubOperationRows(projectId: string) {
+  return sql<{ operation_key: string; status: string; error_message: string | null }[]>`
+    SELECT operation_key, status, error_message FROM external_operation
+    WHERE project_id = ${projectId} AND provider = 'github'
+    ORDER BY created_at
+  `;
+}
+
+async function githubRefRows(projectId: string) {
+  return sql<{ id: string }[]>`
+    SELECT id FROM external_ref WHERE project_id = ${projectId} AND provider = 'github'
+  `;
+}
+
+async function jiraOperationRows(projectId: string) {
+  return sql<{ operation_key: string; status: string }[]>`
+    SELECT operation_key, status FROM external_operation
+    WHERE project_id = ${projectId} AND provider = 'jira'
+    ORDER BY created_at
+  `;
+}
+
+async function jiraRefRowsForItem(itemVersionId: string) {
+  return sql<{ id: string; external_key: string | null }[]>`
+    SELECT id, external_key FROM external_ref
+    WHERE provider = 'jira' AND source_item_version_id = ${itemVersionId}
+  `;
+}
+
+// Mocks `getVerifiedUser` (the one seam this story's instructions authorize -
+// see the `vi.mock('@/auth', ...)` call at the top of this file) as the given
+// project's own owner - `requireProjectOwner` downstream of it stays real.
+function mockAuthAsOwner(userId: string): void {
+  vi.mocked(authModule.getVerifiedUser).mockResolvedValue({
+    id: userId,
+    email: `${userId}@example.test`,
+    displayName: null,
+  });
+}
+
+function jsonRequest(url: string, body: unknown): Request {
+  return new Request(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+function getRequest(url: string): Request {
+  return new Request(url);
+}
+
+function routeParams(projectId: string): { params: Promise<{ projectId: string }> } {
+  return { params: Promise.resolve({ projectId }) };
+}
+
+// ---------------------------------------------------------------------------
+// Fake GitHub - adapted from tests/integration/external/github.test.ts's own
+// `createFakeGitHub`/`createResponseDropper` (same technique, condensed to
+// exactly what T11/T17/T18 below exercise through the routes; not imported,
+// per this file's own "every file builds its own fixture composition"
+// convention).
+// ---------------------------------------------------------------------------
+
+interface FakeGithubRepo {
+  id: number;
+  name: string;
+  fullName: string;
+  description: string;
+  htmlUrl: string;
+}
+
+// Module-level, not per-`createFakeGithubProvider()` call - keeps every fake
+// repo's numeric id unique across the whole file's shared Testcontainers
+// Postgres (external_ref has a real UNIQUE(provider, external_id)), same
+// reasoning as github.test.ts's own `nextFakeGitHubId`.
+let nextFakeGithubId = 700_000;
+
+function createFakeGithubProvider(owner: string) {
+  const repos = new Map<string, FakeGithubRepo>();
+  const repoKey = (name: string): string => `${owner}/${name}`;
+  const toApiShape = (repo: FakeGithubRepo) => ({
+    id: repo.id,
+    name: repo.name,
+    full_name: repo.fullName,
+    description: repo.description,
+    html_url: repo.htmlUrl,
+    private: true,
+    owner: { login: owner },
+  });
+  const jsonResponse = (status: number, data: unknown): Response =>
+    new Response(JSON.stringify(data), {
+      status,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+
+  function seedForeignRepo(name: string, description: string): void {
+    const fullName = repoKey(name);
+    repos.set(fullName, {
+      id: nextFakeGithubId++,
+      name,
+      fullName,
+      description,
+      htmlUrl: `https://github.com/${fullName}`,
+    });
+  }
+
+  async function fetchImpl(url: string | URL, init?: RequestInit): Promise<Response> {
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const { pathname } = new URL(url);
+
+    if (method === 'POST' && pathname === '/user/repos') {
+      const body = init?.body
+        ? (JSON.parse(String(init.body)) as { name: string; description?: string })
+        : { name: '' };
+      const fullName = repoKey(body.name);
+      if (repos.has(fullName)) {
+        return jsonResponse(422, {
+          message: 'Repository creation failed.',
+          errors: [
+            {
+              resource: 'Repository',
+              code: 'custom',
+              field: 'name',
+              message: 'name already exists on this account',
+            },
+          ],
+        });
+      }
+      const created: FakeGithubRepo = {
+        id: nextFakeGithubId++,
+        name: body.name,
+        fullName,
+        description: body.description ?? '',
+        htmlUrl: `https://github.com/${fullName}`,
+      };
+      repos.set(fullName, created);
+      return jsonResponse(201, toApiShape(created));
+    }
+
+    const getMatch = /^\/repos\/([^/]+)\/([^/]+)$/.exec(pathname);
+    if (method === 'GET' && getMatch) {
+      const [, matchedOwner, name] = getMatch;
+      const found = matchedOwner === owner && name ? repos.get(repoKey(name)) : undefined;
+      if (!found) return jsonResponse(404, { message: 'Not Found' });
+      return jsonResponse(200, toApiShape(found));
+    }
+
+    const contentsMatch = /^\/repos\/([^/]+)\/([^/]+)\/contents\/(.+)$/.exec(pathname);
+    if (method === 'PUT' && contentsMatch) {
+      // initRepo's README/ADR/lineage.json writes (FR-033/034/035) - exact
+      // content isn't asserted on here (same scope decision github.test.ts's
+      // own fake makes), a minimal valid response shape is enough.
+      return jsonResponse(201, {
+        content: { path: contentsMatch[3] },
+        commit: { sha: `fake-e4t3-${nextFakeGithubId++}` },
+      });
+    }
+
+    throw new Error(`fake GitHub fetch (E4-T3): unhandled ${method} ${pathname}`);
+  }
+
+  return { fetch: fetchImpl, seedForeignRepo, repos };
+}
+
+// "Simulate a lost response" (ERD 7.2) on top of the fake GitHub above - same
+// technique as github.test.ts's own `createResponseDropper`: the underlying
+// call always runs to completion (the real fake repo genuinely gets created);
+// only the caller's view of the response is dropped.
+function createGithubResponseDropper(
+  underlyingFetch: (url: string | URL, init?: RequestInit) => Promise<Response>,
+) {
+  const dropNextResponseFor = new Set<string>();
+
+  function simulateLostResponseFor(repoName: string): void {
+    dropNextResponseFor.add(repoName);
+  }
+
+  async function fetchWithDrop(url: string | URL, init?: RequestInit): Promise<Response> {
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const { pathname } = new URL(url);
+    let dropKey: string | undefined;
+    if (method === 'POST' && pathname === '/user/repos' && init?.body) {
+      const body = JSON.parse(String(init.body)) as { name?: string };
+      if (body.name && dropNextResponseFor.has(body.name)) dropKey = body.name;
+    }
+    const response = await underlyingFetch(url, init);
+    if (dropKey) {
+      dropNextResponseFor.delete(dropKey);
+      throw new TypeError(
+        'test-simulated network fault: response lost before the client could observe it',
+      );
+    }
+    return response;
+  }
+
+  return { fetch: fetchWithDrop, simulateLostResponseFor };
+}
+
+/** Advances the FAKE clock past github/jira's shared 90s RECONCILIATION_THRESHOLD_MS (src/external/operations/index.ts) - same technique github.test.ts/jira.test.ts already use. */
+async function withClockAdvancedPastThreshold<T>(fn: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    vi.setSystemTime(Date.now() + 95_000);
+    return await fn();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+async function withFakeFetch<T>(
+  fakeFetch: (url: string | URL, init?: RequestInit) => Promise<Response>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const original = globalThis.fetch;
+  globalThis.fetch = fakeFetch as typeof fetch;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fake Jira - adapted from tests/integration/external/jira.test.ts's own
+// `createFakeJira` (condensed: T12/T26/T41/T42 below never simulate a lost
+// response, so no dropper/description-text search path is needed here).
+// ---------------------------------------------------------------------------
+
+interface FakeJiraIssue {
+  id: string;
+  key: string;
+  projectKey: string;
+  labels: string[];
+  parentKey: string | null;
+}
+
+let nextFakeJiraId = 800_000;
+
+function createFakeJiraProvider() {
+  const issuesByKey = new Map<string, FakeJiraIssue>();
+  const issueNumberByProject = new Map<string, number>();
+
+  const jsonResponse = (status: number, data: unknown): Response =>
+    new Response(JSON.stringify(data), {
+      status,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+
+  async function fetchImpl(url: string | URL, init?: RequestInit): Promise<Response> {
+    const { pathname } = new URL(url);
+    const method = (init?.method ?? 'GET').toUpperCase();
+
+    if (method === 'POST' && pathname === '/rest/api/3/issue') {
+      const body = init?.body
+        ? (JSON.parse(String(init.body)) as {
+            fields: {
+              project: { key: string };
+              labels?: string[];
+              parent?: { key: string };
+            };
+          })
+        : { fields: { project: { key: '' } } };
+      const projectKey = body.fields.project.key;
+      const nextNumber = (issueNumberByProject.get(projectKey) ?? 0) + 1;
+      issueNumberByProject.set(projectKey, nextNumber);
+      const key = `${projectKey}-${nextNumber}`;
+      const id = String(nextFakeJiraId++);
+      const issue: FakeJiraIssue = {
+        id,
+        key,
+        projectKey,
+        labels: body.fields.labels ?? [],
+        parentKey: body.fields.parent?.key ?? null,
+      };
+      issuesByKey.set(key, issue);
+      return jsonResponse(201, { id, key, self: `${JIRA_BASE_URL}/rest/api/3/issue/${id}` });
+    }
+
+    if (method === 'POST' && pathname === '/rest/api/3/search/jql') {
+      const body = init?.body ? (JSON.parse(String(init.body)) as { jql: string }) : { jql: '' };
+      const projectMatch = /project = "([^"]+)"/.exec(body.jql);
+      const labelMatch = /labels = "([^"]+)"/.exec(body.jql);
+      let matches = [...issuesByKey.values()];
+      if (projectMatch) matches = matches.filter((issue) => issue.projectKey === projectMatch[1]);
+      if (labelMatch) matches = matches.filter((issue) => issue.labels.includes(labelMatch[1]!));
+      return jsonResponse(200, {
+        issues: matches.map((issue) => ({ id: issue.id, key: issue.key })),
+      });
+    }
+
+    throw new Error(`fake Jira fetch (E4-T3): unhandled ${method} ${pathname}`);
+  }
+
+  return { fetch: fetchImpl, issuesByKey };
 }
 
 describe('ERD Appendix C acceptance suite (T1-T43)', () => {
@@ -996,25 +1459,285 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // Expected: reconciliation_required; marker-verified adoption only;
   // conflict on foreign repo; one operation row; reconcile before any
   // resend.
-  // E4-S2 (SCRUM-51) proves this for real, at the module level, against the
-  // real `github.initRepo` + a fake-GitHub-via-custom-fetch (same technique
-  // as scripts/spike-github-reconciliation.mts) - see
-  // tests/integration/external/github.test.ts's own T11a-T11d. Kept
-  // `it.todo` HERE rather than converted, same deferral pattern
-  // tests/integration/external/operations.test.ts already established for
-  // this same id: E4-T3 (the slice-4 gate) is what closes T11 through the
-  // real API routes end to end, not this file.
-  it.todo('T11');
+  // E4-S2 (SCRUM-51) already proves this at the module level, against the
+  // real `github.initRepo` + a fake-GitHub-via-custom-fetch - see
+  // tests/integration/external/github.test.ts's own T11a-T11d. E4-T3 (this
+  // slice's gate) closes it here for real, driving the SAME scenarios through
+  // `POST /api/projects/:projectId/github/init` (API Contracts section 8).
+  describe('T11 - lost response on repo creation; unrelated/foreign repo with the same name; double-click (through the real API route)', () => {
+    it('a lost create response reconciles via marker match on the next POST - one operation row, marker-verified adoption, never a bare name match', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T11a' });
+      mockAuthAsOwner(userId);
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const adr = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: architectureArtifactId,
+        itemType: 'architecture_decision',
+      });
+      await approveItemsVersion(
+        architectureArtifactId,
+        [{ logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId }],
+        { architecture: true },
+      );
+
+      const repoName = `e4t3-t11a-${randomUUID().slice(0, 8)}`;
+      const normalizedRepoName = github.normalizeRepoName(repoName);
+      const fake = createFakeGithubProvider(FAKE_GITHUB_OWNER);
+      const dropper = createGithubResponseDropper(fake.fetch);
+      const url = `http://localhost/api/projects/${projectId}/github/init`;
+
+      await withFakeFetch(dropper.fetch, async () => {
+        dropper.simulateLostResponseFor(normalizedRepoName);
+        const firstResponse = await githubInitRoute(
+          jsonRequest(url, { repoName, impactAcknowledged: true }),
+          routeParams(projectId),
+        );
+        // API Contracts has no documented code for a raw ambiguous network
+        // fault mid-`send()` - `errorResponse`'s generic 500 fallback fires;
+        // the DB row below is the load-bearing assertion, not this status.
+        expect(firstResponse.status).toBe(500);
+
+        const afterLoss = await githubOperationRows(projectId);
+        expect(afterLoss).toHaveLength(1);
+        expect(afterLoss[0]!.status).toBe('pending'); // left exactly as-is (R6/R9)
+
+        const secondResponse = await withClockAdvancedPastThreshold(() =>
+          githubInitRoute(
+            jsonRequest(url, { repoName, impactAcknowledged: true }),
+            routeParams(projectId),
+          ),
+        );
+        expect(secondResponse.status).toBe(200);
+        const body = await secondResponse.json();
+        expect(body).toMatchObject({ status: 'completed', ref: { provider: 'github' } });
+
+        const afterAdopt = await githubOperationRows(projectId);
+        expect(afterAdopt).toHaveLength(1); // one operation row throughout (ERD 7.1) - reconciled, never resent as a new operation
+        expect(afterAdopt[0]!.status).toBe('completed');
+        expect(await githubRefRows(projectId)).toHaveLength(1);
+
+        // Marker-verified adoption, not a bare name match (ERD 7.3/30.1).
+        const fakeRepo = fake.repos.get(`${FAKE_GITHUB_OWNER}/${normalizedRepoName}`);
+        expect(fakeRepo?.description).toMatch(/^thrln-marker:[0-9a-f]{16}$/);
+      });
+    });
+
+    it('a lost response over a pre-existing FOREIGN repo reconciles to failed (409 NAME_TAKEN_BY_OTHER), never adopted', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T11c' });
+      mockAuthAsOwner(userId);
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const adr = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: architectureArtifactId,
+        itemType: 'architecture_decision',
+      });
+      await approveItemsVersion(
+        architectureArtifactId,
+        [{ logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId }],
+        { architecture: true },
+      );
+
+      const repoName = `e4t3-t11c-${randomUUID().slice(0, 8)}`;
+      const normalizedRepoName = github.normalizeRepoName(repoName);
+      const fake = createFakeGithubProvider(FAKE_GITHUB_OWNER);
+      // Pre-seeded before any attempt - a genuinely unrelated repo already
+      // owns this deterministic name (unrelated repo with the same name).
+      fake.seedForeignRepo(normalizedRepoName, 'thrln-marker:e4t3foreign00000');
+      const dropper = createGithubResponseDropper(fake.fetch);
+      const url = `http://localhost/api/projects/${projectId}/github/init`;
+
+      await withFakeFetch(dropper.fetch, async () => {
+        dropper.simulateLostResponseFor(normalizedRepoName);
+        const firstResponse = await githubInitRoute(
+          jsonRequest(url, { repoName, impactAcknowledged: true }),
+          routeParams(projectId),
+        );
+        expect(firstResponse.status).toBe(500);
+
+        const secondResponse = await withClockAdvancedPastThreshold(() =>
+          githubInitRoute(
+            jsonRequest(url, { repoName, impactAcknowledged: true }),
+            routeParams(projectId),
+          ),
+        );
+        expect(secondResponse.status).toBe(409);
+        expect((await secondResponse.json()).error.code).toBe('NAME_TAKEN_BY_OTHER');
+
+        const rows = await githubOperationRows(projectId);
+        expect(rows).toHaveLength(1); // one operation row throughout
+        expect(rows[0]).toMatchObject({ status: 'failed', error_message: 'name_taken_by_other' });
+        expect(await githubRefRows(projectId)).toHaveLength(0); // never adopted
+      });
+    });
+
+    it('a concurrent double-click while the original is still within T is rejected as still in flight (202 pending) - reconcile before any resend', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T11d' });
+      mockAuthAsOwner(userId);
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const adr = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: architectureArtifactId,
+        itemType: 'architecture_decision',
+      });
+      await approveItemsVersion(
+        architectureArtifactId,
+        [{ logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId }],
+        { architecture: true },
+      );
+
+      const repoName = `e4t3-t11d-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGithubProvider(FAKE_GITHUB_OWNER);
+      const dropper = createGithubResponseDropper(fake.fetch);
+      const url = `http://localhost/api/projects/${projectId}/github/init`;
+
+      await withFakeFetch(dropper.fetch, async () => {
+        dropper.simulateLostResponseFor(github.normalizeRepoName(repoName));
+        const firstResponse = await githubInitRoute(
+          jsonRequest(url, { repoName, impactAcknowledged: true }),
+          routeParams(projectId),
+        );
+        expect(firstResponse.status).toBe(500);
+
+        // Still within T (no clock advance) - a double-click must be
+        // rejected as still in flight, never resent (R5) - stale pending.
+        const secondResponse = await githubInitRoute(
+          jsonRequest(url, { repoName, impactAcknowledged: true }),
+          routeParams(projectId),
+        );
+        expect(secondResponse.status).toBe(202);
+        const body = await secondResponse.json();
+        expect(body.status).toBe('pending');
+        expect(typeof body.operationId).toBe('string');
+
+        const rows = await githubOperationRows(projectId);
+        expect(rows).toHaveLength(1); // still exactly one row - never resent
+        expect(rows[0]!.status).toBe('pending');
+      });
+    });
+  });
 
   // T12 - S-12 changes after THR-42 exists, then export.
   // Expected: Skip / Create New prompt; no update, no silent duplicate.
-  // E4-S3 (SCRUM-52) proves this for real at the module level - see
+  // E4-S3 (SCRUM-52) already proves this at the module level - see
   // tests/integration/external/jira.test.ts's own T12 describe block
-  // (`jira.previewExport`/`exportBacklog` against a fake Jira). Kept
-  // `it.todo` here, same deferral pattern E4-S2 established for T11/T13/
-  // T17/T18: E4-T3 (the slice-4 gate) is what closes T12 through the real
-  // API routes end to end, not this file.
-  it.todo('T12');
+  // (`jira.previewExport`/`exportBacklog` against a fake Jira). E4-T3 closes
+  // it here for real, through `GET/POST /api/projects/:projectId/jira/
+  // preview`/`export` (API Contracts section 9).
+  describe('T12 - S-12 changes after its Jira issue exists, then export (through the real API routes)', () => {
+    it('GET .../jira/preview surfaces the Skip/Create-New prompt; POST .../jira/export refuses without a decision (400), never a silent update or a silent duplicate', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T12' });
+      mockAuthAsOwner(userId);
+      const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
+      const epic = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: backlogArtifactId,
+        itemType: 'epic',
+      });
+      const story = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: backlogArtifactId,
+        itemType: 'story',
+      });
+      await approveBacklogVersionForJira(backlogArtifactId, [
+        { logicalItemId: epic.logicalItemId, itemVersionId: epic.itemVersionId },
+        {
+          logicalItemId: story.logicalItemId,
+          itemVersionId: story.itemVersionId,
+          parentLogicalItemId: epic.logicalItemId,
+        },
+      ]);
+
+      const exportUrl = `http://localhost/api/projects/${projectId}/jira/export`;
+      const previewUrl = `http://localhost/api/projects/${projectId}/jira/preview`;
+      const fake = createFakeJiraProvider();
+
+      const v1Response = await withFakeFetch(fake.fetch, () =>
+        jiraExportRoute(
+          jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
+          routeParams(projectId),
+        ),
+      );
+      expect(v1Response.status).toBe(200);
+      expect((await v1Response.json()).created).toHaveLength(2); // 1 Epic + 1 Story
+
+      const originalStoryRef = (await jiraRefRowsForItem(story.itemVersionId))[0];
+      const originalStoryKey = originalStoryRef!.external_key;
+      expect(originalStoryKey).toBeTruthy();
+
+      // S-12 changes: a new ItemVersion under the SAME LogicalItem.
+      const storyV2ItemVersionId = await fx.createItemVersion(sql, {
+        projectId,
+        logicalItemId: story.logicalItemId,
+        revisionNumber: 2,
+      });
+      await approveBacklogVersionForJira(backlogArtifactId, [
+        { logicalItemId: epic.logicalItemId, itemVersionId: epic.itemVersionId },
+        {
+          logicalItemId: story.logicalItemId,
+          itemVersionId: storyV2ItemVersionId,
+          parentLogicalItemId: epic.logicalItemId,
+        },
+      ]);
+
+      const previewResponse = await jiraPreviewRoute(
+        getRequest(previewUrl),
+        routeParams(projectId),
+      );
+      expect(previewResponse.status).toBe(200);
+      const previewBody = await previewResponse.json();
+      expect(previewBody.needsDecision).toContainEqual(
+        expect.objectContaining({
+          logicalItemId: story.logicalItemId,
+          displayKey: story.displayKey,
+        }),
+      );
+
+      // No decision supplied for a needsDecision item -> 400 VALIDATION_ERROR
+      // (API Contracts section 9) - never a silent skip, never a silent update.
+      const missingDecisionResponse = await jiraExportRoute(
+        jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
+        routeParams(projectId),
+      );
+      expect(missingDecisionResponse.status).toBe(400);
+      expect((await missingDecisionResponse.json()).error.code).toBe('VALIDATION_ERROR');
+
+      // Skip -> the existing Jira issue (THR-42-equivalent) is untouched; no
+      // new ref for the new ItemVersion.
+      const skipResponse = await withFakeFetch(fake.fetch, () =>
+        jiraExportRoute(
+          jsonRequest(exportUrl, {
+            decisions: [{ logicalItemId: story.logicalItemId, decision: 'skip' }],
+            impactAcknowledged: true,
+          }),
+          routeParams(projectId),
+        ),
+      );
+      expect(skipResponse.status).toBe(200);
+      expect(await jiraRefRowsForItem(story.itemVersionId)).toHaveLength(1); // still just the original
+      expect(await jiraRefRowsForItem(storyV2ItemVersionId)).toHaveLength(0); // nothing new
+
+      // Create New -> a genuinely NEW Jira issue - never an update of the old
+      // one, never a silent duplicate reusing the old key.
+      const createNewResponse = await withFakeFetch(fake.fetch, () =>
+        jiraExportRoute(
+          jsonRequest(exportUrl, {
+            decisions: [{ logicalItemId: story.logicalItemId, decision: 'create_new' }],
+            impactAcknowledged: true,
+          }),
+          routeParams(projectId),
+        ),
+      );
+      expect(createNewResponse.status).toBe(200);
+      const createNewBody = await createNewResponse.json();
+      const newStoryRef = createNewBody.created.find(
+        (ref: { sourceItemVersionId: string }) => ref.sourceItemVersionId === storyV2ItemVersionId,
+      );
+      expect(newStoryRef).toBeDefined();
+      expect(newStoryRef.externalKey).not.toBe(originalStoryKey);
+      expect(await jiraRefRowsForItem(storyV2ItemVersionId)).toHaveLength(1);
+      expect(await jiraRefRowsForItem(story.itemVersionId)).toHaveLength(1); // original untouched
+    });
+  });
 
   // T13 - Architecture re-approved with no ADR change; then with a changed
   // ADR.
@@ -1022,8 +1745,119 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // E4-S2 (SCRUM-51) proves this for real at the module level - see
   // tests/integration/external/github.test.ts's own T13 describe block
   // (`github.checkDrift`, no network mocking needed - it's a pure DB read).
-  // Kept `it.todo` here; E4-T3 re-runs it through the real API routes.
-  it.todo('T13');
+  //
+  // Closed by E4-T3 - but only after fixing a real E4-S6 defect the gate
+  // found, not by working around it. This file's own top-of-file E4-T3
+  // addendum comment records the full story: `src/app/api/_shared/
+  // external.ts`'s `getAllExternalRefsForProject` (used by both `GET .../
+  // github/ref` and `GET .../external-refs`) used to resolve every ref
+  // through each artifact's CURRENT `approvedVersionId` only; a GitHub ref's
+  // own `source_artifact_version_id` is pinned forever to whichever
+  // Architecture version was approved when `initRepo` ran (there is no
+  // second `initRepo` call, ever, to re-point it - ERD 4.15). T13's own
+  // scenario requires at least one re-approval AFTER the repo exists, which
+  // mints a new `artifact_version` and supersedes the one the ref is pinned
+  // to - the old lookup lost track of a repo that still genuinely existed
+  // (`{ ref: null }` / absent from `refs[]`) the instant that happened, even
+  // before any ADR actually changed. Fixed by reading `external_ref` through
+  // its own `project_id` column instead (`external-operations.
+  // getRefsForProject`, added this story) - a repo now stays discoverable
+  // for the life of the project regardless of how many times Architecture is
+  // re-approved. This is exactly the exception to "a gate task must not edit
+  // the thing it gates": the test was right and the production code was
+  // wrong, so making the code correct is what closes this gate, not a
+  // workaround around it.
+  describe('T13 - GitHub repository is not flagged after a no-op Architecture re-approval; flagged once the ADR actually changes (through GET .../github/ref)', () => {
+    it('repo stays discoverable and unflagged across a no-change re-approval, then flagged once the cited ADR changes', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T13' });
+      mockAuthAsOwner(userId);
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const adr = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: architectureArtifactId,
+        itemType: 'architecture_decision',
+      });
+
+      const v1 = await approveItemsVersion(
+        architectureArtifactId,
+        [{ logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId }],
+        { architecture: true },
+      );
+
+      // A GitHub ref pinned to v1 - built directly via fixtures, same as
+      // github.test.ts's own T13 (checkDrift is a pure DB read, no network
+      // mocking needed for this scenario).
+      const opId = await fx.createExternalOperation(sql, {
+        projectId,
+        provider: 'github',
+        sourceArtifactVersionId: v1,
+        sourceItemVersionId: null,
+      });
+      await fx.createExternalRef(sql, {
+        projectId,
+        provider: 'github',
+        externalOperationId: opId,
+        sourceArtifactVersionId: v1,
+        sourceItemVersionId: null,
+      });
+
+      const fetchRef = async () => {
+        const response = await githubRefRoute(
+          getRequest(`http://localhost/api/projects/${projectId}/github/ref`),
+          routeParams(projectId),
+        );
+        expect(response.status).toBe(200);
+        return response.json();
+      };
+
+      const initialBody = await fetchRef();
+      expect(initialBody.ref).not.toBeNull();
+      expect(initialBody.ref.impact).toBeNull();
+
+      // Re-approved with NO ADR change - mints a new (superseding)
+      // Architecture artifact_version whose id is no longer the one this ref
+      // is pinned to. Before the getRefsForProject fix, this alone made the
+      // ref vanish from this route entirely (`{ ref: null }`) - the defect
+      // this test exists to catch, independent of whether anything actually
+      // changed.
+      await approveItemsVersion(
+        architectureArtifactId,
+        [{ logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId }],
+        { architecture: true },
+      );
+
+      const noOpBody = await fetchRef();
+      expect(noOpBody.ref).not.toBeNull();
+      expect(noOpBody.ref.id).toBe(initialBody.ref.id); // same ref row throughout
+      expect(noOpBody.ref.impact).toBeNull(); // same item_version reused - not flagged
+
+      // Re-approved with the ADR itself CHANGED: a new item_version under the
+      // same LogicalItem.
+      const adrV2ItemVersionId = await fx.createItemVersion(sql, {
+        projectId,
+        logicalItemId: adr.logicalItemId,
+        revisionNumber: 2,
+      });
+      await approveItemsVersion(
+        architectureArtifactId,
+        [{ logicalItemId: adr.logicalItemId, itemVersionId: adrV2ItemVersionId }],
+        { architecture: true },
+      );
+
+      const flaggedBody = await fetchRef();
+      expect(flaggedBody.ref).not.toBeNull();
+      expect(flaggedBody.ref.id).toBe(initialBody.ref.id);
+      // Rooted at the ADR's own obsolete v1 - depth 0 (the ref's own cited
+      // item_version is itself the obsolete one), same shape as
+      // github.test.ts's own T13 assertion, resolved to a display key here
+      // since this is the route's serialized DTO, not the raw ImpactRow.
+      expect(flaggedBody.ref.impact).toMatchObject({
+        subjectKind: 'external_ref',
+        rootDisplayKey: adr.displayKey,
+        depth: 0,
+      });
+    });
+  });
 
   // T14 - real, passing this slice (E1-S5's Definition of Done).
   describe('T14 - append-only tables / draft-only membership reject their forbidden writes', () => {
@@ -1184,19 +2018,204 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // not have exercised a real GitHub-shaped external_ref. E4-S2 (SCRUM-51)
   // proves this for real at the module level - see
   // tests/integration/external/github.test.ts's own T17 describe block.
-  // Kept `it.todo` here; E4-T3 re-runs it through the real API routes.
-  it.todo('T17');
+  //
+  // Not in this story's own cited set (docs/Throughline_Jira_Plan.md's E4-T3
+  // row cites only T11-T13, T18, T26, T41, T42 - T17 belongs to E4-S2 per that
+  // row) - this stub's OWN comment claiming "E4-T3 re-runs it through the
+  // real API routes" is a real discrepancy with the Jira Plan, flagged rather
+  // than silently absorbed (per this story's instructions). Closed here as a
+  // bonus anyway: it falls out naturally from the `GET .../github/ref` route
+  // work E4-T3 already does, and - unlike T13 just above - Architecture is
+  // never re-approved in this scenario (only Requirements changes), so the
+  // `_shared/external.ts` ref-discovery gap documented in T13's own comment
+  // never triggers here.
+  describe('T17 - one impact() row for a GitHub ref, not one per embedded ADR; direct beats transitive (through GET .../github/ref)', () => {
+    it('three ADRs all tracing to the same obsolete Requirement collapse to a single flagged ref, one hop past its winning ADR', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T17' });
+      mockAuthAsOwner(userId);
+      const requirementsArtifactId = await fx.createArtifact(sql, projectId, 'requirements');
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+
+      const r07 = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: requirementsArtifactId,
+        itemType: 'requirement',
+      });
+      const rVersion1 = await fx.createDraftArtifactVersion(sql, requirementsArtifactId, {
+        versionNumber: 1,
+      });
+      await fx.createMembership(sql, {
+        artifactVersionId: rVersion1,
+        artifactId: requirementsArtifactId,
+        logicalItemId: r07.logicalItemId,
+        itemVersionId: r07.itemVersionId,
+      });
+      await fx.approveArtifactVersion(sql, rVersion1);
+
+      const adr1 = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: architectureArtifactId,
+        itemType: 'architecture_decision',
+      });
+      const adr2 = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: architectureArtifactId,
+        itemType: 'architecture_decision',
+      });
+      const adr3 = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: architectureArtifactId,
+        itemType: 'architecture_decision',
+      });
+
+      // adr1, adr3: DIRECT on R-07 (depth 0). adr2: TRANSITIVE, via adr1 (depth 1).
+      await fx.createSemanticDependency(sql, {
+        projectId,
+        downstreamItemVersionId: adr1.itemVersionId,
+        upstreamItemVersionId: r07.itemVersionId,
+      });
+      await fx.createSemanticDependency(sql, {
+        projectId,
+        downstreamItemVersionId: adr2.itemVersionId,
+        upstreamItemVersionId: adr1.itemVersionId,
+      });
+      await fx.createSemanticDependency(sql, {
+        projectId,
+        downstreamItemVersionId: adr3.itemVersionId,
+        upstreamItemVersionId: r07.itemVersionId,
+      });
+
+      const architectureVersionId = await approveItemsVersion(
+        architectureArtifactId,
+        [adr1, adr2, adr3].map((adr) => ({
+          logicalItemId: adr.logicalItemId,
+          itemVersionId: adr.itemVersionId,
+        })),
+        { architecture: true },
+      );
+
+      const opId = await fx.createExternalOperation(sql, {
+        projectId,
+        provider: 'github',
+        sourceArtifactVersionId: architectureVersionId,
+        sourceItemVersionId: null,
+      });
+      await fx.createExternalRef(sql, {
+        projectId,
+        provider: 'github',
+        externalOperationId: opId,
+        sourceArtifactVersionId: architectureVersionId,
+        sourceItemVersionId: null,
+      });
+
+      // R-07 changes A -> D (a new revision, approved) - Architecture itself
+      // is NEVER re-approved, so the ref stays discoverable via its (still
+      // current) architectureVersionId throughout.
+      const rD = await fx.createItemVersion(sql, {
+        projectId,
+        logicalItemId: r07.logicalItemId,
+        revisionNumber: 2,
+      });
+      const rVersion2 = await fx.createDraftArtifactVersion(sql, requirementsArtifactId, {
+        versionNumber: 2,
+      });
+      await fx.createMembership(sql, {
+        artifactVersionId: rVersion2,
+        artifactId: requirementsArtifactId,
+        logicalItemId: r07.logicalItemId,
+        itemVersionId: rD,
+      });
+      await sql`UPDATE artifact_version SET status = 'superseded' WHERE id = ${rVersion1}`;
+      await fx.approveArtifactVersion(sql, rVersion2);
+
+      const response = await githubRefRoute(
+        getRequest(`http://localhost/api/projects/${projectId}/github/ref`),
+        routeParams(projectId),
+      );
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      // Exactly one ref, one impact row (not one per embedded ADR), rooted at
+      // r07's obsolete v1 (A) - direct (adr1/adr3) beats transitive (adr2)
+      // among the ADRs' own item-level depths, but the REF's own depth is one
+      // hop further than whichever ADR it wins through (ERD section 6.3's own
+      // results table: "T17 - one ref, three ADRs, one obsolete root | Exactly
+      // one ref row, depth 1").
+      expect(body.ref.impact).toMatchObject({
+        subjectKind: 'external_ref',
+        rootDisplayKey: r07.displayKey,
+        depth: 1,
+      });
+    });
+  });
 
   // T18 - Name collision on repo creation, then a different name.
   // Expected: first operation failed (name_taken_by_other); second is a new
   // operation with a new key; a second concurrent GitHub operation is
   // refused.
-  // E4-S2 (SCRUM-51) proves this for real, at the module level, against the
+  // E4-S2 (SCRUM-51) already proves this at the module level, against the
   // real `github.initRepo` + a fake-GitHub-via-custom-fetch - see
   // tests/integration/external/github.test.ts's own T18 describe block.
-  // Kept `it.todo` here, same deferral pattern as T11 above: E4-T3 is what
-  // closes T18 through the real API routes end to end.
-  it.todo('T18');
+  // E4-T3 closes it here for real, through `POST /api/projects/:projectId/
+  // github/init` (API Contracts section 8).
+  describe('T18 - name collision on repo creation, then a different name (through the real API route)', () => {
+    it('first attempt ends 409 NAME_TAKEN_BY_OTHER; a different name starts a fresh operation (200); a second concurrent GitHub operation is refused (409)', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T18' });
+      mockAuthAsOwner(userId);
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const adr = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: architectureArtifactId,
+        itemType: 'architecture_decision',
+      });
+      await approveItemsVersion(
+        architectureArtifactId,
+        [{ logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId }],
+        { architecture: true },
+      );
+
+      const takenName = `e4t3-t18-taken-${randomUUID().slice(0, 8)}`;
+      const normalizedTaken = github.normalizeRepoName(takenName);
+      const fake = createFakeGithubProvider(FAKE_GITHUB_OWNER);
+      fake.seedForeignRepo(normalizedTaken, 'thrln-marker:e4t3someoneelse0');
+      const url = `http://localhost/api/projects/${projectId}/github/init`;
+
+      await withFakeFetch(fake.fetch, async () => {
+        const firstResponse = await githubInitRoute(
+          jsonRequest(url, { repoName: takenName, impactAcknowledged: true }),
+          routeParams(projectId),
+        );
+        expect(firstResponse.status).toBe(409);
+        expect((await firstResponse.json()).error.code).toBe('NAME_TAKEN_BY_OTHER');
+
+        const differentName = `e4t3-t18-fresh-${randomUUID().slice(0, 8)}`;
+        const secondResponse = await githubInitRoute(
+          jsonRequest(url, { repoName: differentName, impactAcknowledged: true }),
+          routeParams(projectId),
+        );
+        expect(secondResponse.status).toBe(200);
+        expect((await secondResponse.json()).status).toBe('completed');
+
+        const rows = await githubOperationRows(projectId);
+        expect(rows).toHaveLength(2);
+        expect(rows[0]).toMatchObject({ status: 'failed', error_message: 'name_taken_by_other' });
+        expect(rows[1]!.status).toBe('completed');
+        expect(rows[0]!.operation_key).not.toBe(rows[1]!.operation_key); // a NEW key, never reused
+
+        // A second concurrent GitHub operation for the same project is
+        // refused (ERD 4.15) - the just-completed one still counts as active.
+        const yetAnotherName = `e4t3-t18-third-${randomUUID().slice(0, 8)}`;
+        const thirdResponse = await githubInitRoute(
+          jsonRequest(url, { repoName: yetAnotherName, impactAcknowledged: true }),
+          routeParams(projectId),
+        );
+        expect(thirdResponse.status).toBe(409);
+        expect((await thirdResponse.json()).error.code).toBe('GITHUB_ALREADY_INITIALIZED');
+
+        const rowsAfterRefusal = await githubOperationRows(projectId);
+        expect(rowsAfterRefusal).toHaveLength(2); // the refused attempt never inserted a row
+      });
+    });
+  });
 
   // T19 - Change expectedScale (a constraint item) with ADRs citing it and
   // one that does not.
@@ -1326,11 +2345,91 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // project in between.
   // Expected: second export creates new operations (target-specific keys);
   // no completed operation is reused for the new target.
-  // E4-S3 (SCRUM-52) proves this for real at the module level - see
-  // tests/integration/external/jira.test.ts's own T26 describe block. Kept
-  // `it.todo` here (same deferral pattern as T12 above); E4-T3 re-runs it
-  // through the real API routes.
-  it.todo('T26');
+  // E4-S3 (SCRUM-52) already proves this at the module level - see
+  // tests/integration/external/jira.test.ts's own T26 describe block. E4-T3
+  // closes it here for real, through `POST /api/projects/:projectId/jira/
+  // export`, reconfiguring `JIRA_PROJECT_KEY` + `vi.resetModules()` between
+  // calls exactly as jira.test.ts's own T26 already does for its module-level
+  // proof - the route handler (and its own transitive `@/auth`/`@/external/
+  // jira`/`@/lib/env` imports) must be re-imported fresh too, since `@/lib/
+  // env` is a module-level singleton captured once per module instance (this
+  // file's own top-of-file gotcha comment).
+  describe('T26 - export the same Backlog twice with a different configured Jira project in between (through the real API route)', () => {
+    it('second export creates new, target-specific operations; no completed operation is reused for the new target', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T26' });
+      const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
+      const epic = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: backlogArtifactId,
+        itemType: 'epic',
+      });
+      await approveBacklogVersionForJira(backlogArtifactId, [
+        { logicalItemId: epic.logicalItemId, itemVersionId: epic.itemVersionId },
+      ]);
+
+      const fake = createFakeJiraProvider();
+      const exportUrl = `http://localhost/api/projects/${projectId}/jira/export`;
+
+      async function freshExportRoute(jiraProjectKey: string): Promise<typeof jiraExportRoute> {
+        process.env.JIRA_PROJECT_KEY = jiraProjectKey;
+        vi.resetModules();
+        const freshAuth = await import('@/auth');
+        vi.mocked(freshAuth.getVerifiedUser).mockResolvedValue({
+          id: userId,
+          email: `${userId}@example.test`,
+          displayName: null,
+        });
+        return (await import('@/app/api/projects/[projectId]/jira/export/route')).POST;
+      }
+
+      try {
+        const exportAlpha = await freshExportRoute('E4T3ALPHA');
+        const alphaResponse = await withFakeFetch(fake.fetch, () =>
+          exportAlpha(
+            jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
+            routeParams(projectId),
+          ),
+        );
+        expect(alphaResponse.status).toBe(200);
+        expect((await alphaResponse.json()).created).toHaveLength(1);
+
+        // Reconfigure to a DIFFERENT Jira project - switching the configured
+        // project alone must not resurface an unnecessary Skip/Create-New
+        // prompt (FR-074 is scoped to the CONFIGURED project); nothing has
+        // been exported to BETA yet, so this is a plain, undecided-free export.
+        const exportBeta = await freshExportRoute('E4T3BETA');
+        const betaResponse = await withFakeFetch(fake.fetch, () =>
+          exportBeta(
+            jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
+            routeParams(projectId),
+          ),
+        );
+        expect(betaResponse.status).toBe(200);
+        expect((await betaResponse.json()).created).toHaveLength(1);
+      } finally {
+        // Defensive cleanup - every OTHER test in this file uses the outer,
+        // once-imported route handlers (closed over whatever JIRA_PROJECT_KEY
+        // was current before this file's top-level beforeAll ran, frozen in
+        // their own module instance regardless of what this test does to
+        // process.env afterward) - this restore is hygiene, not correctness,
+        // for them.
+        process.env.JIRA_PROJECT_KEY = DEFAULT_JIRA_PROJECT_KEY;
+      }
+
+      const operations = await jiraOperationRows(projectId);
+      expect(operations).toHaveLength(2); // target-specific keys, never one row reused
+      expect(operations[0]!.operation_key).toBe(
+        `jira:create_issue:E4T3ALPHA:${epic.itemVersionId}`,
+      );
+      expect(operations[1]!.operation_key).toBe(`jira:create_issue:E4T3BETA:${epic.itemVersionId}`);
+      expect(operations[0]!.status).toBe('completed');
+      expect(operations[1]!.status).toBe('completed');
+
+      const refs = await jiraRefRowsForItem(epic.itemVersionId);
+      expect(refs).toHaveLength(2); // one per target, no completed operation reused
+      expect(new Set(refs.map((ref) => ref.external_key)).size).toBe(2); // genuinely different issues
+    });
+  });
 
   // T27 - real, passing this slice (E1-S5's Definition of Done).
   it('T27: UPDATE architecture_option raises even after approval (architecture_option_append_only)', async () => {
@@ -1687,17 +2786,233 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // Expected: the Skip / Create New prompt appears for the Epic; no second
   // Jira Epic is created; its Stories are parented to the existing Jira
   // Epic of E-01.
-  // E4-S3 (SCRUM-52) proves this for real at the module level - see
-  // tests/integration/external/jira.test.ts's own T41 describe block. Kept
-  // `it.todo` here (same deferral pattern as T12/T26 above); E4-T3 re-runs
-  // it through the real API routes.
-  it.todo('T41');
+  // E4-S3 (SCRUM-52) already proves this at the module level - see
+  // tests/integration/external/jira.test.ts's own T41 describe block. E4-T3
+  // closes it here for real, through `GET/POST /api/projects/:projectId/
+  // jira/preview`/`export`.
+  describe('T41 - edit Epic E-01, re-approve, re-export; choose Skip for E-01 (through the real API routes)', () => {
+    it('GET .../jira/preview shows the Skip/Create-New prompt for the Epic; POST .../jira/export with skip creates no second Jira Epic; the Story is parented to the existing Jira Epic of E-01', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T41' });
+      mockAuthAsOwner(userId);
+      const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
+      const epic = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: backlogArtifactId,
+        itemType: 'epic',
+      });
+      const story = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: backlogArtifactId,
+        itemType: 'story',
+      });
+      await approveBacklogVersionForJira(backlogArtifactId, [
+        { logicalItemId: epic.logicalItemId, itemVersionId: epic.itemVersionId },
+        {
+          logicalItemId: story.logicalItemId,
+          itemVersionId: story.itemVersionId,
+          parentLogicalItemId: epic.logicalItemId,
+        },
+      ]);
+
+      const exportUrl = `http://localhost/api/projects/${projectId}/jira/export`;
+      const previewUrl = `http://localhost/api/projects/${projectId}/jira/preview`;
+      const fake = createFakeJiraProvider();
+
+      await withFakeFetch(fake.fetch, () =>
+        jiraExportRoute(
+          jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
+          routeParams(projectId),
+        ),
+      );
+      const originalEpicRef = (await jiraRefRowsForItem(epic.itemVersionId))[0];
+      const originalEpicKey = originalEpicRef!.external_key!;
+
+      // Edit E-01's title: a new ItemVersion under the SAME Epic LogicalItem.
+      // The Story is UNCHANGED (INV-010: unchanged items reuse their
+      // ItemVersion) - the new Backlog version's own membership row for the
+      // Story points at the SAME item_version_id as v1.
+      const epicV2ItemVersionId = await fx.createItemVersion(sql, {
+        projectId,
+        logicalItemId: epic.logicalItemId,
+        revisionNumber: 2,
+      });
+      await approveBacklogVersionForJira(backlogArtifactId, [
+        { logicalItemId: epic.logicalItemId, itemVersionId: epicV2ItemVersionId },
+        {
+          logicalItemId: story.logicalItemId,
+          itemVersionId: story.itemVersionId,
+          parentLogicalItemId: epic.logicalItemId,
+        },
+      ]);
+
+      const previewResponse = await jiraPreviewRoute(
+        getRequest(previewUrl),
+        routeParams(projectId),
+      );
+      expect(previewResponse.status).toBe(200);
+      const previewBody = await previewResponse.json();
+      expect(previewBody.needsDecision).toContainEqual(
+        expect.objectContaining({ logicalItemId: epic.logicalItemId, displayKey: epic.displayKey }),
+      );
+
+      // Choose Skip for E-01.
+      const exportResponse = await withFakeFetch(fake.fetch, () =>
+        jiraExportRoute(
+          jsonRequest(exportUrl, {
+            decisions: [{ logicalItemId: epic.logicalItemId, decision: 'skip' }],
+            impactAcknowledged: true,
+          }),
+          routeParams(projectId),
+        ),
+      );
+      expect(exportResponse.status).toBe(200);
+      const exportBody = await exportResponse.json();
+      expect(exportBody.skipped).toContainEqual({ logicalItemId: epic.logicalItemId });
+
+      // No second Jira Epic is created.
+      expect(await jiraRefRowsForItem(epicV2ItemVersionId)).toHaveLength(0);
+      expect(await jiraRefRowsForItem(epic.itemVersionId)).toHaveLength(1); // still just the original
+
+      // Its Story is parented to the EXISTING Jira Epic of E-01 - idempotent
+      // reuse of the unchanged Story's already-completed operation still
+      // resolves the SAME, original epic key as parent.
+      const storyRef = exportBody.created.find(
+        (ref: { sourceItemVersionId: string }) => ref.sourceItemVersionId === story.itemVersionId,
+      );
+      expect(storyRef).toBeDefined();
+      const fakeStoryIssue = fake.issuesByKey.get(storyRef.externalKey);
+      expect(fakeStoryIssue?.parentKey).toBe(originalEpicKey);
+    });
+  });
 
   // T42 - Preview a Jira export whose Stories include a flagged Story.
   // Expected: the preview lists the impact rows and requires an explicit
   // confirmation; the resulting ref is flagged immediately.
-  // Turns green with E4-T3.
-  it.todo('T42');
+  // E4-T3 closes it here for real, through `GET /api/projects/:projectId/
+  // jira/preview`, `POST .../jira/export` and `GET .../external-refs` (API
+  // Contracts sections 7/9).
+  describe('T42 - preview a Jira export whose Stories include a flagged Story (through the real API routes)', () => {
+    it('GET .../jira/preview lists the impact row; POST .../jira/export requires impactAcknowledged (409 otherwise, 200 once acknowledged); the resulting ref is flagged immediately', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T42' });
+      mockAuthAsOwner(userId);
+      const requirementsArtifactId = await fx.createArtifact(sql, projectId, 'requirements');
+      const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
+
+      const r = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: requirementsArtifactId,
+        itemType: 'requirement',
+      });
+      const requirementsV1 = await fx.createDraftArtifactVersion(sql, requirementsArtifactId, {
+        versionNumber: 1,
+      });
+      await fx.createMembership(sql, {
+        artifactVersionId: requirementsV1,
+        artifactId: requirementsArtifactId,
+        logicalItemId: r.logicalItemId,
+        itemVersionId: r.itemVersionId,
+      });
+      await fx.approveArtifactVersion(sql, requirementsV1);
+
+      const epic = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: backlogArtifactId,
+        itemType: 'epic',
+      });
+      const story = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: backlogArtifactId,
+        itemType: 'story',
+      });
+      await fx.createSemanticDependency(sql, {
+        projectId,
+        downstreamItemVersionId: story.itemVersionId,
+        upstreamItemVersionId: r.itemVersionId,
+      });
+      await approveBacklogVersionForJira(backlogArtifactId, [
+        { logicalItemId: epic.logicalItemId, itemVersionId: epic.itemVersionId },
+        {
+          logicalItemId: story.logicalItemId,
+          itemVersionId: story.itemVersionId,
+          parentLogicalItemId: epic.logicalItemId,
+        },
+      ]);
+
+      // R changes (a new revision, approved) - the Story's dependency edge is
+      // immutable and still points at the now-obsolete OLD item_version
+      // (INV-015), so the Story is flagged.
+      const rNew = await fx.createItemVersion(sql, {
+        projectId,
+        logicalItemId: r.logicalItemId,
+        revisionNumber: 2,
+      });
+      const requirementsV2 = await fx.createDraftArtifactVersion(sql, requirementsArtifactId, {
+        versionNumber: 2,
+      });
+      await fx.createMembership(sql, {
+        artifactVersionId: requirementsV2,
+        artifactId: requirementsArtifactId,
+        logicalItemId: r.logicalItemId,
+        itemVersionId: rNew,
+      });
+      await supersede(requirementsV1);
+      await fx.approveArtifactVersion(sql, requirementsV2);
+
+      const previewUrl = `http://localhost/api/projects/${projectId}/jira/preview`;
+      const exportUrl = `http://localhost/api/projects/${projectId}/jira/export`;
+
+      const previewResponse = await jiraPreviewRoute(
+        getRequest(previewUrl),
+        routeParams(projectId),
+      );
+      expect(previewResponse.status).toBe(200);
+      const previewBody = await previewResponse.json();
+      expect(previewBody.impact).toContainEqual(
+        expect.objectContaining({ subjectId: story.itemVersionId, rootDisplayKey: r.displayKey }),
+      );
+
+      // Not acknowledged -> 409 IMPACT_NOT_ACKNOWLEDGED with details.impact -
+      // an explicit confirmation is required, never a silent export.
+      const deniedResponse = await jiraExportRoute(
+        jsonRequest(exportUrl, { decisions: [], impactAcknowledged: false }),
+        routeParams(projectId),
+      );
+      expect(deniedResponse.status).toBe(409);
+      const deniedBody = await deniedResponse.json();
+      expect(deniedBody.error.code).toBe('IMPACT_NOT_ACKNOWLEDGED');
+      expect(deniedBody.error.details.impact).toContainEqual(
+        expect.objectContaining({ subjectId: story.itemVersionId }),
+      );
+
+      // Acknowledged -> the export proceeds.
+      const fake = createFakeJiraProvider();
+      const exportResponse = await withFakeFetch(fake.fetch, () =>
+        jiraExportRoute(
+          jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
+          routeParams(projectId),
+        ),
+      );
+      expect(exportResponse.status).toBe(200);
+      const exportBody = await exportResponse.json();
+      expect(exportBody.created).toHaveLength(2); // 1 Epic + 1 Story
+
+      // The resulting ref is flagged immediately.
+      const refsResponse = await externalRefsRoute(
+        getRequest(`http://localhost/api/projects/${projectId}/external-refs`),
+        routeParams(projectId),
+      );
+      expect(refsResponse.status).toBe(200);
+      const refsBody = await refsResponse.json();
+      const storyRefDTO = refsBody.refs.find(
+        (ref: { sourceItemVersionId: string }) => ref.sourceItemVersionId === story.itemVersionId,
+      );
+      expect(storyRefDTO).toBeDefined();
+      expect(storyRefDTO.impact).toMatchObject({
+        subjectKind: 'external_ref',
+        rootDisplayKey: r.displayKey,
+      });
+    });
+  });
 
   // T43 - Try to generate UI Requirements before Architecture is approved,
   // and a Backlog before UI Requirements is approved.

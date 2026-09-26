@@ -2,23 +2,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Route-handler wiring test for GET /api/projects/:projectId/external-refs
 // (API Contracts section 7), same style as tests/unit/api/projects-route.test.ts:
-// `@/auth`/`@/artifact-lifecycle`/`@/external/*` are mocked wholesale, so no
-// DB/env is ever touched. The shared `_shared/external.ts` helper is left
-// real (not mocked) - it's pure route-serving glue, this exercises it too -
-// but every module IT imports (`@/external/operations`/`github`/`jira`/
-// `stitch`) must still be mocked here, since it statically imports all of
-// them regardless of which provider a given ref actually uses.
+// `@/auth`/`@/external/*` are mocked wholesale, so no DB/env is ever touched.
+// The route no longer calls `artifact-lifecycle.getProjectById` (E4-T3,
+// SCRUM-56 - `requireProjectOwner` alone proves the project exists and is
+// owned), so that module isn't mocked here at all. The shared
+// `_shared/external.ts` helper is left real (not mocked) - it's pure
+// route-serving glue, this exercises it too - but every module IT imports
+// (`@/external/operations`/`github`/`jira`/`stitch`) must still be mocked
+// here, since it statically imports all of them regardless of which provider
+// a given ref actually uses.
 vi.mock('@/auth', () => ({
   getVerifiedUser: vi.fn(),
   requireProjectOwner: vi.fn(),
 }));
 
-vi.mock('@/artifact-lifecycle', () => ({
-  getProjectById: vi.fn(),
-}));
-
 vi.mock('@/external/operations', () => ({
-  getRefsForVersion: vi.fn(),
+  getRefsForProject: vi.fn(),
   getDisplayKeysForItemVersions: vi.fn(),
 }));
 
@@ -27,19 +26,16 @@ vi.mock('@/external/jira', () => ({ checkDrift: vi.fn() }));
 vi.mock('@/external/stitch', () => ({ checkDrift: vi.fn() }));
 
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
-import { getProjectById } from '@/artifact-lifecycle';
-import { getRefsForVersion, getDisplayKeysForItemVersions } from '@/external/operations';
+import { getRefsForProject, getDisplayKeysForItemVersions } from '@/external/operations';
 import { checkDrift as checkGithubDrift } from '@/external/github';
 import { checkDrift as checkJiraDrift } from '@/external/jira';
 import { checkDrift as checkStitchDrift } from '@/external/stitch';
 import { GET } from '@/app/api/projects/[projectId]/external-refs/route';
 import { ApiError } from '@/lib/errors';
-import { emptyArtifactSummaries } from '@/lib/serialize';
 
 const mockedGetVerifiedUser = vi.mocked(getVerifiedUser);
 const mockedRequireProjectOwner = vi.mocked(requireProjectOwner);
-const mockedGetProjectById = vi.mocked(getProjectById);
-const mockedGetRefsForVersion = vi.mocked(getRefsForVersion);
+const mockedGetRefsForProject = vi.mocked(getRefsForProject);
 const mockedGetDisplayKeys = vi.mocked(getDisplayKeysForItemVersions);
 const mockedCheckGithubDrift = vi.mocked(checkGithubDrift);
 const mockedCheckJiraDrift = vi.mocked(checkJiraDrift);
@@ -47,22 +43,6 @@ const mockedCheckStitchDrift = vi.mocked(checkStitchDrift);
 
 const user = { id: 'user-1', email: 'a@b.com', displayName: null };
 const now = new Date('2024-01-01T00:00:00.000Z');
-
-function baseProject() {
-  const artifacts = emptyArtifactSummaries();
-  artifacts.architecture.approvedVersionId = 'arch-v1';
-  artifacts.backlog.approvedVersionId = 'backlog-v1';
-  return {
-    id: 'project-1',
-    ownerUserId: 'user-1',
-    name: 'x',
-    brief: 'y',
-    inputContext: null,
-    createdAt: now,
-    updatedAt: now,
-    artifacts,
-  };
-}
 
 function makeRef(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -93,8 +73,7 @@ describe('GET /api/projects/:projectId/external-refs', () => {
   beforeEach(() => {
     mockedGetVerifiedUser.mockReset();
     mockedRequireProjectOwner.mockReset();
-    mockedGetProjectById.mockReset();
-    mockedGetRefsForVersion.mockReset();
+    mockedGetRefsForProject.mockReset();
     mockedGetDisplayKeys.mockReset();
     mockedCheckGithubDrift.mockReset();
     mockedCheckJiraDrift.mockReset();
@@ -119,38 +98,32 @@ describe('GET /api/projects/:projectId/external-refs', () => {
     expect(response.status).toBe(404);
     const body = await response.json();
     expect(body.error.code).toBe('NOT_FOUND');
-    expect(mockedGetProjectById).not.toHaveBeenCalled();
+    expect(mockedGetRefsForProject).not.toHaveBeenCalled();
   });
 
-  it('returns {refs: []} when the project has no approved versions', async () => {
+  it('returns {refs: []} when the project has no external refs', async () => {
     mockedGetVerifiedUser.mockResolvedValue(user);
     mockedRequireProjectOwner.mockResolvedValue(undefined);
-    const project = { ...baseProject(), artifacts: emptyArtifactSummaries() };
-    mockedGetProjectById.mockResolvedValue(project);
+    mockedGetRefsForProject.mockResolvedValue([]);
 
     const response = await GET(request(), paramsFor('project-1'));
 
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toEqual({ refs: [] });
-    expect(mockedGetRefsForVersion).not.toHaveBeenCalled();
+    expect(mockedGetRefsForProject).toHaveBeenCalledWith('project-1');
   });
 
-  it('merges refs across every non-null approved version and resolves drift + display keys', async () => {
+  it('returns every ref the project has produced and resolves drift + display keys', async () => {
     mockedGetVerifiedUser.mockResolvedValue(user);
     mockedRequireProjectOwner.mockResolvedValue(undefined);
-    mockedGetProjectById.mockResolvedValue(baseProject());
 
     const githubRef = makeRef({
       id: 'ref-github',
       provider: 'github',
       sourceArtifactVersionId: 'arch-v1',
     });
-    mockedGetRefsForVersion.mockImplementation(async (versionId: string) => {
-      if (versionId === 'arch-v1') return [githubRef];
-      if (versionId === 'backlog-v1') return [];
-      return [];
-    });
+    mockedGetRefsForProject.mockResolvedValue([githubRef] as never);
     mockedCheckGithubDrift.mockResolvedValue({
       subjectKind: 'external_ref',
       subjectId: 'ref-github',
@@ -165,8 +138,7 @@ describe('GET /api/projects/:projectId/external-refs', () => {
 
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(mockedGetRefsForVersion).toHaveBeenCalledWith('arch-v1');
-    expect(mockedGetRefsForVersion).toHaveBeenCalledWith('backlog-v1');
+    expect(mockedGetRefsForProject).toHaveBeenCalledWith('project-1');
     expect(body.refs).toHaveLength(1);
     expect(body.refs[0]).toMatchObject({
       id: 'ref-github',

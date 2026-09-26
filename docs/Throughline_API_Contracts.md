@@ -1,7 +1,7 @@
 # Throughline - API Contracts
 
-**Document version:** 1.3
-**Status:** Derived from ERD/Data Model v1.8, Technical Requirements & Lineage Invariants v1.4, and Module Boundaries v1.3. Parent of Jira Plan -> Implementation. v1.1: dropped the allowlist gate/`403 NOT_ALLOWLISTED` - ERD Appendix B round 9 (sign-up is open, gated by email verification only). v1.2: added the missing `BRIEF_FROZEN` (409) row to the section 11 error code table (E1-S8) - already documented inline on `PATCH /api/projects/:projectId` (section 3) but omitted from the reference table; no behavior change. v1.3: added the missing `INTERNAL_ERROR` (500) row to section 11 - `src/lib/errors.ts`'s `errorResponse` has always emitted it for any caught error that isn't an `ApiError`, but it was never in the table; no behavior change.
+**Document version:** 1.4
+**Status:** Derived from ERD/Data Model v1.8, Technical Requirements & Lineage Invariants v1.4, and Module Boundaries v1.3. Parent of Jira Plan -> Implementation. v1.1: dropped the allowlist gate/`403 NOT_ALLOWLISTED` - ERD Appendix B round 9 (sign-up is open, gated by email verification only). v1.2: added the missing `BRIEF_FROZEN` (409) row to the section 11 error code table (E1-S8) - already documented inline on `PATCH /api/projects/:projectId` (section 3) but omitted from the reference table; no behavior change. v1.3: added the missing `INTERNAL_ERROR` (500) row to section 11 - `src/lib/errors.ts`'s `errorResponse` has always emitted it for any caught error that isn't an `ApiError`, but it was never in the table; no behavior change. v1.4 (E4-T3): corrected section 7's and section 12's `-> module.function` annotation for `GET /api/projects/:projectId/external-refs` from `external-operations.getRefsForVersion` ("called once per approved version and merged") to `external-operations.getRefsForProject`. The route's normative behaviour is unchanged - "All GitHub/Jira/Stitch references created from this project, each with its own drift flag" - and is now literally true rather than approximately so. The old annotation named a mechanism the E4-T3 slice gate proved lossy: a GitHub `external_ref` is pinned to the Architecture version approved when `initRepo` ran, so resolving refs through each artifact type's CURRENT approved version dropped an existing repository from this route and from `GET .../github/ref` after any re-approval (ERD T13, which could not pass until it was fixed). Corrected rather than left stale because this document's own header promises the annotation is exact, so a wrong one actively points the next implementer back at the bug; no request/response shape changed.
 **Style:** REST over HTTPS, JSON bodies, implemented as Next.js Route Handlers under `app/api/` (Module Boundaries layer 6).
 **Primary audience:** Developer, AI coding agents implementing route handlers.
 
@@ -306,7 +306,7 @@ Acknowledge one warning directly from the panel (independent of approval; the ap
 
 All GitHub/Jira/Stitch references created from this project, each with its own drift flag.
 
-`-> external-operations.getRefsForVersion` (called once per approved version and merged) plus `impact.getExternalDrift` per ref
+`-> external-operations.getRefsForProject` (every ref the project has, by `external_ref`'s own `project_id`) plus, per ref, the owning provider module's `checkDrift` (`github`/`jira`/`stitch`, dispatched by `provider`), each delegating to `impact.getExternalDrift` - layer 6 may not import `impact` directly
 
 **Response `200`:** `{ refs: ExternalRefDTO[] }`
 
@@ -466,7 +466,7 @@ A `manual_fallback` result is `200`, not an error: FR-054 requires the workflow 
 | PUT | `/api/artifact-versions/:versionId/items/:logicalItemId` | `artifact-lifecycle.commitItemEdit` |
 | GET | `/api/projects/:projectId/impact` | `impact.getWarnings` |
 | POST | `/api/impact/acknowledgements` | `impact.acknowledge` |
-| GET | `/api/projects/:projectId/external-refs` | `external-operations.getRefsForVersion` + `impact.getExternalDrift` |
+| GET | `/api/projects/:projectId/external-refs` | `external-operations.getRefsForProject` + `<provider>.checkDrift` |
 | GET | `/api/external-operations/:operationId` | (read) |
 | POST | `/api/external-operations/:operationId/retry` | `external-operations.runOperation` |
 | POST | `/api/projects/:projectId/github/preview` | `github.previewInit` |

@@ -7,13 +7,12 @@
 // `eslint.config.mjs`'s `boundaries/elements` pattern (`src/app/api/**`), so
 // it is bound by the exact same layer6 import allow-list as every route
 // handler - no domain logic lives here, only the "call a layer-3/4/5
-// function, serialize the result" glue that section 7's own text
-// ("called once per approved version and merged") requires more than one
-// route to repeat identically (Module Boundaries 4.7).
-import { ARTIFACT_TYPES } from '@/lib/serialize';
-import type { ProjectWithArtifacts } from '@/artifact-lifecycle';
+// function, serialize the result" glue that section 7's own normative
+// sentence ("All GitHub/Jira/Stitch references created from this project,
+// each with its own drift flag") requires more than one route to repeat
+// identically (Module Boundaries 4.7).
 import {
-  getRefsForVersion,
+  getRefsForProject,
   getDisplayKeysForItemVersions,
   type ExternalRef,
 } from '@/external/operations';
@@ -29,30 +28,22 @@ import {
 } from '@/lib/serialize';
 
 /**
- * Every non-null approved-version id across a project's 4 artifact types
- * (API Contracts section 7's own text for `GET .../external-refs`: "called
- * once per approved version and merged"). GitHub/Stitch refs are always
- * sourced from exactly one of these (`architecture`/`ui_requirements`); Jira
- * refs from `backlog` - this list is exhaustive across all three providers,
- * so merging `external-operations.getRefsForVersion` over it is a complete
- * project-wide read with no separate "refs by project" export needed
- * (`external-operations` only ever indexes by version/item, Module
- * Boundaries 4.5).
+ * Every `external_ref` a project has ever produced, across every provider
+ * (routes 1 and 6) - a thin pass-through to `external-operations.
+ * getRefsForProject`, a plain read of that module's own owned table by its
+ * own `project_id` column. Fixed by E4-T3 (SCRUM-56): this used to resolve
+ * refs by merging `getRefsForVersion` over each artifact type's CURRENT
+ * `approvedVersionId` (`project.artifacts.*.approvedVersionId`), which is
+ * lossy the moment an artifact is re-approved after a ref already exists - a
+ * GitHub ref's own `source_artifact_version_id` is pinned forever to
+ * whichever Architecture version was approved when `initRepo` ran (ERD
+ * 4.15: one repository per project, ever), so the old merge silently dropped
+ * a still-real repo the instant Architecture was re-approved (ERD Appendix C
+ * T13's own scenario). Reading by `project_id` instead is exhaustive by
+ * construction, not by enumerating artifact types.
  */
-function approvedVersionIds(project: ProjectWithArtifacts): string[] {
-  return ARTIFACT_TYPES.map((type) => project.artifacts[type].approvedVersionId).filter(
-    (id): id is string => id !== null,
-  );
-}
-
-/** Every `external_ref` this project has ever produced, across every provider (routes 1 and 6). */
-export async function getAllExternalRefsForProject(
-  project: ProjectWithArtifacts,
-): Promise<ExternalRef[]> {
-  const refsPerVersion = await Promise.all(
-    approvedVersionIds(project).map((id) => getRefsForVersion(id)),
-  );
-  return refsPerVersion.flat();
+export async function getAllExternalRefsForProject(projectId: string): Promise<ExternalRef[]> {
+  return getRefsForProject(projectId);
 }
 
 /**
