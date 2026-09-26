@@ -6,9 +6,22 @@
 // Nothing outside this folder may import a file that is not re-exported here
 // (Module Boundaries section 7).
 //
-// buildPrompt/outputSchema/toCandidates/qualityGate (Module Boundaries 4.4's
-// full ArtifactTypeModule shape) are E3-S7's job and do NOT exist yet - do
-// not build them here. The two re-exports below are a narrow, additive
+// The generation surface - buildPrompt, outputSchema (exactly two options),
+// toOptionInputs, toCandidates - lives in ./generation.ts (E3-S7, SCRUM-42) and
+// is re-exported just below. There is deliberately no `qualityGate` (Module
+// Boundaries 4.4: none specified for Architecture in P0) and no manual
+// revision (regeneration only, ERD 3.6). `toCandidates` returns `[]`: decisions
+// are not lineage until approval (ERD 5.5), so the options are persisted
+// separately through the createOptions facade below. The generate ->
+// createDraftFromGeneration -> createOptions orchestration is E3-S10's job.
+// That includes loading what a regenerate `buildPrompt` call needs beyond the
+// approved requirements: each base ADR's `upstreamRefs` (display keys of its
+// bound upstream items - part of the ADR semantic hash, INV-016) and
+// `baseStack` (the approved version's selected option's stack, compared by
+// E3-S3's stack guard with a raw deep-equal). Both are required inputs; the
+// wiring is not built here.
+//
+// The read re-exports after it are a narrow, additive
 // exception pulled forward by E4-S2 (SCRUM-51): Module Boundaries 4.6
 // documents `github.previewInit` as reading "the selected option's stack
 // (via `architecture`, read-only)" - i.e. THIS module is `github`'s
@@ -22,6 +35,20 @@
 // can reach that data without a second, undocumented cross-layer import or
 // an eslint-disable (project convention: compose a thin read above the
 // boundary, never disable the rule).
+export {
+  outputSchema,
+  buildPrompt,
+  toOptionInputs,
+  toCandidates,
+  type ArchitectureOutput,
+  type ArchitectureOptionOutput,
+  type ArchitectureDecisionCandidate,
+  type ArchitectureStackDescriptor,
+  type ArchitectureGenerationContext,
+  type ApprovedRequirementItem,
+  type BaseArchitectureDecision,
+} from './generation';
+
 export {
   getSelectedOption,
   getArchitectureDecisionItems,
