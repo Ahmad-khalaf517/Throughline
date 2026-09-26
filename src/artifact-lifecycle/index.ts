@@ -26,6 +26,7 @@ export {
 } from './generation';
 export { createManualRevisionDraft } from './manual-revision';
 export { requestRevision, rejectVersion } from './rejection';
+export { proposeItemEdit, commitItemEdit, type CommitItemEditResult } from './item-edit';
 
 export type Project = typeof schema.project.$inferSelect;
 
