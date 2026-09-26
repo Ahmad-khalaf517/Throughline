@@ -25,6 +25,7 @@ export {
   type CreateDraftFromGenerationResult,
 } from './generation';
 export { createManualRevisionDraft } from './manual-revision';
+export { requestRevision, rejectVersion } from './rejection';
 
 export type Project = typeof schema.project.$inferSelect;
 
