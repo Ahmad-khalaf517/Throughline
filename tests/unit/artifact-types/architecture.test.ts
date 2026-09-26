@@ -346,3 +346,39 @@ describe('architecture buildPrompt (FR-020, FR-022)', () => {
     );
   });
 });
+
+// The one trailing paragraph every artifact-type module appends (same wording in
+// all four - each module carries its own copy, so each unit test pins it).
+const FEEDBACK_HEADER =
+  'Reviewer feedback on the previous version - address it, even where that means changing an item you were told above to keep verbatim, and keep every unrelated item unchanged:';
+
+describe('architecture buildPrompt - reviewer feedback (E3-S10)', () => {
+  const contexts = (): ArchitectureGenerationContext[] => [
+    ctx(),
+    ctx({ baseDecisions, baseStack }),
+  ];
+
+  it('is byte-identical to the feedback-free prompt when feedback is absent, undefined or blank', () => {
+    for (const context of contexts()) {
+      const plain = architecture.buildPrompt(context);
+      for (const feedback of [undefined, '', '   \n\t ']) {
+        expect(architecture.buildPrompt({ ...context, feedback })).toBe(plain);
+      }
+    }
+  });
+
+  it('appends exactly one trailing paragraph carrying the trimmed feedback', () => {
+    for (const context of contexts()) {
+      const plain = architecture.buildPrompt(context);
+      expect(
+        architecture.buildPrompt({ ...context, feedback: '  Prefer a serverless option B.  \n' }),
+      ).toBe(`${plain}\n\n${FEEDBACK_HEADER}\nPrefer a serverless option B.`);
+    }
+  });
+
+  it('still refuses inconsistent input when feedback is supplied', () => {
+    expect(() =>
+      architecture.buildPrompt(ctx({ requirements: [], feedback: 'Anything.' })),
+    ).toThrow('approved requirements');
+  });
+});

@@ -274,7 +274,9 @@ describe.each(decisions)('$method (ERD 3.1/3.2; INV-002/003)', (decision) => {
       expect(results[0]!.status).toBe('fulfilled');
       expect(results[1]).toMatchObject({
         status: 'rejected',
-        reason: new Error(`artifact_version ${draft} is not a draft`),
+        // Same class as the code throws (E3-S10): Vitest 3's Error equality
+        // compares the prototype and name, not just the message.
+        reason: new lifecycle.VersionNotDraftError(draft),
       });
       expect(await versionState(draft)).toEqual({
         status: rejectionFirst ? 'rejected' : 'approved',

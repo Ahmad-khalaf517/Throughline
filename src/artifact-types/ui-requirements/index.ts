@@ -8,20 +8,24 @@
 //
 // Jira E2-S9 (SCRUM-35) scope: the FR-080 generation-prerequisite refusal
 // (T43 - "Try to generate UI Requirements before Architecture is approved...
-// refused"). `generate` below is still exactly that: it throws either the
-// prerequisite error or, once prerequisites are met, a plain not-implemented
-// error (its message is matched verbatim by tests/integration/appendix-c.test.ts's
-// T43 case, so it is deliberately left as-is here).
+// refused"). `generate` below still begins with exactly that refusal, thrown
+// before any model call or transaction (its message is matched verbatim by
+// tests/integration/appendix-c.test.ts's T43 case, so it is deliberately left
+// as-is here).
 //
 // Jira E3-S8 (SCRUM-43) scope: `outputSchema` / `buildPrompt` / `toCandidates`
 // (Module Boundaries 4.4's ArtifactTypeModule shape, TR FR-040) - pure, no
 // database and no model call, exactly like the sibling `requirements`
 // module's. `qualityGate` is not built: Module Boundaries 4.4 lists "none
-// specified for P0" for this artifact type (a QualityIssue type would belong
-// to E3-S6/S10 anyway). Wiring these into `generate` (loading the approved
-// Requirements/Architecture items, calling ai-client, returning
-// `toCandidates(...)` to createDraftFromGeneration) is E3-S10's job - not
-// done here.
+// specified for P0" for this artifact type.
+//
+// Jira E3-S10 (SCRUM-45) scope: `generate`'s second half - once the
+// prerequisites pass it now loads the approved Requirements/Architecture
+// items and this artifact's own approved items, builds the prompt, calls
+// ai-client and returns `{ payload, candidates, runId }` (the shape
+// `createDraftFromGeneration`'s `generate` callback takes) - plus the optional
+// reviewer `feedback` on `UiRequirementsGenerationContext`. Composing it with
+// `createDraftFromGeneration` is the API route's job.
 //
 // `getUiRequirementsForPrompt` below is E4-S4's (SCRUM-53) own narrow
 // addition - `stitch.previewPrompt`/`generate` (Module Boundaries 4.6) need
@@ -47,9 +51,14 @@
 // already use, since a version with zero real members returns one row with
 // nulls throughout (`getSourceVersionMembers`'s own contract).
 import { z } from 'zod';
+import { generateStructured } from '@/ai-client';
 import { getProjectById } from '@/artifact-lifecycle';
-import { withTx } from '@/db';
-import { getSourceVersionMembers, type Candidate } from '@/lineage/identity';
+import { withTx, type Tx } from '@/db';
+import {
+  getSourceVersionMembers,
+  getUpstreamDependencies,
+  type Candidate,
+} from '@/lineage/identity';
 
 // TR FR-040's UI Requirements fields, split by what is dependable (ERD 5.6:
 // "If something downstream should be flagged when it changes, it must be a
@@ -182,6 +191,10 @@ export interface UiRequirementsGenerationContext {
   // [] on a first-ever generation (baseVersionId is null); the artifact's
   // current approved items, verbatim, on a regenerate call.
   baseItems: BaseUiRequirementItem[];
+  // Reviewer feedback for an AI revision (API Contracts 4, `generate`'s
+  // `feedback`). Absent or blank leaves the prompt byte-identical to what it
+  // was before this field existed (T21's regeneration stability depends on it).
+  feedback?: string | undefined;
 }
 
 const RULES = `You are a UI/UX analyst for a software project. Given the project's approved
@@ -243,7 +256,7 @@ function listUpstream(
  * approved upstream items are listed by display key so the model can only
  * cite keys that exist.
  */
-export function buildPrompt(ctx: UiRequirementsGenerationContext): string {
+function buildBasePrompt(ctx: UiRequirementsGenerationContext): string {
   const upstream = listUpstream(ctx.requirements, ctx.architectureDecisions);
 
   if (!ctx.baseItems.length) {
@@ -277,6 +290,28 @@ rephrase, reorder, add, or remove any of them, including the entries inside the 
 arrays - keep each array's elements in exactly the order shown). Only the free-text "explanation"
 field may be reworded if you want. Keep each item's displayKey the same as shown above, and set
 previousDisplayKey to that same display key.`;
+}
+
+// One wording across all four artifact-type modules (each carries its own
+// copy: layer-3 peers cannot share a module, and `lib` is framework glue only).
+function withReviewerFeedback(prompt: string, feedback: string | undefined): string {
+  const trimmed = feedback?.trim();
+  if (!trimmed) return prompt;
+  return (
+    `${prompt}\n\n` +
+    'Reviewer feedback on the previous version - address it, even where that means changing an ' +
+    'item you were told above to keep verbatim, and keep every unrelated item unchanged:\n' +
+    trimmed
+  );
+}
+
+/**
+ * `buildBasePrompt` (the regeneration-stability prompt above), plus - only when
+ * `ctx.feedback` is a non-blank string - one trailing reviewer-feedback
+ * paragraph. With no feedback the result is exactly `buildBasePrompt`'s.
+ */
+export function buildPrompt(ctx: UiRequirementsGenerationContext): string {
+  return withReviewerFeedback(buildBasePrompt(ctx), ctx.feedback);
 }
 
 /**
@@ -319,8 +354,31 @@ export function toCandidates(items: UiRequirementItem[]): Candidate[] {
  * transaction and never writes a row (generation.ts's own header comment -
  * "if it throws, the exception propagates as-is: no lock, no transaction, no
  * row written").
+ *
+ * Once the prerequisites pass (E3-S10, SCRUM-45), this loads the real
+ * generation context (the approved Requirements/Architecture items, plus this
+ * artifact's own approved items for regeneration stability), builds the
+ * prompt, calls the model and returns `{ payload, candidates, runId }` - the
+ * shape `createDraftFromGeneration`'s own `generate` callback expects, same as
+ * `backlog.generate`. Composing it with `createDraftFromGeneration` (which
+ * needs an `artifactId`/`actorUserId` this module never sees) is the API
+ * route's job.
+ *
+ * `contextSourceVersionIds` / `baseVersionId` are optional and are exactly what
+ * `createDraftFromGeneration` hands its `generate` callback. When present they
+ * replace this function's own read of the project's currently approved ids, so
+ * the prompt, the recorded `generation_context_ref` rows and the captured base
+ * all come from one snapshot (INV-006); absent (`generate({ projectId })`, the
+ * T43 call), it reads the project as before. The FR-080 refusal above still
+ * runs against the project either way. `contextSourceVersionIds` is positional -
+ * see `UI_REQUIREMENTS_CONTEXT_ORDER`.
  */
-export async function generate(ctx: { projectId: string }): Promise<never> {
+export async function generate(ctx: {
+  projectId: string;
+  feedback?: string | undefined;
+  contextSourceVersionIds?: string[] | undefined;
+  baseVersionId?: string | null | undefined;
+}): Promise<{ payload: unknown; candidates: Candidate[]; runId: string }> {
   const project = await getProjectById(ctx.projectId);
   if (!project) {
     throw new Error(`Project ${ctx.projectId} does not exist`);
@@ -335,10 +393,204 @@ export async function generate(ctx: { projectId: string }): Promise<never> {
     );
   }
 
-  throw new Error(
-    'ui-requirements.generate: buildPrompt/outputSchema/toCandidates are out of scope for ' +
-      'E2-S9 (SCRUM-35) - only the FR-080 prerequisite refusal (T43) is implemented here.',
+  const [requirementsVersionId, architectureVersionId]: [string, string] =
+    ctx.contextSourceVersionIds
+      ? contextVersionIdsFrom(ctx.contextSourceVersionIds)
+      : [
+          project.artifacts.requirements.approvedVersionId!,
+          project.artifacts.architecture.approvedVersionId!,
+        ];
+  const baseVersionId =
+    ctx.baseVersionId !== undefined
+      ? ctx.baseVersionId
+      : project.artifacts.ui_requirements.approvedVersionId;
+
+  const generationContext = await withTx((tx) =>
+    loadGenerationContext(tx, {
+      requirementsVersionId,
+      architectureVersionId,
+      baseVersionId,
+      feedback: ctx.feedback,
+    }),
   );
+  const prompt = buildPrompt(generationContext);
+  const { data, runId } = await generateStructured({
+    projectId: ctx.projectId,
+    purpose: 'generation',
+    prompt,
+    schema: outputSchema,
+  });
+
+  return { payload: data.payload, candidates: toCandidates(data.items), runId };
+}
+
+// The prerequisite artifacts of UI Requirements (TR FR-080), in the canonical
+// order the API route passes them as `contextSourceVersionIds` (the route
+// filters the fixed artifact order requirements -> architecture -> ui_requirements
+// down to this type's prerequisites). Layer-3 modules may not import the route's
+// table, so the positional contract is restated here and tested.
+const UI_REQUIREMENTS_CONTEXT_ORDER = ['requirements', 'architecture'] as const;
+
+function contextVersionIdsFrom(ids: readonly string[]): [string, string] {
+  const [requirements, architecture, ...rest] = ids;
+  if (requirements === undefined || architecture === undefined || rest.length) {
+    throw new Error(
+      `UI Requirements generate expects exactly ${UI_REQUIREMENTS_CONTEXT_ORDER.length} context source version ids ` +
+        `(${UI_REQUIREMENTS_CONTEXT_ORDER.join(', ')}), got ${ids.length}`,
+    );
+  }
+  return [requirements, architecture];
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+}
+
+// Numeric-aware, so UI-2 sorts before UI-10. Every list this module shows the
+// model is sorted with it: `getSourceVersionMembers` and
+// `getUpstreamDependencies` have no ORDER BY, and the prompt must be a pure
+// function of the stored items (T21).
+function compareDisplayKeys(a: string, b: string): number {
+  return a.localeCompare(b, 'en', { numeric: true });
+}
+
+/**
+ * Loads everything buildPrompt needs from the three approved versions' members:
+ *  - `requirements` / `architectureDecisions`: the approved Requirements and
+ *    Architecture items, reduced to the fields buildPrompt lists (the payload
+ *    fields are ERD 5.4's projection fields for those item types, read
+ *    defensively as `unknown` - layer-3 peers may not import each other's
+ *    schemas). An Architecture version's members are its materialized ADRs.
+ *  - `baseItems`: this artifact's own currently approved items, verbatim, with
+ *    each item's `upstreamRefs` reconstructed as the display keys of its stored
+ *    `semantic_dependency` upstreams (`identity.getUpstreamDependencies`, same
+ *    technique as backlog's base Stories) - they are inside the semantic hash
+ *    via the sorted upstream ItemVersion ids (INV-016), so the model must see
+ *    them to return them unchanged. `[]` on a first generation.
+ *
+ * A base item's stored edge can point at an upstream that is no longer among
+ * the Requirements/ADRs shown above (removed since it was generated). Showing
+ * that key verbatim would tell the model to return a reference
+ * `dependency-binding` cannot resolve inside the persist transaction, turning
+ * regeneration - the repair path for exactly that situation - into a hard
+ * failure (the same reasoning as backlog.buildPrompt's `knownUpstreamKeys`).
+ * So only refs present in the context lists are kept; the dropped ref changes
+ * that item's upstream ids, so it correctly comes back as a new revision.
+ */
+async function loadGenerationContext(
+  tx: Tx,
+  args: {
+    requirementsVersionId: string;
+    architectureVersionId: string;
+    baseVersionId: string | null;
+    feedback: string | undefined;
+  },
+): Promise<UiRequirementsGenerationContext> {
+  const versionIds = [args.requirementsVersionId, args.architectureVersionId];
+  if (args.baseVersionId) versionIds.push(args.baseVersionId);
+  const members = await getSourceVersionMembers(tx, versionIds);
+
+  const requirements: UpstreamRequirementForPrompt[] = members
+    .flatMap((member): UpstreamRequirementForPrompt[] => {
+      if (
+        member.sourceVersionId !== args.requirementsVersionId ||
+        member.itemType !== 'requirement' ||
+        !member.displayKey
+      ) {
+        return [];
+      }
+      const payload = asRecord(member.payload);
+      return [
+        {
+          displayKey: member.displayKey,
+          type:
+            payload.type === 'non_functional' || payload.type === 'constraint'
+              ? payload.type
+              : 'functional',
+          actor: asString(payload.actor),
+          behavior: asString(payload.behavior),
+          acceptanceCriteria: asStringArray(payload.acceptanceCriteria),
+        },
+      ];
+    })
+    .sort((a, b) => compareDisplayKeys(a.displayKey, b.displayKey));
+
+  const architectureDecisions: UpstreamArchitectureDecisionForPrompt[] = members
+    .flatMap((member): UpstreamArchitectureDecisionForPrompt[] => {
+      if (
+        member.sourceVersionId !== args.architectureVersionId ||
+        member.itemType !== 'architecture_decision' ||
+        !member.displayKey
+      ) {
+        return [];
+      }
+      const payload = asRecord(member.payload);
+      return [
+        {
+          displayKey: member.displayKey,
+          decision: asString(payload.decision),
+          technologyOrApproach: asString(payload.technologyOrApproach),
+        },
+      ];
+    })
+    .sort((a, b) => compareDisplayKeys(a.displayKey, b.displayKey));
+
+  const baseMembers = args.baseVersionId
+    ? members.filter(
+        (member) =>
+          member.sourceVersionId === args.baseVersionId &&
+          member.itemType === 'ui_requirement' &&
+          member.itemVersionId &&
+          member.displayKey,
+      )
+    : [];
+  const dependencies = baseMembers.length
+    ? await getUpstreamDependencies(
+        tx,
+        baseMembers.map((member) => member.itemVersionId as string),
+      )
+    : [];
+  const shownUpstreamKeys = new Set([
+    ...requirements.map((item) => item.displayKey),
+    ...architectureDecisions.map((item) => item.displayKey),
+  ]);
+  const upstreamKeysByDownstream = new Map<string, Set<string>>();
+  for (const dep of dependencies) {
+    if (!dep.upstreamDisplayKey || !shownUpstreamKeys.has(dep.upstreamDisplayKey)) continue;
+    const keys = upstreamKeysByDownstream.get(dep.downstreamItemVersionId) ?? new Set<string>();
+    keys.add(dep.upstreamDisplayKey);
+    upstreamKeysByDownstream.set(dep.downstreamItemVersionId, keys);
+  }
+
+  const baseItems: BaseUiRequirementItem[] = baseMembers
+    .map((member) => {
+      const payload = asRecord(member.payload);
+      return {
+        displayKey: member.displayKey as string,
+        screenOrFlow: asString(payload.screenOrFlow),
+        interactionRequirement: asString(payload.interactionRequirement),
+        responsiveConstraints: asStringArray(payload.responsiveConstraints),
+        accessibilityConstraints: asStringArray(payload.accessibilityConstraints),
+        upstreamRefs: [
+          ...(upstreamKeysByDownstream.get(member.itemVersionId as string) ?? []),
+        ].sort(compareDisplayKeys),
+      };
+    })
+    .sort((a, b) => compareDisplayKeys(a.displayKey, b.displayKey));
+
+  return { requirements, architectureDecisions, baseItems, feedback: args.feedback };
 }
 
 export interface UiRequirementItemForPrompt {

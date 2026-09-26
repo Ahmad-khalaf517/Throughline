@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
 import type postgres from 'postgres';
 import type { OptionInput } from '@/architecture-materialization';
 import { connect } from './support/connection';
@@ -319,6 +319,111 @@ describe('architecture materialization (FR-020/021/022; ERD 3.4/5.5)', () => {
       (await impact.getWarnings(f.projectId)).find((row) => row.subjectId === adr!.item_version_id)
         ?.acknowledged,
     ).toBe(true);
+  });
+
+  // A draft whose selected option references R-01, after R-01 has moved on to a
+  // second approved revision: approving it must block (FR-083), because the ADR
+  // `materialize` mints would be based on a superseded Requirement.
+  async function blockedArchitectureApproval() {
+    const f = await setup();
+    const v = await draft(f.artifactId, f.requirementsVersionId);
+    const [selected] = await architecture.createOptions(v, [
+      option(['chosen'], ['R-01']),
+      option(['unused']),
+    ]);
+    const requirementV2 = await fx.createItemVersion(sql, {
+      projectId: f.projectId,
+      logicalItemId: f.requirement.logicalItemId,
+      revisionNumber: 2,
+    });
+    const reqV2 = await fx.createDraftArtifactVersion(sql, f.requirementsId, { versionNumber: 2 });
+    await fx.createMembership(sql, {
+      artifactVersionId: reqV2,
+      artifactId: f.requirementsId,
+      logicalItemId: f.requirement.logicalItemId,
+      itemVersionId: requirementV2,
+    });
+    await lifecycle.approveVersion(reqV2, f.userId);
+    return { f, v, selectedOptionId: selected!.id };
+  }
+
+  async function itemVersionIdsThatExist(ids: string[]) {
+    const rows = await sql<{ id: string }[]>`select id from item_version where id in ${sql(ids)}`;
+    return rows.map((row) => row.id);
+  }
+
+  it('ERD 3.5: a blocked Architecture approval carries display keys for every id it names, including the ADR that was rolled back', async () => {
+    const { f, v, selectedOptionId } = await blockedArchitectureApproval();
+    const before = await counts(f.projectId);
+
+    const blocked = await architecture.approveVersion(v, f.userId, selectedOptionId);
+
+    if (blocked.ok) throw new Error('expected the approval to be blocked');
+    expect(blocked.code).toBeUndefined();
+    expect(blocked.blocking).toHaveLength(1);
+    const row = blocked.blocking[0]!;
+    // `materialize` had already minted the ADR when the gate blocked, and the
+    // blocking row names it as its subject and last path element.
+    expect(row.rootItemVersionId).toBe(f.requirement.itemVersionId);
+    expect(row.path).toEqual([f.requirement.itemVersionId, row.subjectId]);
+    const adrItemVersionId = row.subjectId;
+
+    // The keys were captured inside the transaction: every id the row references
+    // (root and each path element) resolves, ADR included.
+    const displayKeys = blocked.displayKeys!;
+    expect(displayKeys).toBeInstanceOf(Map);
+    for (const id of [row.rootItemVersionId, ...row.path]) {
+      expect(displayKeys.has(id)).toBe(true);
+    }
+    expect(displayKeys.get(f.requirement.itemVersionId)).toBe('R-01');
+    expect(displayKeys.get(adrItemVersionId)).toBe('ADR-01');
+
+    // ...and that ADR no longer exists: a lookup after the rollback (the route's
+    // old `getDisplayKeysForItemVersions`) could not have resolved it.
+    expect(await itemVersionIdsThatExist([adrItemVersionId])).toEqual([]);
+    expect(await counts(f.projectId)).toEqual(before);
+  });
+
+  it('ERD 3.5/FR-084: an override whose recomputed gate still blocks throws ApprovalGateBlockedError carrying the same captured keys', async () => {
+    const { f, v, selectedOptionId } = await blockedArchitectureApproval();
+    const before = await counts(f.projectId);
+
+    // `approveWithOverride` satisfies the gate by acknowledging exactly what the
+    // gate blocks on, so with real data a block cannot survive it. Simulate the
+    // "still blocks" branch by making the acknowledgement step a no-op in a fresh
+    // module graph (the handles imported in beforeAll are untouched).
+    vi.resetModules();
+    vi.doMock('@/lineage/impact', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('@/lineage/impact')>()),
+      acknowledgeGateBlockers: async () => undefined,
+    }));
+    try {
+      const mockedArchitecture = await import('@/artifact-types/architecture');
+      const mockedLifecycle = await import('@/artifact-lifecycle');
+
+      const error = await mockedArchitecture
+        .approveWithOverride(v, f.userId, 'Reviewed the superseded requirement', selectedOptionId)
+        .then(
+          () => null,
+          (thrown: unknown) => thrown,
+        );
+
+      expect(error).toBeInstanceOf(mockedLifecycle.ApprovalGateBlockedError);
+      const blocked = error as InstanceType<typeof mockedLifecycle.ApprovalGateBlockedError>;
+      expect(blocked.blocking).toHaveLength(1);
+      const row = blocked.blocking[0]!;
+      expect(row.path).toEqual([f.requirement.itemVersionId, row.subjectId]);
+      for (const id of [row.rootItemVersionId, ...row.path]) {
+        expect(blocked.displayKeys.has(id)).toBe(true);
+      }
+      expect(blocked.displayKeys.get(f.requirement.itemVersionId)).toBe('R-01');
+      expect(blocked.displayKeys.get(row.subjectId)).toBe('ADR-01');
+      expect(await itemVersionIdsThatExist([row.subjectId])).toEqual([]);
+      expect(await counts(f.projectId)).toEqual(before);
+    } finally {
+      vi.doUnmock('@/lineage/impact');
+      vi.resetModules();
+    }
   });
 
   it('T9/INV-006: refuses a reference outside recorded source membership', async () => {

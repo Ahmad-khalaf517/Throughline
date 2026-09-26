@@ -43,6 +43,15 @@ export async function resolveDisplayKeys(
 // dependency-binding.bindUpstreamRefs) only ever destructures the fields it
 // already used, so an extra column on the same rows changes nothing for
 // them - confirmed by reading every call site before adding this one too.
+//
+// `revisionNumber` was added by E3-S10 (SCRUM-45) for the same reason and in
+// the same additive way: `GET /api/artifact-versions/:versionId` (API
+// Contracts 1.8's `ItemVersionDTO.revisionNumber`) is served by
+// artifact-lifecycle's `getArtifactVersionDetail`, which builds its items from
+// this one shared read rather than querying `item_version` itself (that table
+// belongs to `identity`, Module Boundaries section 5). It rides the
+// `item_version` LEFT JOIN `payload` already needed, so it is null exactly
+// when the membership row (or the whole version) has no items.
 export async function getSourceVersionMembers(tx: Tx, sourceVersionIds: string[]) {
   const uniqueSourceVersionIds = [...new Set(sourceVersionIds)];
   if (!uniqueSourceVersionIds.length) return [];
@@ -58,6 +67,7 @@ export async function getSourceVersionMembers(tx: Tx, sourceVersionIds: string[]
       itemType: schema.logicalItem.itemType,
       parentLogicalItemId: schema.artifactVersionItemMembership.parentLogicalItemId,
       payload: schema.itemVersion.payload,
+      revisionNumber: schema.itemVersion.revisionNumber,
     })
     .from(schema.artifactVersion)
     .innerJoin(schema.artifact, eq(schema.artifactVersion.artifactId, schema.artifact.id))
@@ -137,6 +147,32 @@ export async function getUpstreamDependencies(
     )
     .leftJoin(schema.logicalItem, eq(schema.logicalItem.id, schema.itemVersion.logicalItemId))
     .where(inArray(schema.semanticDependency.downstreamItemVersionId, uniqueIds));
+}
+
+// Added by the E3-S10 (SCRUM-45) review-fix pass: `item_version.id ->
+// logical_item.display_key`, read through the caller's OPEN transaction.
+// `resolveDisplayKeys` above goes the other way (display key -> logical item id)
+// so it cannot serve. artifact-lifecycle's approval transaction needs this one
+// because a blocked Architecture approval rolls back the ADR ItemVersions
+// `materialize` minted moments earlier (ERD 3.5, "Why ids never cross the
+// API"), yet the blocking `ImpactRow`s still name those ids as their subject and
+// last `path` entry. Once the transaction has rolled back, no read on `db` can
+// resolve them any more, so the keys have to be captured here, inside the tx,
+// while the rows still exist. `external-operations.getDisplayKeysForItemVersions`
+// is the same join on the pool (`db`) for ids that are already committed.
+// Read-only, additive, and on `identity`'s own two tables.
+export async function getDisplayKeysByItemVersionId(
+  tx: Tx,
+  itemVersionIds: readonly string[],
+): Promise<Map<string, string>> {
+  const uniqueIds = [...new Set(itemVersionIds)];
+  if (!uniqueIds.length) return new Map();
+  const rows = await tx
+    .select({ id: schema.itemVersion.id, displayKey: schema.logicalItem.displayKey })
+    .from(schema.itemVersion)
+    .innerJoin(schema.logicalItem, eq(schema.logicalItem.id, schema.itemVersion.logicalItemId))
+    .where(inArray(schema.itemVersion.id, uniqueIds));
+  return new Map(rows.map((row) => [row.id, row.displayKey]));
 }
 
 export async function getCurrentItemVersionIds(

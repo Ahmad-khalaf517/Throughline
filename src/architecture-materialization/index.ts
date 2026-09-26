@@ -14,8 +14,10 @@
 // version actually materialized. Both are PURE reads through this module's
 // own owned table (architecture_option) plus one documented cross-layer
 // read (see below) - neither one is a write path, a state-machine
-// transition.
-import { eq } from 'drizzle-orm';
+// transition. `getOptionsForVersion` was added later by E3-S10 (SCRUM-45):
+// the same kind of plain read of this module's own table, for the API layer's
+// `ArtifactVersionDTO.options`.
+import { asc, eq } from 'drizzle-orm';
 import { db, schema, withTx } from '@/db';
 import { getSourceVersionMembers } from '@/lineage/identity';
 
@@ -83,6 +85,26 @@ export async function getSelectedOption(
     .where(eq(schema.artifactVersion.id, artifactVersionId))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * Every `architecture_option` of one Architecture `artifact_version` - the
+ * exactly-two rows `createOptions` inserted, `option_key` 'A' then 'B'
+ * (Jira E3-S10 / SCRUM-45: `ArtifactVersionDTO.options` and the generate/
+ * approve routes' option ids). A plain read of this module's own table;
+ * `[]` for a version that has none (not an Architecture version, an
+ * unknown id, or a stale-rejected generation, which never persists options).
+ * `option_key` is CHECK-constrained to 'A' | 'B', so ascending text order is
+ * A-then-B.
+ */
+export async function getOptionsForVersion(
+  artifactVersionId: string,
+): Promise<ArchitectureOption[]> {
+  return db
+    .select()
+    .from(schema.architectureOption)
+    .where(eq(schema.architectureOption.artifactVersionId, artifactVersionId))
+    .orderBy(asc(schema.architectureOption.optionKey));
 }
 
 export type ArchitectureDecisionItem = Awaited<ReturnType<typeof getSourceVersionMembers>>[number];

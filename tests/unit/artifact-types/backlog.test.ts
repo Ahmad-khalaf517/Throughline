@@ -267,3 +267,56 @@ describe('backlog.buildPrompt (ERD 5.4 regeneration-stability technique)', () =>
     expect(prompt).not.toContain('R-09');
   });
 });
+
+// The one trailing paragraph every artifact-type module appends (same wording in
+// all four - each module carries its own copy, so each unit test pins it).
+const FEEDBACK_HEADER =
+  'Reviewer feedback on the previous version - address it, even where that means changing an item you were told above to keep verbatim, and keep every unrelated item unchanged:';
+
+describe('backlog.buildPrompt - reviewer feedback (E3-S10)', () => {
+  const firstContext: BacklogGenerationContext = {
+    brief: 'A personal blog platform.',
+    requirements: [
+      { displayKey: 'R-01', itemType: 'requirement', summary: '[functional] Reader search' },
+    ],
+    architectureDecisions: [],
+    uiRequirements: [],
+    baseEpics: [],
+    baseStories: [],
+  };
+  const regenerateContext: BacklogGenerationContext = {
+    ...firstContext,
+    baseEpics: [
+      { displayKey: 'E-01', title: 'Article search', scopeStatement: 'Finding articles.' },
+    ],
+    baseStories: [
+      {
+        displayKey: 'S-01',
+        parentDisplayKey: 'E-01',
+        userValueStatement: validStory.userValueStatement,
+        acceptanceCriteria: [],
+        structuredBehavior: validStory.structuredBehavior,
+        priority: null,
+        upstreamRefs: ['R-01'],
+      },
+    ],
+  };
+
+  it('is byte-identical to the feedback-free prompt when feedback is absent, undefined or blank', () => {
+    for (const context of [firstContext, regenerateContext]) {
+      const plain = backlog.buildPrompt(context);
+      for (const feedback of [undefined, '', '   \n\t ']) {
+        expect(backlog.buildPrompt({ ...context, feedback })).toBe(plain);
+      }
+    }
+  });
+
+  it('appends exactly one trailing paragraph carrying the trimmed feedback', () => {
+    for (const context of [firstContext, regenerateContext]) {
+      const plain = backlog.buildPrompt(context);
+      expect(backlog.buildPrompt({ ...context, feedback: '  Split S-01 in two.  \n' })).toBe(
+        `${plain}\n\n${FEEDBACK_HEADER}\nSplit S-01 in two.`,
+      );
+    }
+  });
+});

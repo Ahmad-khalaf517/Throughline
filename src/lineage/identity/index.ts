@@ -2,6 +2,7 @@ export { matchAndPersistItems, type Candidate } from './matcher';
 export {
   resolveDisplayKeys,
   getSourceVersionMembers,
+  getDisplayKeysByItemVersionId,
   getCurrentItemVersionIds,
   getUpstreamDependencies,
 } from './references';

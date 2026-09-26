@@ -16,6 +16,12 @@
 // `qualityGate` only loads the version's members (identity) and payload
 // (artifact-lifecycle) and calls it.
 //
+// Jira E3-S10 (SCRUM-45) adds `generate` (below) - the same
+// `{ payload, candidates, runId }` callback shape `backlog.generate` already
+// has - and the optional reviewer `feedback` on `RequirementsGenerationContext`.
+// Composing it with `artifact-lifecycle.createDraftFromGeneration` (which needs
+// an `artifactId`/`actorUserId` this module never sees) is the API route's job.
+//
 // Requirements is the root artifact (TR FR-080: "Requirements | - (the
 // project brief)") - buildPrompt never receives another artifact's approved
 // items, and toCandidates never sets upstreamRefs to anything but `[]`
@@ -24,8 +30,9 @@
 // see src/lineage/identity/projection.ts's semanticProjection closing
 // "cannot have upstream dependencies" guard).
 import { z } from 'zod';
-import { getArtifactVersionPayload } from '@/artifact-lifecycle';
-import { withTx } from '@/db';
+import { generateStructured } from '@/ai-client';
+import { getArtifactVersionPayload, getProjectById } from '@/artifact-lifecycle';
+import { withTx, type Tx } from '@/db';
 import { getSourceVersionMembers, type Candidate } from '@/lineage/identity';
 import type { QualityIssueDTO } from '@/lib/serialize';
 
@@ -102,6 +109,10 @@ export interface RequirementsGenerationContext {
   // [] on a first-ever generation (baseVersionId is null); the artifact's
   // current approved items, verbatim, on a regenerate call.
   baseItems: BaseRequirementItem[];
+  // Reviewer feedback for an AI revision (API Contracts 4, `generate`'s
+  // `feedback`). Absent or blank leaves the prompt byte-identical to what it
+  // was before this field existed (T21's regeneration stability depends on it).
+  feedback?: string | undefined;
 }
 
 const RULES = `You are a requirements analyst for a software project. Given a short product
@@ -140,7 +151,7 @@ schema. Rules:
  * against, or (b) supply the base items verbatim, keyed by display key, and
  * ask for the SAME items back unchanged when there is.
  */
-export function buildPrompt(ctx: RequirementsGenerationContext): string {
+function buildBasePrompt(ctx: RequirementsGenerationContext): string {
   if (!ctx.baseItems.length) {
     return `${RULES}\n\nBrief: ${ctx.brief}\n\nReturn a fresh set of requirements. Set every item's previousDisplayKey to null.`;
   }
@@ -172,6 +183,28 @@ array, acceptanceCriteria array, dimension and value for each one (do not rephra
 or remove any of them). Only the free-text "explanation" field may be reworded if you want. Keep
 each item's displayKey the same as shown above, and set previousDisplayKey to that same display
 key.`;
+}
+
+// One wording across all four artifact-type modules (each carries its own
+// copy: layer-3 peers cannot share a module, and `lib` is framework glue only).
+function withReviewerFeedback(prompt: string, feedback: string | undefined): string {
+  const trimmed = feedback?.trim();
+  if (!trimmed) return prompt;
+  return (
+    `${prompt}\n\n` +
+    'Reviewer feedback on the previous version - address it, even where that means changing an ' +
+    'item you were told above to keep verbatim, and keep every unrelated item unchanged:\n' +
+    trimmed
+  );
+}
+
+/**
+ * `buildBasePrompt` (the regeneration-stability prompt above), plus - only when
+ * `ctx.feedback` is a non-blank string - one trailing reviewer-feedback
+ * paragraph. With no feedback the result is exactly `buildBasePrompt`'s.
+ */
+export function buildPrompt(ctx: RequirementsGenerationContext): string {
+  return withReviewerFeedback(buildBasePrompt(ctx), ctx.feedback);
 }
 
 /**
@@ -432,4 +465,122 @@ export async function qualityGate(versionId: string): Promise<QualityIssue[]> {
     throw new Error(`requirements.qualityGate: artifact version ${versionId} does not exist`);
   }
   return evaluateRequirementsQuality({ items, payload: version.payload });
+}
+
+// --- generate() (Jira E3-S10 / SCRUM-45) ------------------------------------
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function asStringOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+}
+
+/**
+ * The comparison base as buildPrompt shows it: this artifact's currently
+ * approved Requirements items, verbatim. `displayKey` is the item's REAL
+ * `logical_item.display_key` - buildPrompt asks the model to keep it and to set
+ * `previousDisplayKey` to the same value, and identity later validates that
+ * hint against the same base (never trusted as an id). Ordered by display key
+ * (numeric-aware) because `getSourceVersionMembers` has no ORDER BY and the
+ * prompt must be a pure function of the stored items (T21).
+ *
+ * Read leniently, field by field, rather than through `StoredRequirementSchema`:
+ * a stored payload that has drifted from the schema (`qualityGate` reports that
+ * as MALFORMED_ITEM) must not make regeneration - the repair path - throw. A
+ * bad field degrades to an empty value, so the model is shown something close
+ * and its "unchanged" answer hashes differently and mints a corrected revision.
+ */
+async function loadBaseItems(tx: Tx, baseVersionId: string): Promise<BaseRequirementItem[]> {
+  const members = await getSourceVersionMembers(tx, [baseVersionId]);
+  return members
+    .flatMap((member): BaseRequirementItem[] => {
+      if (member.itemType !== 'requirement' || !member.displayKey) return [];
+      const payload = isRecord(member.payload) ? member.payload : {};
+      const type = payload.type;
+      return [
+        {
+          displayKey: member.displayKey,
+          type: type === 'non_functional' || type === 'constraint' ? type : 'functional',
+          actor: asString(payload.actor),
+          behavior: asString(payload.behavior),
+          constraints: asStringArray(payload.constraints),
+          acceptanceCriteria: asStringArray(payload.acceptanceCriteria),
+          dimension: asStringOrNull(payload.dimension),
+          value: asStringOrNull(payload.value),
+        },
+      ];
+    })
+    .sort((a, b) => a.displayKey.localeCompare(b.displayKey, 'en', { numeric: true }));
+}
+
+/**
+ * Loads the project's brief and, on a regeneration, the approved Requirements
+ * items; builds the prompt; calls the model; returns `{ payload, candidates,
+ * runId }` - the exact shape `artifact-lifecycle.createDraftFromGeneration`'s
+ * `generate` callback takes (Module Boundaries 4.3), same as
+ * `backlog.generate`. This function does not call `createDraftFromGeneration`
+ * itself: it has no `artifactId`/`actorUserId`, so that composition is the API
+ * route's job (E3-S10).
+ *
+ * `baseVersionId` / `contextSourceVersionIds` are optional and are exactly what
+ * `createDraftFromGeneration` hands its `generate` callback. When present they
+ * replace this function's own read of the project's currently approved ids, so
+ * the prompt, the recorded `generation_context_ref` rows and the captured base
+ * all come from one snapshot (INV-006); absent (`generate({ projectId })`, the
+ * T43 call), it reads the project as before.
+ *
+ * Requirements is the root artifact (TR FR-080: no prerequisite), so there is
+ * no refusal branch. `baseVersionId` is this artifact's own approved version -
+ * `null` on a first generation - the same base `createDraftFromGeneration`
+ * captures for itself before calling this. No transaction is opened when there
+ * is no base to read.
+ */
+export async function generate(ctx: {
+  projectId: string;
+  feedback?: string | undefined;
+  contextSourceVersionIds?: string[] | undefined;
+  baseVersionId?: string | null | undefined;
+}): Promise<{ payload: unknown; candidates: Candidate[]; runId: string }> {
+  const project = await getProjectById(ctx.projectId);
+  if (!project) {
+    throw new Error(`Project ${ctx.projectId} does not exist`);
+  }
+
+  // Requirements has no prerequisite artifacts (FR-080), so a caller that
+  // threads `createDraftFromGeneration`'s captured `contextSourceVersionIds`
+  // through must be passing `[]`; anything else is a wiring bug, not a context
+  // to silently ignore.
+  if (ctx.contextSourceVersionIds?.length) {
+    throw new Error(
+      `Requirements generate expects no context source version ids, got ${ctx.contextSourceVersionIds.length}`,
+    );
+  }
+
+  // The base `createDraftFromGeneration` captured (INV-006) when it is handed
+  // through - the prompt must show exactly the base the draft will be recorded
+  // against, not whatever is approved by the time this read runs. `null` is a
+  // real value here (a first generation), so test for `undefined`, not falsy.
+  const baseVersionId =
+    ctx.baseVersionId !== undefined
+      ? ctx.baseVersionId
+      : project.artifacts.requirements.approvedVersionId;
+  const baseItems = baseVersionId ? await withTx((tx) => loadBaseItems(tx, baseVersionId)) : [];
+
+  const prompt = buildPrompt({ brief: project.brief, baseItems, feedback: ctx.feedback });
+  const { data, runId } = await generateStructured({
+    projectId: ctx.projectId,
+    purpose: 'generation',
+    prompt,
+    schema: outputSchema,
+  });
+
+  return { payload: data.payload, candidates: toCandidates(data.items), runId };
 }

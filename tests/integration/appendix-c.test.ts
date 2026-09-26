@@ -18,6 +18,20 @@ vi.mock('@/auth', async (importOriginal) => ({
   getVerifiedUser: vi.fn(),
 }));
 
+// E3-S10 (SCRUM-45): `ui-requirements.generate` no longer ends in E2-S9's
+// not-implemented stub - once FR-080 passes it loads its context and calls the
+// model. T43 below only proves the ORDER is enforced, so it must never spend a
+// real completion or depend on OPENAI_* env: the one function that reaches the
+// provider is replaced with a double that throws a recognizable error, and
+// everything else `@/ai-client` exports (linkGenerationRun, used by every
+// createDraftFromGeneration call in this file) stays REAL via `importOriginal`.
+vi.mock('@/ai-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/ai-client')>()),
+  generateStructured: vi.fn(async () => {
+    throw new Error('generateStructured reached (test double - no real model call)');
+  }),
+}));
+
 // ERD Appendix C ("Verification suite", docs/Throughline_ERD.md ~line 1641)
 // ported into tests/integration/, per Project Setup section 10 step 9 and
 // Jira Plan E1-S5 / SCRUM-21: "Port ERD Appendix C (T1-T43) into
@@ -3061,7 +3075,9 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
 
     // Approve Architecture (fixture - Architecture generation itself is out
     // of scope for this story, ERD 5.5) - the FR-080 check now passes, so
-    // `generate` reaches its own not-implemented error instead.
+    // `generate` proceeds to the model call (E3-S10; it used to stop at E2-S9's
+    // not-implemented stub here). The `@/ai-client` double at the top of this
+    // file throws there, so still nothing is written.
     const adr = await fx.createLogicalItemWithVersion(sql, {
       projectId,
       artifactId: architectureArtifactId,
@@ -3074,8 +3090,12 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     );
 
     await expect(attemptUiRequirements()).rejects.toThrow(
-      'buildPrompt/outputSchema/toCandidates are out of scope for E2-S9',
+      'generateStructured reached (test double - no real model call)',
     );
+    const uiVersionsAfterPassingFr080 = await sql<{ count: string }[]>`
+      SELECT count(*)::int AS count FROM artifact_version WHERE artifact_id = ${uiRequirementsArtifactId}
+    `;
+    expect(Number(uiVersionsAfterPassingFr080[0]!.count)).toBe(0);
 
     // Backlog before UI Requirements is approved - refused, citing only the
     // still-missing UI Requirements (Requirements and Architecture are both

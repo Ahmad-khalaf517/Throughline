@@ -14,9 +14,11 @@ import { ARTIFACT_TYPES, type ArtifactSummaryDTO, type ArtifactType } from '@/li
 export {
   approveVersion,
   approveWithOverride,
+  ApprovalGateBlockedError,
   type ArchitectureApproval,
   type ApproveVersionResult,
 } from './approval';
+export { VersionNotDraftError } from './errors';
 export { withArchitectureDraft, type ArchitectureDraftContext } from './architecture';
 
 export {
@@ -29,6 +31,25 @@ export { createManualRevisionDraft } from './manual-revision';
 export { requestRevision, rejectVersion } from './rejection';
 export { proposeItemEdit, commitItemEdit, type CommitItemEditResult } from './item-edit';
 export { getArtifactVersionPayload } from './version-payload';
+export {
+  getVersionRef,
+  getArtifactId,
+  listArtifactVersions,
+  getArtifactVersionDetail,
+  type ArtifactVersionRef,
+  type ArtifactVersionRecord,
+  type ArtifactVersionDetail,
+  type VersionItem,
+  type ImpactRow,
+} from './versions';
+
+// `commitItemEdit`/`proposeItemEdit` throw identity's own `ItemEditError`
+// (codes VERSION_NOT_DRAFT / ITEM_NOT_IN_VERSION / UPSTREAM_REMOVED /
+// CONFIRMATION_REQUIRED) and return its `RebindDiff`s. Layer 6 may not import
+// `identity`, so these are forwarded here - the same class object, so an
+// `instanceof` in a route handler matches what item-edit.ts threw; never a
+// second class of the same name.
+export { ItemEditError, type RebindDiff } from '@/lineage/identity';
 
 export type Project = typeof schema.project.$inferSelect;
 

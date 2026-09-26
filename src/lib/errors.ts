@@ -7,10 +7,13 @@ import { NextResponse } from 'next/server';
 // code here in the same change that starts throwing it - this union is not
 // meant to get ahead of what's actually implemented.
 //
-// The six codes below `BRIEF_FROZEN` are E4-S6's own addition (API Contracts
-// sections 7-10): exactly the codes the external-refs/GitHub/Jira/Stitch
-// routes actually throw, no more (`APPROVAL_BLOCKED`, `OPTION_NOT_SELECTED`,
-// etc. belong to routes this story doesn't build).
+// The six codes from `PREREQUISITE_NOT_APPROVED` through `REQUEST_CONFLICT`
+// are E4-S6's own addition (API Contracts sections 7-10): exactly the codes
+// the external-refs/GitHub/Jira/Stitch routes actually throw. The ten codes
+// after `REQUEST_CONFLICT` are E3-S10's (API Contracts sections 4-5, the
+// artifact/version/item-edit routes), again exactly what those routes throw,
+// no more: `DRAFT_EXISTS` is reserved and never fires (API Contracts 4), and
+// `NOT_CURRENTLY_FLAGGED` belongs to the acknowledgement routes (E3-S11).
 export type ErrorCode =
   | 'VALIDATION_ERROR'
   | 'UNAUTHENTICATED'
@@ -21,7 +24,17 @@ export type ErrorCode =
   | 'GITHUB_ALREADY_INITIALIZED'
   | 'NAME_TAKEN_BY_OTHER'
   | 'ALREADY_GENERATED'
-  | 'REQUEST_CONFLICT';
+  | 'REQUEST_CONFLICT'
+  | 'NO_APPROVED_VERSION'
+  | 'MANUAL_REVISION_UNSUPPORTED'
+  | 'VERSION_NOT_DRAFT'
+  | 'ITEM_NOT_IN_VERSION'
+  | 'UPSTREAM_REMOVED'
+  | 'CONFIRMATION_REQUIRED'
+  | 'APPROVAL_BLOCKED'
+  | 'STACK_UNCHANGED_DECISIONS'
+  | 'OPTION_NOT_SELECTED'
+  | 'OPTION_COUNT_INVALID';
 
 const STATUS_BY_CODE: Record<ErrorCode, number> = {
   VALIDATION_ERROR: 400,
@@ -34,6 +47,16 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   NAME_TAKEN_BY_OTHER: 409,
   ALREADY_GENERATED: 409,
   REQUEST_CONFLICT: 409,
+  NO_APPROVED_VERSION: 409,
+  MANUAL_REVISION_UNSUPPORTED: 422,
+  VERSION_NOT_DRAFT: 409,
+  ITEM_NOT_IN_VERSION: 409,
+  UPSTREAM_REMOVED: 409,
+  CONFIRMATION_REQUIRED: 409,
+  APPROVAL_BLOCKED: 409,
+  STACK_UNCHANGED_DECISIONS: 409,
+  OPTION_NOT_SELECTED: 422,
+  OPTION_COUNT_INVALID: 422,
 };
 
 // The one error shape every route handler throws and every response maps

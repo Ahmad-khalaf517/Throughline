@@ -66,10 +66,11 @@ export function toProjectDTO(project: ProjectWithArtifactsInput): ProjectDTO {
 //
 // Mirrored here (not in artifact-lifecycle or an artifact-type module) for
 // the same reason ArtifactType is: `lib` is the one place every layer may
-// import from, and E3-S10's route handlers will build these same shapes
-// once they exist. Until then, `components/review/fixtures.ts` is the only
-// producer (E3-S10/E3-S11 is this story's declared, sanctioned dependency
-// gap - see that file's header comment).
+// import from. E3-S10's route handlers (src/app/api/artifact-versions/**,
+// src/app/api/projects/[projectId]/artifacts/**) now build these shapes with
+// the `to...DTO` functions further down this file; `components/review/
+// fixtures.ts` is still what the review screens render from until a later E5
+// story swaps it for those routes.
 
 /** The four real `artifact_version.status` values (ERD CHECK) - never a fifth. */
 export type ArtifactVersionStatus = 'draft' | 'approved' | 'superseded' | 'rejected';
@@ -127,6 +128,134 @@ export interface QualityIssueDTO {
   code: string;
   message: string;
   logicalItemId: string | null;
+}
+
+// --- Artifact version / item builders (API Contracts 1.8, E3-S10) ----------
+//
+// Structural input types, same convention as `ProjectWithArtifactsInput`
+// above: `lib` may only import `layer0-db` (eslint.config.mjs), so these mirror
+// artifact-lifecycle's `ArtifactVersionRecord`/`VersionItem` and
+// architecture-materialization's `ArchitectureOption` by shape and are
+// satisfied by them without `lib` importing either. Every builder picks its
+// fields explicitly rather than spreading its input, so a caller's extra
+// columns (a raw id-based `impact` row, `projectId`, `createdAt` on an option)
+// can never leak onto the wire.
+
+export interface ArtifactVersionInput {
+  id: string;
+  artifactId: string;
+  artifactType: ArtifactType;
+  versionNumber: number;
+  status: ArtifactVersionStatus;
+  statusReason: string | null;
+  schemaVersion: number;
+  baseApprovedVersionId: string | null;
+  selectedArchitectureOptionId: string | null;
+  payload: unknown;
+  rawOutput: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ItemVersionInput {
+  itemVersionId: string;
+  logicalItemId: string;
+  displayKey: string;
+  itemType: ItemVersionDTO['itemType'];
+  revisionNumber: number;
+  payload: unknown;
+  parentLogicalItemId: string | null;
+}
+
+// `optionKey`/`candidateDecisions`/`tradeoffs` are typed loosely for the same
+// reason `provider`/`status` are on `ExternalRefInput` below: Drizzle infers a
+// `text()` column with a CHECK as plain `string` and a `jsonb()` column as
+// `unknown`.
+export interface ArchitectureOptionInput {
+  id: string;
+  optionKey: string;
+  title: string;
+  summary: string;
+  stack: unknown;
+  candidateDecisions: unknown;
+  tradeoffs: unknown;
+}
+
+/** `GET .../artifacts/:type/versions` element shape (API Contracts 4): no items, no options. */
+export type ArtifactVersionSummaryDTO = Omit<ArtifactVersionDTO, 'items' | 'options'>;
+
+export function toArtifactVersionSummaryDTO(
+  version: ArtifactVersionInput,
+): ArtifactVersionSummaryDTO {
+  return {
+    id: version.id,
+    artifactId: version.artifactId,
+    artifactType: version.artifactType,
+    versionNumber: version.versionNumber,
+    status: version.status,
+    statusReason: version.statusReason,
+    schemaVersion: version.schemaVersion,
+    baseApprovedVersionId: version.baseApprovedVersionId,
+    payload: version.payload,
+    // API Contracts 1.8: "only present when statusReason='stale_generation_context'".
+    // The DB CHECK (artifact_version_stale_has_raw_output_check) already ties the
+    // two together; gating on the reason here keeps the wire contract true even
+    // for a row that somehow held raw output without it.
+    rawOutput:
+      version.statusReason === 'stale_generation_context' ? (version.rawOutput ?? null) : null,
+    selectedArchitectureOptionId: version.selectedArchitectureOptionId,
+    createdAt: version.createdAt.toISOString(),
+    updatedAt: version.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * `options` is an array only for an Architecture version (an empty one for a
+ * version that never persisted options, e.g. a stale-rejected generation) and
+ * `null` for every other type, whatever the caller passed - API Contracts 1.8:
+ * "architecture only, else null".
+ */
+export function toArtifactVersionDTO(
+  version: ArtifactVersionInput,
+  items: ItemVersionDTO[],
+  options: ArchitectureOptionDTO[] | null,
+): ArtifactVersionDTO {
+  return {
+    ...toArtifactVersionSummaryDTO(version),
+    items,
+    options: version.artifactType === 'architecture' ? (options ?? []) : null,
+  };
+}
+
+/** `impact` is already display-key based (`toImpactRowDTO`); this only picks and passes it through. */
+export function toItemVersionDTO(
+  item: ItemVersionInput,
+  impact: ImpactRowDTO | null,
+): ItemVersionDTO {
+  return {
+    itemVersionId: item.itemVersionId,
+    logicalItemId: item.logicalItemId,
+    displayKey: item.displayKey,
+    itemType: item.itemType,
+    revisionNumber: item.revisionNumber,
+    payload: item.payload,
+    parentLogicalItemId: item.parentLogicalItemId,
+    impact,
+  };
+}
+
+export function toArchitectureOptionDTO(option: ArchitectureOptionInput): ArchitectureOptionDTO {
+  return {
+    id: option.id,
+    optionKey: option.optionKey as ArchitectureOptionDTO['optionKey'],
+    title: option.title,
+    summary: option.summary,
+    stack: option.stack,
+    // Zod-validated to arrays on insert (architecture-materialization's
+    // optionSchema); anything else here is unreachable, not a shape to invent.
+    candidateDecisions: Array.isArray(option.candidateDecisions) ? option.candidateDecisions : [],
+    tradeoffs: Array.isArray(option.tradeoffs) ? option.tradeoffs : [],
+  };
 }
 
 // --- External reference / operation DTOs (API Contracts 1.8, sections 7-10,

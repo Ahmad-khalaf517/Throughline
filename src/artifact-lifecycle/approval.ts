@@ -1,12 +1,33 @@
 import { and, eq } from 'drizzle-orm';
 import { db, schema, withProjectLock, type Tx } from '@/db';
 import { acknowledgeGateBlockers, evaluateGate, type ImpactRow } from '@/lineage/impact';
-import { getSourceVersionMembers } from '@/lineage/identity';
+import { getDisplayKeysByItemVersionId, getSourceVersionMembers } from '@/lineage/identity';
 import { loadArchitectureDraftContext, type ArchitectureDraftContext } from './architecture';
+import { VersionNotDraftError } from './errors';
 
-class GateBlocked extends Error {
-  constructor(readonly blocking: ImpactRow[]) {
+// Thrown by `approveWithOverride` when the gate recomputed inside its own
+// transaction still blocks (FR-084: an override satisfies the gate, it does
+// not bypass it - so a block that survives the acknowledgements is a real,
+// rolled-back refusal). Exported (E3-S10) so the approve route can map it to
+// 409 APPROVAL_BLOCKED; `approveVersion` itself never throws it - it turns the
+// same condition into `{ ok: false, blocking, displayKeys }`.
+//
+// `displayKeys` is `item_version.id -> display_key` for every id `blocking`
+// references (each row's root and every `path` entry), captured INSIDE the
+// approval transaction before it rolls back. A blocked Architecture approval
+// has already minted its ADR ItemVersions (`materialize` runs before the gate),
+// and the rollback un-mints them while the blocking rows still name them as
+// subject / last path element - so once the transaction is gone no read on the
+// pool can resolve them (ERD 3.5, "Why ids never cross the API"). The route
+// serializes `details.blocking` from this map instead. Defaults to empty so a
+// caller that builds the error by hand (a test) still type-checks.
+export class ApprovalGateBlockedError extends Error {
+  constructor(
+    readonly blocking: ImpactRow[],
+    readonly displayKeys: Map<string, string> = new Map(),
+  ) {
     super('approval gate blocked');
+    this.name = 'ApprovalGateBlockedError';
   }
 }
 
@@ -27,8 +48,18 @@ export interface ArchitectureApproval {
   ) => Promise<{ ok: true } | { ok: false; code: ArchitectureApprovalCode }>;
 }
 
+// `displayKeys` (see `ApprovalGateBlockedError`) is present exactly when the
+// gate blocked (`code` absent): the keys for every id in `blocking`, resolved
+// before the rolled-back transaction closed. Optional so the type stays
+// additive for existing callers.
 export type ApproveVersionResult =
-  { ok: true } | { ok: false; blocking: ImpactRow[]; code?: ArchitectureApprovalCode };
+  | { ok: true }
+  | {
+      ok: false;
+      blocking: ImpactRow[];
+      displayKeys?: Map<string, string>;
+      code?: ArchitectureApprovalCode;
+    };
 
 /** ERD 3.4 approval transaction and FR-083 currentness gate. */
 export async function approveVersion(
@@ -48,8 +79,20 @@ export async function approveWithOverride(
 ): Promise<ApproveVersionResult> {
   if (!note.trim()) throw new Error('override note must be non-empty');
   const result = await approveVersionInternal(versionId, actorId, note, architecture);
-  if (!result.ok && !result.code) throw new GateBlocked(result.blocking);
+  if (!result.ok && !result.code) {
+    throw new ApprovalGateBlockedError(result.blocking, result.displayKeys);
+  }
   return result;
+}
+
+/** Every item_version id a set of blocking rows names: each root plus every `path` entry (the subject is the last one). */
+function referencedItemVersionIds(rows: readonly ImpactRow[]): string[] {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    ids.add(row.rootItemVersionId);
+    for (const id of row.path) ids.add(id);
+  }
+  return [...ids];
 }
 
 async function approveVersionInternal(
@@ -84,7 +127,7 @@ async function approveVersionInternal(
         )
         .limit(1);
       if (!draft || draft.status !== 'draft') {
-        throw new Error(`artifact_version ${versionId} is not a draft`);
+        throw new VersionNotDraftError(versionId);
       }
 
       // The architecture facade supplies its peer's callback; lifecycle alone
@@ -116,7 +159,17 @@ async function approveVersionInternal(
         );
       }
       const blocking = await evaluateGate(tx, target.projectId, versionId, candidateItemVersionIds);
-      if (blocking.length) throw new GateBlocked(blocking);
+      if (blocking.length) {
+        // Both the plain and the override path land here (an override runs the
+        // same gate again after acknowledging). Resolve the display keys while
+        // the transaction - and any ADR ItemVersions `materialize` minted in it
+        // - still exists; the throw below rolls all of it back.
+        const displayKeys = await getDisplayKeysByItemVersionId(
+          tx,
+          referencedItemVersionIds(blocking),
+        );
+        throw new ApprovalGateBlockedError(blocking, displayKeys);
+      }
 
       await tx
         .update(schema.artifactVersion)
@@ -146,7 +199,9 @@ async function approveVersionInternal(
       return { ok: true };
     });
   } catch (error) {
-    if (error instanceof GateBlocked) return { ok: false, blocking: error.blocking };
+    if (error instanceof ApprovalGateBlockedError) {
+      return { ok: false, blocking: error.blocking, displayKeys: error.displayKeys };
+    }
     if (error instanceof ArchitectureApprovalBlocked)
       return { ok: false, blocking: [], code: error.code };
     throw error;

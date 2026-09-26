@@ -1,5 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import { db, schema, withProjectLock } from '@/db';
+import { VersionNotDraftError } from './errors';
 
 /** ERD 3.1: reject the draft for revision without starting a new generation. */
 export async function requestRevision(
@@ -46,7 +47,7 @@ async function rejectDraft(
       )
       .limit(1);
     if (!draft || draft.status !== 'draft') {
-      throw new Error(`artifact_version ${versionId} is not a draft`);
+      throw new VersionNotDraftError(versionId);
     }
 
     await tx

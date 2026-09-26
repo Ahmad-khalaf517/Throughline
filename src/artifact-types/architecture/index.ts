@@ -7,19 +7,21 @@
 // (Module Boundaries section 7).
 //
 // The generation surface - buildPrompt, outputSchema (exactly two options),
-// toOptionInputs, toCandidates - lives in ./generation.ts (E3-S7, SCRUM-42) and
-// is re-exported just below. There is deliberately no `qualityGate` (Module
-// Boundaries 4.4: none specified for Architecture in P0) and no manual
-// revision (regeneration only, ERD 3.6). `toCandidates` returns `[]`: decisions
-// are not lineage until approval (ERD 5.5), so the options are persisted
-// separately through the createOptions facade below. The generate ->
-// createDraftFromGeneration -> createOptions orchestration is E3-S10's job.
-// That includes loading what a regenerate `buildPrompt` call needs beyond the
-// approved requirements: each base ADR's `upstreamRefs` (display keys of its
-// bound upstream items - part of the ADR semantic hash, INV-016) and
-// `baseStack` (the approved version's selected option's stack, compared by
-// E3-S3's stack guard with a raw deep-equal). Both are required inputs; the
-// wiring is not built here.
+// toOptionInputs, toCandidates (E3-S7, SCRUM-42) and `generate` (E3-S10,
+// SCRUM-45) - lives in ./generation.ts and is re-exported just below. There is
+// deliberately no `qualityGate` (Module Boundaries 4.4: none specified for
+// Architecture in P0) and no manual revision (regeneration only, ERD 3.6).
+// `toCandidates` returns `[]`: decisions are not lineage until approval (ERD
+// 5.5), so the options are persisted separately through the createOptions
+// facade below. `generate` returns them as `options` next to the usual
+// `{ payload, candidates, runId }`; the API route composes generate ->
+// createDraftFromGeneration -> createOptions (only it has the `artifactId`/
+// `actorUserId` createDraftFromGeneration needs). `generate` also loads what a
+// regenerate `buildPrompt` call needs beyond the approved requirements: each
+// base ADR's `upstreamRefs` (display keys of its bound upstream items - part of
+// the ADR semantic hash, INV-016) and `baseStack` (the approved version's
+// selected option's stack, compared by E3-S3's stack guard with a raw
+// deep-equal).
 //
 // The read re-exports after it are a narrow, additive
 // exception pulled forward by E4-S2 (SCRUM-51): Module Boundaries 4.6
@@ -40,6 +42,7 @@ export {
   buildPrompt,
   toOptionInputs,
   toCandidates,
+  generate,
   type ArchitectureOutput,
   type ArchitectureOptionOutput,
   type ArchitectureDecisionCandidate,
@@ -49,8 +52,11 @@ export {
   type BaseArchitectureDecision,
 } from './generation';
 
+// `getOptionsForVersion` (E3-S10) is forwarded the same way, for the API
+// layer's `ArtifactVersionDTO.options` and the approve route's option ids.
 export {
   getSelectedOption,
+  getOptionsForVersion,
   getArchitectureDecisionItems,
   type ArchitectureOption,
   type SelectedArchitectureOption,

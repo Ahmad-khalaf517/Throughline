@@ -253,6 +253,10 @@ export interface BacklogGenerationContext {
   // current approved items, verbatim, on a regenerate call.
   baseEpics: BaseEpicItem[];
   baseStories: BaseStoryItem[];
+  // Reviewer feedback for an AI revision (E3-S10, API Contracts 4, `generate`'s
+  // `feedback`). Absent or blank leaves the prompt byte-identical to what it
+  // was before this field existed (T21's regeneration stability depends on it).
+  feedback?: string | undefined;
 }
 
 const RULES = `You are an agile delivery lead for a software project. Given the project's approved
@@ -298,7 +302,7 @@ function formatContextList(items: UpstreamContextItem[]): string {
  * the sorted upstream ItemVersion ids, INV-016), and ask for the SAME items
  * back unchanged.
  */
-export function buildPrompt(ctx: BacklogGenerationContext): string {
+function buildBasePrompt(ctx: BacklogGenerationContext): string {
   const header = `${RULES}
 
 Project brief: ${ctx.brief}
@@ -371,6 +375,28 @@ as shown above, set previousDisplayKey to that same display key, and keep each S
 parentDisplayKey pointing at the same Epic.`;
 }
 
+// One wording across all four artifact-type modules (each carries its own
+// copy: layer-3 peers cannot share a module, and `lib` is framework glue only).
+function withReviewerFeedback(prompt: string, feedback: string | undefined): string {
+  const trimmed = feedback?.trim();
+  if (!trimmed) return prompt;
+  return (
+    `${prompt}\n\n` +
+    'Reviewer feedback on the previous version - address it, even where that means changing an ' +
+    'item you were told above to keep verbatim, and keep every unrelated item unchanged:\n' +
+    trimmed
+  );
+}
+
+/**
+ * `buildBasePrompt` (the regeneration-stability prompt above), plus - only when
+ * `ctx.feedback` is a non-blank string - one trailing reviewer-feedback
+ * paragraph. With no feedback the result is exactly `buildBasePrompt`'s.
+ */
+export function buildPrompt(ctx: BacklogGenerationContext): string {
+  return withReviewerFeedback(buildBasePrompt(ctx), ctx.feedback);
+}
+
 /**
  * Model output -> identity.Candidate[] (Module Boundaries 4.4). Epics never
  * carry `parentDisplayKey`/`upstreamRefs` (matcher.ts throws if a
@@ -438,9 +464,22 @@ export function toCandidates(items: BacklogItem[]): Candidate[] {
  * comment for why that composition is the API route's job (E3-S10), not
  * this one's: `ctx: { projectId }` alone has no `artifactId`/`actorUserId`
  * to supply it with.
+ *
+ * `contextSourceVersionIds` / `baseVersionId` are optional and are exactly what
+ * `createDraftFromGeneration` hands its `generate` callback. When present they
+ * replace this function's own read of the project's currently approved ids, so
+ * the prompt, the recorded `generation_context_ref` rows and the captured base
+ * all come from one snapshot (INV-006); absent (`generate({ projectId })`, the
+ * T43 call), it reads the project as before. The FR-080 refusal above still
+ * runs against the project either way. Unlike the other modules the list is not
+ * read positionally: `loadGenerationContext` classifies each member by its own
+ * `itemType`, so only the count is checked - see `BACKLOG_CONTEXT_ORDER`.
  */
 export async function generate(ctx: {
   projectId: string;
+  feedback?: string | undefined;
+  contextSourceVersionIds?: string[] | undefined;
+  baseVersionId?: string | null | undefined;
 }): Promise<{ payload: unknown; candidates: Candidate[]; runId: string }> {
   const project = await getProjectById(ctx.projectId);
   if (!project) {
@@ -455,17 +494,22 @@ export async function generate(ctx: {
     throw new Error(`Backlog generation requires approved ${missing.join(', ')} first (TR FR-080)`);
   }
 
-  const contextSourceVersionIds = [
-    project.artifacts.requirements.approvedVersionId!,
-    project.artifacts.architecture.approvedVersionId!,
-    project.artifacts.ui_requirements.approvedVersionId!,
-  ];
-  const baseVersionId = project.artifacts.backlog.approvedVersionId;
+  const contextSourceVersionIds = ctx.contextSourceVersionIds
+    ? checkedContextVersionIds(ctx.contextSourceVersionIds)
+    : [
+        project.artifacts.requirements.approvedVersionId!,
+        project.artifacts.architecture.approvedVersionId!,
+        project.artifacts.ui_requirements.approvedVersionId!,
+      ];
+  const baseVersionId =
+    ctx.baseVersionId !== undefined
+      ? ctx.baseVersionId
+      : project.artifacts.backlog.approvedVersionId;
 
   const generationContext = await withTx((tx) =>
     loadGenerationContext(tx, { brief: project.brief, contextSourceVersionIds, baseVersionId }),
   );
-  const prompt = buildPrompt(generationContext);
+  const prompt = buildPrompt({ ...generationContext, feedback: ctx.feedback });
   const { data, runId } = await generateStructured({
     projectId: ctx.projectId,
     purpose: 'generation',
@@ -474,6 +518,23 @@ export async function generate(ctx: {
   });
 
   return { payload: data.payload, candidates: toCandidates(data.items), runId };
+}
+
+// The prerequisite artifacts of Backlog (TR FR-080), in the canonical order the
+// API route passes them as `contextSourceVersionIds` (the route filters the fixed
+// artifact order requirements -> architecture -> ui_requirements down to this
+// type's prerequisites). Layer-3 modules may not import the route's table, so
+// the contract is restated here and tested.
+const BACKLOG_CONTEXT_ORDER = ['requirements', 'architecture', 'ui_requirements'] as const;
+
+function checkedContextVersionIds(ids: string[]): string[] {
+  if (ids.length !== BACKLOG_CONTEXT_ORDER.length) {
+    throw new Error(
+      `Backlog generate expects exactly ${BACKLOG_CONTEXT_ORDER.length} context source version ids ` +
+        `(${BACKLOG_CONTEXT_ORDER.join(', ')}), got ${ids.length}`,
+    );
+  }
+  return ids;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -490,6 +551,13 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === 'string')
     : [];
+}
+
+// Numeric-aware, so S-2 sorts before S-10. Every list this module shows the
+// model is sorted with it: `getSourceVersionMembers` has no ORDER BY, and the
+// prompt must be a pure function of the stored items (T21).
+function compareDisplayKeys(a: string, b: string): number {
+  return a.localeCompare(b, 'en', { numeric: true });
 }
 
 // Defensive, cross-artifact-type-module-import-free read of a Requirement/
@@ -543,7 +611,8 @@ async function loadGenerationContext(
         displayKey: member.displayKey!,
         itemType,
         summary: summarizeUpstreamPayload(itemType, member.payload),
-      }));
+      }))
+      .sort((a, b) => compareDisplayKeys(a.displayKey, b.displayKey));
 
   const baseEpicMembers = baseMembers.filter(
     (member) => member.itemType === 'epic' && member.logicalItemId && member.displayKey,
@@ -572,30 +641,34 @@ async function loadGenerationContext(
     upstreamKeysByDownstream.set(dep.downstreamItemVersionId, list);
   }
 
-  const baseEpics: BaseEpicItem[] = baseEpicMembers.map((member) => {
-    const payload = asRecord(member.payload);
-    return {
-      displayKey: member.displayKey as string,
-      title: asString(payload.title),
-      scopeStatement: asString(payload.scopeStatement),
-    };
-  });
+  const baseEpics: BaseEpicItem[] = baseEpicMembers
+    .map((member) => {
+      const payload = asRecord(member.payload);
+      return {
+        displayKey: member.displayKey as string,
+        title: asString(payload.title),
+        scopeStatement: asString(payload.scopeStatement),
+      };
+    })
+    .sort((a, b) => compareDisplayKeys(a.displayKey, b.displayKey));
 
-  const baseStories: BaseStoryItem[] = baseStoryMembers.map((member) => {
-    const payload = asRecord(member.payload);
-    return {
-      displayKey: member.displayKey as string,
-      parentDisplayKey:
-        (member.parentLogicalItemId &&
-          epicDisplayKeyByLogicalItemId.get(member.parentLogicalItemId)) ||
-        '',
-      userValueStatement: asString(payload.userValueStatement),
-      acceptanceCriteria: asStringArray(payload.acceptanceCriteria),
-      structuredBehavior: asString(payload.structuredBehavior),
-      priority: typeof payload.priority === 'string' ? payload.priority : null,
-      upstreamRefs: (upstreamKeysByDownstream.get(member.itemVersionId as string) ?? []).sort(),
-    };
-  });
+  const baseStories: BaseStoryItem[] = baseStoryMembers
+    .map((member) => {
+      const payload = asRecord(member.payload);
+      return {
+        displayKey: member.displayKey as string,
+        parentDisplayKey:
+          (member.parentLogicalItemId &&
+            epicDisplayKeyByLogicalItemId.get(member.parentLogicalItemId)) ||
+          '',
+        userValueStatement: asString(payload.userValueStatement),
+        acceptanceCriteria: asStringArray(payload.acceptanceCriteria),
+        structuredBehavior: asString(payload.structuredBehavior),
+        priority: typeof payload.priority === 'string' ? payload.priority : null,
+        upstreamRefs: (upstreamKeysByDownstream.get(member.itemVersionId as string) ?? []).sort(),
+      };
+    })
+    .sort((a, b) => compareDisplayKeys(a.displayKey, b.displayKey));
 
   return {
     brief: args.brief,

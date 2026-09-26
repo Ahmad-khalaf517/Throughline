@@ -5,29 +5,40 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // (`evaluateRequirementsQuality`) run with no I/O at all; `qualityGate`'s
 // loading glue is exercised against mocked collaborators here (the real
 // database round trip is tests/integration/requirements-quality-gate.test.ts).
-// The three collaborators are mocked with factories so their real modules -
-// `@/artifact-lifecycle` transitively loads `@/lib/env`, which validates env
-// vars at import - are never loaded.
-const { withTxMock, getSourceVersionMembersMock, getArtifactVersionPayloadMock } = vi.hoisted(
-  () => ({
-    withTxMock: vi.fn(),
-    getSourceVersionMembersMock: vi.fn(),
-    getArtifactVersionPayloadMock: vi.fn(),
-  }),
-);
+// The collaborators are mocked with factories so their real modules -
+// `@/artifact-lifecycle` and `@/ai-client` transitively load `@/lib/env`, which
+// validates env vars at import - are never loaded. `generate` (Jira E3-S10 /
+// SCRUM-45) is exercised the same way: mocked project read, mocked model call.
+const {
+  withTxMock,
+  getSourceVersionMembersMock,
+  getArtifactVersionPayloadMock,
+  getProjectByIdMock,
+  generateStructuredMock,
+} = vi.hoisted(() => ({
+  withTxMock: vi.fn(),
+  getSourceVersionMembersMock: vi.fn(),
+  getArtifactVersionPayloadMock: vi.fn(),
+  getProjectByIdMock: vi.fn(),
+  generateStructuredMock: vi.fn(),
+}));
 
 vi.mock('@/db', () => ({ withTx: withTxMock }));
 vi.mock('@/lineage/identity', () => ({ getSourceVersionMembers: getSourceVersionMembersMock }));
 vi.mock('@/artifact-lifecycle', () => ({
   getArtifactVersionPayload: getArtifactVersionPayloadMock,
+  getProjectById: getProjectByIdMock,
 }));
+vi.mock('@/ai-client', () => ({ generateStructured: generateStructuredMock }));
 
 import {
   buildPrompt,
   evaluateRequirementsQuality,
+  generate,
   outputSchema,
   qualityGate,
   toCandidates,
+  type BaseRequirementItem,
   type QualityIssue,
   type RequirementItem,
 } from '@/artifact-types/requirements';
@@ -646,5 +657,274 @@ describe('outputSchema (FR-010 payload + items)', () => {
       expect(flat).toContain('Never restate a constraint here');
       expect(flat).toContain('those belong only in constraint items');
     }
+  });
+});
+
+// The one trailing paragraph every artifact-type module appends (same wording in
+// all four - each module carries its own copy, so each unit test pins it).
+const FEEDBACK_HEADER =
+  'Reviewer feedback on the previous version - address it, even where that means changing an item you were told above to keep verbatim, and keep every unrelated item unchanged:';
+
+const BASE_ITEM: BaseRequirementItem = {
+  displayKey: 'R-01',
+  type: 'functional',
+  actor: 'Reviewer',
+  behavior: 'Approve a draft.',
+  constraints: [],
+  acceptanceCriteria: ['The approval is recorded.'],
+  dimension: null,
+  value: null,
+};
+
+describe('buildPrompt - reviewer feedback (E3-S10)', () => {
+  it('is byte-identical to the feedback-free prompt when feedback is absent, undefined or blank', () => {
+    for (const baseItems of [[], [BASE_ITEM]]) {
+      const plain = buildPrompt({ brief: 'A brief.', baseItems });
+      for (const feedback of [undefined, '', '   \n\t ']) {
+        expect(buildPrompt({ brief: 'A brief.', baseItems, feedback })).toBe(plain);
+      }
+    }
+  });
+
+  it('appends exactly one trailing paragraph carrying the trimmed feedback', () => {
+    for (const baseItems of [[], [BASE_ITEM]]) {
+      const plain = buildPrompt({ brief: 'A brief.', baseItems });
+      expect(
+        buildPrompt({ brief: 'A brief.', baseItems, feedback: '  Split R-01 in two.  \n' }),
+      ).toBe(`${plain}\n\n${FEEDBACK_HEADER}\nSplit R-01 in two.`);
+    }
+  });
+});
+
+describe('generate (E3-S10)', () => {
+  const project = (approvedVersionId: string | null) => ({
+    id: 'project-1',
+    brief: 'A brief.',
+    artifacts: { requirements: { approvedVersionId, draftVersionId: null } },
+  });
+  const generated: RequirementItem = {
+    displayKey: 'R-01',
+    previousDisplayKey: null,
+    type: 'functional',
+    actor: 'Reviewer',
+    behavior: 'Approve a draft.',
+    constraints: [],
+    acceptanceCriteria: ['The approval is recorded.'],
+    dimension: null,
+    value: null,
+    explanation: 'Free prose.',
+  };
+  const member = (overrides: Record<string, unknown>) => ({
+    sourceVersionId: 'approved-1',
+    logicalItemId: 'logical',
+    itemVersionId: 'item-version',
+    displayKey: 'R-01',
+    itemType: 'requirement',
+    payload: {},
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    withTxMock.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn({}));
+    generateStructuredMock.mockResolvedValue({
+      data: { payload: GOOD_PAYLOAD, items: [generated] },
+      runId: 'run-1',
+    });
+  });
+
+  it('rejects an unknown project before any model call', async () => {
+    getProjectByIdMock.mockResolvedValue(null);
+    await expect(generate({ projectId: 'missing' })).rejects.toThrow(
+      'Project missing does not exist',
+    );
+    expect(generateStructuredMock).not.toHaveBeenCalled();
+  });
+
+  it('first generation: opens no transaction, sends the fresh prompt, returns payload/candidates/runId', async () => {
+    getProjectByIdMock.mockResolvedValue(project(null));
+
+    const result = await generate({ projectId: 'project-1' });
+
+    expect(withTxMock).not.toHaveBeenCalled();
+    expect(generateStructuredMock).toHaveBeenCalledTimes(1);
+    expect(generateStructuredMock).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      purpose: 'generation',
+      prompt: buildPrompt({ brief: 'A brief.', baseItems: [] }),
+      schema: outputSchema,
+    });
+    expect(result).toEqual({
+      payload: GOOD_PAYLOAD,
+      candidates: toCandidates([generated]),
+      runId: 'run-1',
+    });
+  });
+
+  it('regeneration: shows the approved items as the base (real display keys, numeric order) and folds in feedback', async () => {
+    getProjectByIdMock.mockResolvedValue(project('approved-1'));
+    getSourceVersionMembersMock.mockResolvedValue([
+      member({
+        displayKey: 'R-10',
+        payload: {
+          type: 'constraint',
+          actor: 'Ops',
+          behavior: 'Serve 5,000 users.',
+          constraints: ['single region'],
+          acceptanceCriteria: ['Load test passes.'],
+          dimension: 'scale',
+          value: '5,000 users',
+          explanation: 'ignored prose',
+        },
+      }),
+      member({
+        displayKey: 'R-02',
+        payload: {
+          type: 'non_functional',
+          actor: 'Reviewer',
+          behavior: 'Respond quickly.',
+          constraints: [],
+          acceptanceCriteria: ['p95 under 300ms.'],
+          dimension: null,
+          value: null,
+        },
+      }),
+      // Not a requirement / the all-null row of a version with no members: skipped.
+      member({ displayKey: 'S-01', itemType: 'story' }),
+      member({ displayKey: null, itemType: null, itemVersionId: null, payload: null }),
+    ]);
+
+    const result = await generate({ projectId: 'project-1', feedback: 'Tighten R-02.' });
+
+    expect(getSourceVersionMembersMock).toHaveBeenCalledWith({}, ['approved-1']);
+    const expectedBase: BaseRequirementItem[] = [
+      {
+        displayKey: 'R-02',
+        type: 'non_functional',
+        actor: 'Reviewer',
+        behavior: 'Respond quickly.',
+        constraints: [],
+        acceptanceCriteria: ['p95 under 300ms.'],
+        dimension: null,
+        value: null,
+      },
+      {
+        displayKey: 'R-10',
+        type: 'constraint',
+        actor: 'Ops',
+        behavior: 'Serve 5,000 users.',
+        constraints: ['single region'],
+        acceptanceCriteria: ['Load test passes.'],
+        dimension: 'scale',
+        value: '5,000 users',
+      },
+    ];
+    expect(generateStructuredMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: buildPrompt({
+          brief: 'A brief.',
+          baseItems: expectedBase,
+          feedback: 'Tighten R-02.',
+        }),
+      }),
+    );
+    expect(result.runId).toBe('run-1');
+    expect(result.candidates).toEqual(toCandidates([generated]));
+  });
+
+  describe('threaded createDraftFromGeneration values (INV-006: one snapshot)', () => {
+    it('loads the base the draft was captured against, not the project current approved id', async () => {
+      // Re-approved since the route captured its base: the project now says 'approved-2'.
+      getProjectByIdMock.mockResolvedValue(project('approved-2'));
+      getSourceVersionMembersMock.mockResolvedValue([
+        member({
+          sourceVersionId: 'approved-1',
+          displayKey: 'R-01',
+          payload: {
+            type: 'functional',
+            actor: 'Reviewer',
+            behavior: 'Approve a draft.',
+            constraints: [],
+            acceptanceCriteria: ['The approval is recorded.'],
+          },
+        }),
+      ]);
+
+      await generate({
+        projectId: 'project-1',
+        contextSourceVersionIds: [],
+        baseVersionId: 'approved-1',
+      });
+
+      expect(getSourceVersionMembersMock).toHaveBeenCalledTimes(1);
+      expect(getSourceVersionMembersMock).toHaveBeenCalledWith({}, ['approved-1']);
+      expect(generateStructuredMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: buildPrompt({
+            brief: 'A brief.',
+            baseItems: [
+              {
+                displayKey: 'R-01',
+                type: 'functional',
+                actor: 'Reviewer',
+                behavior: 'Approve a draft.',
+                constraints: [],
+                acceptanceCriteria: ['The approval is recorded.'],
+                dimension: null,
+                value: null,
+              },
+            ],
+          }),
+        }),
+      );
+    });
+
+    it('honours an explicit null base as a first generation even though the project now has an approved version', async () => {
+      getProjectByIdMock.mockResolvedValue(project('approved-2'));
+
+      await generate({ projectId: 'project-1', baseVersionId: null });
+
+      expect(withTxMock).not.toHaveBeenCalled();
+      expect(getSourceVersionMembersMock).not.toHaveBeenCalled();
+      expect(generateStructuredMock).toHaveBeenCalledWith(
+        expect.objectContaining({ prompt: buildPrompt({ brief: 'A brief.', baseItems: [] }) }),
+      );
+    });
+
+    it('rejects context source ids: Requirements has no prerequisite artifacts (FR-080)', async () => {
+      getProjectByIdMock.mockResolvedValue(project(null));
+
+      await expect(
+        generate({ projectId: 'project-1', contextSourceVersionIds: ['unexpected'] }),
+      ).rejects.toThrow('Requirements generate expects no context source version ids, got 1');
+      expect(generateStructuredMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it('degrades a malformed stored payload to empty fields instead of throwing', async () => {
+    getProjectByIdMock.mockResolvedValue(project('approved-1'));
+    getSourceVersionMembersMock.mockResolvedValue([member({ payload: 'not an object' })]);
+
+    await generate({ projectId: 'project-1' });
+
+    expect(generateStructuredMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: buildPrompt({
+          brief: 'A brief.',
+          baseItems: [
+            {
+              displayKey: 'R-01',
+              type: 'functional',
+              actor: '',
+              behavior: '',
+              constraints: [],
+              acceptanceCriteria: [],
+              dimension: null,
+              value: null,
+            },
+          ],
+        }),
+      }),
+    );
   });
 });
