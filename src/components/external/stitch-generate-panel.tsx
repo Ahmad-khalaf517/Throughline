@@ -13,6 +13,7 @@ import {
 import { PreviewShell, type PreviewState } from './preview-shell';
 import { ImpactGate } from './impact-gate';
 import { OperationStatus } from './operation-status';
+import { SandboxedHtmlPreview } from './sandboxed-html-preview';
 
 interface StitchGeneratePanelProps {
   projectId: string;
@@ -43,9 +44,10 @@ const SECONDARY_BUTTON_CLASSNAME =
  * (API Contracts section 10; E5-S9). Same client-`fetch` mutation pattern as
  * the other two panels.
  *
- * Does NOT render an iframe for the generated HTML - the sandboxed,
- * separate-origin (no `allow-same-origin`) embedded viewer is E5-S10's scope
- * (screen-kit skill, FR-053). This screen only links out to the signed URLs.
+ * On success, the generated HTML/screenshot are rendered by
+ * `SandboxedHtmlPreview` - a sandboxed, separate-origin iframe without
+ * `allow-same-origin` (E5-S10, TR FR-053, ERD 4.16), with the signed URLs
+ * still available as "open in a new tab" escape hatches.
  */
 export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
   const router = useRouter();
@@ -223,13 +225,6 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
             >
               {submitting ? 'Generating…' : 'Generate UI prototype'}
             </button>
-
-            {/* The sandboxed HTML/screenshot viewer is E5-S10's scope, not
-                this story's (screen-kit skill). */}
-            <p className="text-on-surface-variant text-xs">
-              A generated prototype opens in its own tab for now - an embedded, sandboxed preview on
-              this screen is a separate, later story.
-            </p>
           </div>
         ))}
     </PreviewShell>
@@ -287,6 +282,9 @@ function StitchResultView({
         />
         <p className="text-on-surface text-sm font-medium">UI prototype generated.</p>
       </div>
+
+      <SandboxedHtmlPreview htmlUrl={result.htmlUrl} screenshotUrl={result.screenshotUrl} />
+
       <div className="flex flex-col gap-1 text-sm">
         <a
           href={result.htmlUrl}
