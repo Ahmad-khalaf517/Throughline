@@ -12,6 +12,7 @@ import { createServerSupabaseClient } from './supabase-server';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export { updateSession } from './supabase-middleware';
+export { getStorageServiceClient } from './supabase-storage';
 
 // Module 2: auth
 // Owns: app_user (the upsert-on-login row only; ERD section 4.1).

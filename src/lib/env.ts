@@ -47,8 +47,15 @@ const envSchema = z.object({
   JIRA_API_TOKEN: z.string().min(1).optional(),
   JIRA_PROJECT_KEY: z.string().min(1).optional(),
 
-  // --- module 16: stitch --- (not built yet)
+  // --- module 16: stitch --- (wired, E4-S4/SCRUM-53)
+  // All optional, same reasoning as GitHub/Jira above - stitch/index.ts's own
+  // requireStitchConfig()/requireStorageBucket() throw a clear error at call
+  // time (previewPrompt/generate) instead of blocking boot. STITCH_BASE_URL
+  // has no verified real Stitch REST API shape behind it yet (no spike has
+  // run - E4-S5/Spike B is next); same z.string().url() shape as
+  // JIRA_BASE_URL regardless.
   STITCH_API_KEY: z.string().min(1).optional(),
+  STITCH_BASE_URL: z.string().url().optional(),
   SUPABASE_STORAGE_BUCKET: z.string().min(1).optional(),
 });
 
