@@ -12,6 +12,12 @@ import { db, schema, withTx } from '@/db';
 import { ARTIFACT_TYPES, type ArtifactSummaryDTO, type ArtifactType } from '@/lib/serialize';
 
 export {
+  approveVersion,
+  ArchitectureMaterializationUnavailableError,
+  type ApproveVersionResult,
+} from './approval';
+
+export {
   createDraftFromGeneration,
   type ArtifactVersion,
   type CreateDraftFromGenerationOptions,

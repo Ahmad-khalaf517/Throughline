@@ -6,8 +6,8 @@
 // Nothing outside this folder may import a file that is not re-exported here
 // (Module Boundaries section 7).
 //
-// `evaluateGate`/`acknowledgeGateBlockers` (Module Boundaries 4.2) are E3-S1/
-// E3-S2 scope, not this story (Jira SCRUM-34) - not built here.
+// `evaluateGate` is the approval read path (E3-S1); gate acknowledgements
+// belong to E3-S2.
 import { and, eq, sql } from 'drizzle-orm';
 import { db, schema, type Tx } from '@/db';
 
@@ -70,6 +70,22 @@ export async function getWarnings(projectId: string): Promise<ImpactRow[]> {
         from impact(${projectId}::uuid)`,
   );
   return rows.map(toImpactRow);
+}
+
+/** Candidate replaces its artifact's approved version inside the caller's locked transaction (ERD 6.5). */
+export async function evaluateGate(
+  tx: Tx,
+  projectId: string,
+  candidateVersionId: string,
+  candidateItemVersionIds: ReadonlySet<string>,
+): Promise<ImpactRow[]> {
+  if (!candidateItemVersionIds.size) return [];
+  const rows = await tx.execute<ImpactFunctionRow>(
+    sql`select i.subject_kind, i.subject_id, i.root_item_version_id, i.depth, i.path, i.acknowledged
+        from impact(${projectId}::uuid, ${candidateVersionId}::uuid) i
+        where i.subject_kind = 'item_version' and not i.acknowledged`,
+  );
+  return rows.filter((row) => candidateItemVersionIds.has(row.subject_id)).map(toImpactRow);
 }
 
 /**
