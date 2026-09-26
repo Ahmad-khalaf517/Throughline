@@ -29,12 +29,20 @@ export async function resolveDisplayKeys(
 // Story's Epic parent within one captured Backlog version (ERD 7.4), and
 // this shared read already joins `logical_item` and
 // `artifact_version_item_membership` - the two columns' own owning tables.
-// Purely additive: every existing call site (artifact-lifecycle/approval.ts,
-// artifact-lifecycle/generation.ts, architecture-materialization, this
-// module's own dependency-binding.bindUpstreamRefs) only ever destructures
-// the fields it already used, so two more columns on the same rows change
-// nothing for them - confirmed by reading every call site before adding
-// these.
+// `payload` was added by E4-S4 (SCRUM-53): `stitch.previewPrompt`/`generate`
+// need one context source version's own item content
+// (`item_version.payload`), and this is the one place that content may be
+// read from outside `identity` - see ui-requirements/index.ts's header
+// comment for why `getUiRequirementsForPrompt` delegates here instead of
+// running its own raw join. Requires a new `leftJoin` onto `item_version`
+// itself (the query previously only carried `itemVersionId` as a plain FK
+// value off `artifact_version_item_membership`, never joining the table it
+// points to). Purely additive: every existing call site
+// (artifact-lifecycle/approval.ts, artifact-lifecycle/generation.ts,
+// architecture-materialization, backlog, jira, this module's own
+// dependency-binding.bindUpstreamRefs) only ever destructures the fields it
+// already used, so an extra column on the same rows changes nothing for
+// them - confirmed by reading every call site before adding this one too.
 export async function getSourceVersionMembers(tx: Tx, sourceVersionIds: string[]) {
   const uniqueSourceVersionIds = [...new Set(sourceVersionIds)];
   if (!uniqueSourceVersionIds.length) return [];
@@ -49,6 +57,7 @@ export async function getSourceVersionMembers(tx: Tx, sourceVersionIds: string[]
       displayKey: schema.logicalItem.displayKey,
       itemType: schema.logicalItem.itemType,
       parentLogicalItemId: schema.artifactVersionItemMembership.parentLogicalItemId,
+      payload: schema.itemVersion.payload,
     })
     .from(schema.artifactVersion)
     .innerJoin(schema.artifact, eq(schema.artifactVersion.artifactId, schema.artifact.id))
@@ -59,6 +68,10 @@ export async function getSourceVersionMembers(tx: Tx, sourceVersionIds: string[]
     .leftJoin(
       schema.logicalItem,
       eq(schema.artifactVersionItemMembership.logicalItemId, schema.logicalItem.id),
+    )
+    .leftJoin(
+      schema.itemVersion,
+      eq(schema.itemVersion.id, schema.artifactVersionItemMembership.itemVersionId),
     )
     .where(inArray(schema.artifactVersion.id, uniqueSourceVersionIds));
   const foundVersionIds = new Set(rows.map((row) => row.sourceVersionId));
