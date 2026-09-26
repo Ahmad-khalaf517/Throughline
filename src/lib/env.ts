@@ -31,7 +31,12 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().min(1).optional(),
   OPENAI_MODEL: z.string().min(1).optional(),
 
-  // --- module 14: github --- (not built yet)
+  // --- module 14: github --- (wired, E4-S2/SCRUM-51)
+  // All three stay optional here (loadEnv must not block boot for a module
+  // whose credentials aren't configured yet) - github/index.ts's own
+  // requireOwner()/requireServerSecret() throw a clear error at call time
+  // instead if GITHUB_OWNER/GITHUB_MARKER_SECRET are missing when actually
+  // needed (initRepo/checkDrift), not at process start.
   GITHUB_TOKEN: z.string().min(1).optional(),
   GITHUB_OWNER: z.string().min(1).optional(),
   GITHUB_MARKER_SECRET: z.string().min(1).optional(),

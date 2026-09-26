@@ -996,7 +996,14 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // Expected: reconciliation_required; marker-verified adoption only;
   // conflict on foreign repo; one operation row; reconcile before any
   // resend.
-  // Turns green with E4-T3 (external integrations gate).
+  // E4-S2 (SCRUM-51) proves this for real, at the module level, against the
+  // real `github.initRepo` + a fake-GitHub-via-custom-fetch (same technique
+  // as scripts/spike-github-reconciliation.mts) - see
+  // tests/integration/external/github.test.ts's own T11a-T11d. Kept
+  // `it.todo` HERE rather than converted, same deferral pattern
+  // tests/integration/external/operations.test.ts already established for
+  // this same id: E4-T3 (the slice-4 gate) is what closes T11 through the
+  // real API routes end to end, not this file.
   it.todo('T11');
 
   // T12 - S-12 changes after THR-42 exists, then export.
@@ -1007,7 +1014,10 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // T13 - Architecture re-approved with no ADR change; then with a changed
   // ADR.
   // Expected: repository not flagged; then flagged.
-  // Turns green with E4-T3.
+  // E4-S2 (SCRUM-51) proves this for real at the module level - see
+  // tests/integration/external/github.test.ts's own T13 describe block
+  // (`github.checkDrift`, no network mocking needed - it's a pure DB read).
+  // Kept `it.todo` here; E4-T3 re-runs it through the real API routes.
   it.todo('T13');
 
   // T14 - real, passing this slice (E1-S5's Definition of Done).
@@ -1164,14 +1174,23 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // T17 - GitHub repo embeds ADR-01/02/03, all tracing to obsolete R-07@A.
   // Expected: one impact() row for the ref with root R-07@A (not one per
   // ADR); direct beats transitive.
-  // Turns green with E2-S9.
+  // NOTE: this stub's previous comment ("Turns green with E2-S9") was
+  // stale/incorrect - E2-S9 predates the `github` module entirely and could
+  // not have exercised a real GitHub-shaped external_ref. E4-S2 (SCRUM-51)
+  // proves this for real at the module level - see
+  // tests/integration/external/github.test.ts's own T17 describe block.
+  // Kept `it.todo` here; E4-T3 re-runs it through the real API routes.
   it.todo('T17');
 
   // T18 - Name collision on repo creation, then a different name.
   // Expected: first operation failed (name_taken_by_other); second is a new
   // operation with a new key; a second concurrent GitHub operation is
   // refused.
-  // Turns green with E4-T3.
+  // E4-S2 (SCRUM-51) proves this for real, at the module level, against the
+  // real `github.initRepo` + a fake-GitHub-via-custom-fetch - see
+  // tests/integration/external/github.test.ts's own T18 describe block.
+  // Kept `it.todo` here, same deferral pattern as T11 above: E4-T3 is what
+  // closes T18 through the real API routes end to end.
   it.todo('T18');
 
   // T19 - Change expectedScale (a constraint item) with ADRs citing it and
