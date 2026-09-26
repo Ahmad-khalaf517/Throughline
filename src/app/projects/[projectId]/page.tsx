@@ -103,6 +103,12 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           >
             Dependencies →
           </Link>
+          <Link
+            href={`/projects/${project.id}/outputs`}
+            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
+          >
+            Outputs →
+          </Link>
         </div>
       </div>
     </main>
