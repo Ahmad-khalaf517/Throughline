@@ -6,8 +6,6 @@
 // Nothing outside this folder may import a file that is not re-exported here
 // (Module Boundaries section 7).
 //
-// `evaluateGate` is the approval read path (E3-S1); gate acknowledgements
-// belong to E3-S2.
 import { and, eq, sql } from 'drizzle-orm';
 import { db, schema, type Tx } from '@/db';
 
@@ -86,6 +84,29 @@ export async function evaluateGate(
         where i.subject_kind = 'item_version' and not i.acknowledged`,
   );
   return rows.filter((row) => candidateItemVersionIds.has(row.subject_id)).map(toImpactRow);
+}
+
+/** Recompute the candidate's blockers and acknowledge each cause in the approval transaction (ERD 3.5). */
+export async function acknowledgeGateBlockers(
+  tx: Tx,
+  projectId: string,
+  candidateVersionId: string,
+  note: string,
+  userId: string,
+  candidateItemVersionIds: ReadonlySet<string>,
+): Promise<void> {
+  if (!note.trim()) throw new Error('override note must be non-empty');
+
+  const blockers = await evaluateGate(tx, projectId, candidateVersionId, candidateItemVersionIds);
+  for (const blocker of blockers) {
+    await acknowledge(tx, {
+      projectId,
+      userId,
+      subject: { itemVersionId: blocker.subjectId },
+      obsoleteUpstreamItemVersionId: blocker.rootItemVersionId,
+      note,
+    });
+  }
 }
 
 /**

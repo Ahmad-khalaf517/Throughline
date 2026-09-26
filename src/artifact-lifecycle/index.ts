@@ -13,6 +13,7 @@ import { ARTIFACT_TYPES, type ArtifactSummaryDTO, type ArtifactType } from '@/li
 
 export {
   approveVersion,
+  approveWithOverride,
   ArchitectureMaterializationUnavailableError,
   type ApproveVersionResult,
 } from './approval';
