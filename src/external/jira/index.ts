@@ -460,11 +460,15 @@ async function sendCreateIssue(args: {
   };
 }
 
-async function reconcileIssue(args: {
-  config: JiraConfig;
-  marker: string;
-}): Promise<
-  { found: true; externalId: string; externalKey: string; externalUrl: string } | { found: false }
+async function reconcileIssue(args: { config: JiraConfig; marker: string }): Promise<
+  | {
+      found: true;
+      externalId: string;
+      externalKey: string;
+      externalUrl: string;
+      metadata: { jiraProjectKey: string };
+    }
+  | { found: false }
 > {
   const { config, marker } = args;
   // Primary path: bounded re-query by label (TR 30.2 - Jira search can lag
@@ -481,6 +485,13 @@ async function reconcileIssue(args: {
         externalId: foundByLabel.id,
         externalKey: foundByLabel.key,
         externalUrl: issueUrl(config, foundByLabel.key),
+        // Same slot `sendCreateIssue` already sets on a direct success -
+        // without it here, a ref adopted via reconciliation would carry no
+        // `jiraProjectKey` at all and `refJiraProjectKey`/
+        // `resolveDecisionNeed`/`resolveEpicJiraKey` (below) could never see
+        // it as "in the configured project" again (see the extended comment
+        // on `ReconcileResult` in external/operations/index.ts).
+        metadata: { jiraProjectKey: config.projectKey },
       };
     }
     if (attempt < RECONCILE_MAX_ATTEMPTS) await sleep(RECONCILE_DELAY_MS);
@@ -496,6 +507,7 @@ async function reconcileIssue(args: {
     externalId: foundByText.id,
     externalKey: foundByText.key,
     externalUrl: issueUrl(config, foundByText.key),
+    metadata: { jiraProjectKey: config.projectKey },
   };
 }
 

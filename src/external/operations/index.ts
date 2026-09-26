@@ -62,7 +62,26 @@ type SendResult = {
 // summary). This is additive only: every existing caller that never
 // returns `'foreign'` is unaffected.
 type ReconcileResult =
-  | { found: true; externalId: string; externalKey?: string; externalUrl?: string }
+  | {
+      found: true;
+      externalId: string;
+      externalKey?: string;
+      externalUrl?: string;
+      // Mirrors `SendResult.metadata` above - added by E4-S3 (SCRUM-52)
+      // because a ref adopted via reconciliation (TR 30.2) was, before this,
+      // finalized with NO metadata at all (`reconcileAndFinalize` built its
+      // own `sendResult` from only `externalId`/`externalKey`/`externalUrl`),
+      // even though `jira`'s FR-074 project-scoping
+      // (`refJiraProjectKey`/`resolveDecisionNeed`/`resolveEpicJiraKey`) is
+      // LOAD-BEARING on `metadata.jiraProjectKey` being set on every
+      // completed ref, not just ones that completed via a direct send()
+      // success. Without this, a reconciled ref's `refJiraProjectKey` reads
+      // `null` forever, `resolveDecisionNeed`/`resolveEpicJiraKey` can never
+      // find it "in the configured project" again, and a later export
+      // silently creates a duplicate Jira issue instead of surfacing the
+      // FR-074 Skip/Create-New prompt.
+      metadata?: unknown;
+    }
   | { found: false }
   | { found: 'foreign' };
 
@@ -428,6 +447,7 @@ async function reconcileAndFinalize(
   const sendResult: SendResult = { externalId: result.externalId };
   if (result.externalKey !== undefined) sendResult.externalKey = result.externalKey;
   if (result.externalUrl !== undefined) sendResult.externalUrl = result.externalUrl;
+  if (result.metadata !== undefined) sendResult.metadata = result.metadata;
   const ref = await finalizeCompleted(operationId, opts, sendResult);
   return { status: 'completed', ref };
 }

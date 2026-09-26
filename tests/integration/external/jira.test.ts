@@ -224,6 +224,68 @@ async function withFakeFetch<T>(
   }
 }
 
+// Thin wrapper implementing "simulate a lost response" (ERD 7.2 / TR 30.2) on
+// top of the fake Jira above - same technique
+// tests/integration/external/github.test.ts's own `createResponseDropper`
+// already uses (itself adapted from scripts/spike-github-reconciliation.mts),
+// keyed here on the issue's marker LABEL rather than a repo name (Jira's own
+// deterministic-target analogue - `markerFor`/`sendCreateIssue` in
+// src/external/jira/index.ts). The underlying call always runs to
+// completion - the real fake-Jira issue genuinely gets created, carrying the
+// marker label; only the caller's view of the create response is lost.
+function createResponseDropper(
+  underlyingFetch: (url: string | URL, init?: RequestInit) => Promise<Response>,
+) {
+  const dropNextResponseFor = new Set<string>();
+
+  function simulateLostResponseFor(marker: string): void {
+    dropNextResponseFor.add(marker);
+  }
+
+  async function fetchWithDrop(url: string | URL, init?: RequestInit): Promise<Response> {
+    const { pathname } = new URL(url);
+    const method = (init?.method ?? 'GET').toUpperCase();
+    let dropKey: string | undefined;
+    if (method === 'POST' && pathname === '/rest/api/3/issue' && init?.body) {
+      const body = JSON.parse(String(init.body)) as { fields?: { labels?: string[] } };
+      const marker = body.fields?.labels?.[0];
+      if (marker && dropNextResponseFor.has(marker)) dropKey = marker;
+    }
+    const response = await underlyingFetch(url, init);
+    if (dropKey) {
+      dropNextResponseFor.delete(dropKey);
+      throw new TypeError(
+        'test-simulated network fault: response lost before the client could observe it',
+      );
+    }
+    return response;
+  }
+
+  return { fetch: fetchWithDrop, simulateLostResponseFor };
+}
+
+/**
+ * Advances the FAKE clock past jira's 90s RECONCILIATION_THRESHOLD_MS
+ * (src/external/operations/index.ts) - same technique
+ * tests/integration/external/github.test.ts's own
+ * `withClockAdvancedPastThreshold` already uses (itself matching
+ * tests/integration/external/operations.test.ts): only `Date` is faked, real
+ * Testcontainers I/O is unaffected. E4-S2's own postmortem found this
+ * technique corrupted a shared Octokit rate-limiting plugin when applied to
+ * GitHub's client - `jira`'s client here is plain `fetch`-based with no such
+ * plugin (no Octokit involved at all), so that specific hazard does not
+ * apply.
+ */
+async function withClockAdvancedPastThreshold<T>(fn: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    vi.setSystemTime(Date.now() + 95_000);
+    return await fn();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe('jira (E4-S3 / SCRUM-52)', () => {
   describe('T12 - S-12 changes after THR-42 exists, then export', () => {
     it('Skip / Create New prompt; no update, no silent duplicate', async () => {
@@ -453,6 +515,119 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       expect(storyRef).toBeDefined();
       const fakeStoryIssue = fake.issuesByKey.get(storyRef!.externalKey!);
       expect(fakeStoryIssue?.parentKey).toBe(originalEpicKey);
+    });
+  });
+
+  describe('reconciliation-adoption regression (invariant-reviewer finding, E4-S3)', () => {
+    it('a Story ref adopted via RECONCILIATION (not a direct 201) still surfaces the FR-074 Skip/Create-New prompt on re-export - never a silent duplicate', async () => {
+      const { projectId } = await fx.createProjectWithOwner(sql, {
+        name: 'jira reconciliation regression',
+      });
+      const artifactId = await fx.createArtifact(sql, projectId, 'backlog');
+      const epic = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId,
+        itemType: 'epic',
+      });
+      const story = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId,
+        itemType: 'story',
+      });
+
+      const v1 = await approveBacklogVersion(sql, artifactId, 1, [
+        { logicalItemId: epic.logicalItemId, itemVersionId: epic.itemVersionId },
+        {
+          logicalItemId: story.logicalItemId,
+          itemVersionId: story.itemVersionId,
+          parentLogicalItemId: epic.logicalItemId,
+        },
+      ]);
+
+      const fake = createFakeJira();
+      const dropper = createResponseDropper(fake.fetch);
+      const storyMarker = `tl-${story.itemVersionId}`;
+
+      // First export: the Epic's create succeeds normally (a direct 201);
+      // the STORY's create response is lost. The real fake-Jira issue is
+      // still created underneath (same as github.test.ts's own dropper) -
+      // only the caller's view of it is dropped. `exportOneItem` swallows
+      // the resulting ambiguous error (ERD 7.1: one item's ambiguous failure
+      // never aborts the rest of the batch) - the Story is simply absent
+      // from this call's own return value, and its own operation row is
+      // left `pending` (R6/R9), never `failed`.
+      dropper.simulateLostResponseFor(storyMarker);
+      const v1Refs = await withFakeFetch(dropper.fetch, () => jira.exportBacklog(v1, new Map()));
+      expect(v1Refs.some((ref) => ref.sourceItemVersionId === epic.itemVersionId)).toBe(true);
+      expect(v1Refs.some((ref) => ref.sourceItemVersionId === story.itemVersionId)).toBe(false);
+
+      const afterLoss = await jiraOperationRows(projectId);
+      const storyOpAfterLoss = afterLoss.find((row) =>
+        row.operation_key.endsWith(`:${story.itemVersionId}`),
+      );
+      expect(storyOpAfterLoss?.status).toBe('pending');
+
+      // Second call, past the reconciliation threshold, WITHOUT the drop:
+      // the Story's operation is now old enough to move to
+      // `reconciliation_required`, and `reconcileIssue` adopts the real fake
+      // issue it finds by marker label - NOT a direct send() success. This
+      // is exactly the path the reviewer's bug lived on: before the fix,
+      // `reconcileAndFinalize` never forwarded `metadata`, so this ref would
+      // persist with `metadata: {}` and no `jiraProjectKey` at all.
+      const v1RefsAgain = await withClockAdvancedPastThreshold(() =>
+        withFakeFetch(fake.fetch, () => jira.exportBacklog(v1, new Map())),
+      );
+      const reconciledStoryRef = v1RefsAgain.find(
+        (ref) => ref.sourceItemVersionId === story.itemVersionId,
+      );
+      expect(reconciledStoryRef).toBeDefined();
+
+      const afterReconcile = await jiraOperationRows(projectId);
+      const storyOpsAfterReconcile = afterReconcile.filter((row) =>
+        row.operation_key.endsWith(`:${story.itemVersionId}`),
+      );
+      // Exactly one operation row for the Story throughout (ERD 7.1) - the
+      // ambiguous first attempt was reconciled in place, never retried as a
+      // brand-new operation.
+      expect(storyOpsAfterReconcile).toHaveLength(1);
+      expect(storyOpsAfterReconcile[0]!.status).toBe('completed');
+
+      // A real change: a new ItemVersion under the SAME Story LogicalItem.
+      const storyV2ItemVersionId = await fx.createItemVersion(sql, {
+        projectId,
+        logicalItemId: story.logicalItemId,
+        revisionNumber: 2,
+      });
+      const v2 = await approveBacklogVersion(sql, artifactId, 2, [
+        { logicalItemId: epic.logicalItemId, itemVersionId: epic.itemVersionId },
+        {
+          logicalItemId: story.logicalItemId,
+          itemVersionId: storyV2ItemVersionId,
+          parentLogicalItemId: epic.logicalItemId,
+        },
+      ]);
+
+      // The regression check itself: the FR-074 Skip/Create-New prompt must
+      // still appear for the changed Story, even though its ORIGINAL ref was
+      // adopted via reconciliation rather than a direct send() success.
+      // Before the fix, the reconciled ref's missing `metadata.jiraProjectKey`
+      // meant `refsInConfiguredProject` filtered it out entirely,
+      // `resolveDecisionNeed` saw zero refs "in the configured project", and
+      // this Story would be silently treated as brand new (a silent
+      // duplicate on export, exactly what FR-074 forbids).
+      const preview = await jira.previewExport(v2);
+      expect(preview.skipped).toContainEqual(
+        expect.objectContaining({
+          kind: 'needs_decision',
+          logicalItemId: story.logicalItemId,
+          displayKey: story.displayKey,
+        }),
+      );
+
+      // No decision supplied -> refuses loudly, never a silent duplicate.
+      await expect(jira.exportBacklog(v2, new Map())).rejects.toThrow(
+        jira.MissingExportDecisionError,
+      );
     });
   });
 });

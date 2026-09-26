@@ -422,8 +422,15 @@ async function reconcileRepo(args: {
   owner: string;
   repoName: string;
   marker: string;
+  mode: 'scaffold' | 'docs-only';
 }): Promise<
-  | { found: true; externalId: string; externalKey: string; externalUrl: string }
+  | {
+      found: true;
+      externalId: string;
+      externalKey: string;
+      externalUrl: string;
+      metadata: { mode: 'scaffold' | 'docs-only' };
+    }
   | { found: false }
   | { found: 'foreign' }
 > {
@@ -447,6 +454,13 @@ async function reconcileRepo(args: {
     externalId: String(response.data.id),
     externalKey: response.data.full_name,
     externalUrl: response.data.html_url,
+    // Same slot `sendCreateRepo` already sets on a direct success. `mode` is
+    // display-only here (no code path reads it back), but there is no
+    // reason to leave it unset on the adoption path now that the shared
+    // `ReconcileResult.metadata` slot exists (E4-S3 / SCRUM-52 added it for
+    // Jira's load-bearing `jiraProjectKey` - this is the same fix applied
+    // for consistency, not a second bug of the same severity).
+    metadata: { mode: args.mode },
   };
 }
 
@@ -628,7 +642,7 @@ export async function initRepo(
         architectureVersionId,
         adrItems,
       }),
-    reconcile: () => reconcileRepo({ octokit, owner, repoName: normalizedRepoName, marker }),
+    reconcile: () => reconcileRepo({ octokit, owner, repoName: normalizedRepoName, marker, mode }),
   });
 
   switch (result.status) {
