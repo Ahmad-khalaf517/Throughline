@@ -13,7 +13,10 @@
 // Nothing outside src/artifact-lifecycle may import this file directly - it is
 // re-exported through ./index.ts (Module Boundaries section 7).
 import { withProjectLock, withTx } from '@/db';
-import { getItemVersionProjectIds as readItemVersionProjectIds } from '@/lineage/identity';
+import {
+  getDisplayKeysByItemVersionId,
+  getItemVersionProjectIds as readItemVersionProjectIds,
+} from '@/lineage/identity';
 import { acknowledge, getWarnings, type ImpactRow } from '@/lineage/impact';
 import { UUID_RE } from './shared';
 
@@ -45,6 +48,36 @@ export async function getImpactWarnings(projectId: string): Promise<ImpactRow[]>
       compareStrings(a.subjectKind, b.subjectKind) ||
       compareStrings(a.subjectId, b.subjectId),
   );
+}
+
+export interface ItemImpactCause {
+  subjectItemVersionId: string;
+  rootItemVersionId: string;
+  acknowledged: boolean;
+  depth: number;
+  pathLabels: string[];
+}
+
+/** Every current cause for these items, preserving the impact engine's separate rows. */
+export async function getCurrentItemImpactCauses(
+  projectId: string,
+  itemVersionIds: string[],
+): Promise<ItemImpactCause[]> {
+  if (!itemVersionIds.length) return [];
+  const subjects = new Set(itemVersionIds);
+  const warnings = (await getImpactWarnings(projectId)).filter(
+    (row) => row.subjectKind === 'item_version' && subjects.has(row.subjectId),
+  );
+  if (!warnings.length) return [];
+  const pathIds = [...new Set(warnings.flatMap((row) => row.path))];
+  const labels = await withTx((tx) => getDisplayKeysByItemVersionId(tx, pathIds));
+  return warnings.map((row) => ({
+    subjectItemVersionId: row.subjectId,
+    rootItemVersionId: row.rootItemVersionId,
+    acknowledged: row.acknowledged,
+    depth: row.depth,
+    pathLabels: row.path.map((id) => labels.get(id) ?? id),
+  }));
 }
 
 /**
