@@ -32,6 +32,13 @@ export { requestRevision, rejectVersion } from './rejection';
 export { proposeItemEdit, commitItemEdit, type CommitItemEditResult } from './item-edit';
 export { getArtifactVersionPayload } from './version-payload';
 export {
+  getProjectDashboard,
+  getProjectItemVersionDetail,
+  type ProjectDashboard,
+  type DashboardActivity,
+  type DashboardTile,
+} from './dashboard';
+export {
   getVersionRef,
   getArtifactId,
   listArtifactVersions,
@@ -44,9 +51,11 @@ export {
 } from './versions';
 export {
   getImpactWarnings,
+  getCurrentItemImpactCauses,
   getItemVersionProjectIds,
   acknowledgeImpactWarning,
   type AcknowledgeImpactWarningResult,
+  type ItemImpactCause,
 } from './impact';
 
 // `commitItemEdit`/`proposeItemEdit` throw identity's own `ItemEditError`
