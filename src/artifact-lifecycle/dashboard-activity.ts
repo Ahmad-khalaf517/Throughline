@@ -40,6 +40,8 @@ export function buildDashboardActivity(
       acknowledged: null,
       causeDisplayKey: null,
       rootItemVersionId: null,
+      summaryTitle: null,
+      summaryNarrative: null,
     });
   }
 
@@ -61,6 +63,8 @@ export function buildDashboardActivity(
       acknowledged: null,
       causeDisplayKey: null,
       rootItemVersionId: null,
+      summaryTitle: null,
+      summaryNarrative: null,
     });
     if (status === 'approved' && version.baseApprovedVersionId) {
       const previous = byVersion.get(version.baseApprovedVersionId);
@@ -79,6 +83,8 @@ export function buildDashboardActivity(
           acknowledged: null,
           causeDisplayKey: null,
           rootItemVersionId: null,
+          summaryTitle: null,
+          summaryNarrative: null,
         });
       }
     }
@@ -103,6 +109,8 @@ export function buildDashboardActivity(
       acknowledged: null,
       causeDisplayKey: null,
       rootItemVersionId: null,
+      summaryTitle: item.summaryTitle ?? null,
+      summaryNarrative: item.summaryNarrative ?? null,
     });
   }
 
@@ -130,6 +138,8 @@ export function buildDashboardActivity(
       acknowledged: warning.acknowledged,
       causeDisplayKey: byItem.get(warning.rootItemVersionId)?.displayKey ?? null,
       rootItemVersionId: warning.rootItemVersionId,
+      summaryTitle: item.summaryTitle ?? null,
+      summaryNarrative: item.summaryNarrative ?? null,
     });
   }
 

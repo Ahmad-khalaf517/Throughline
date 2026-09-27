@@ -33,6 +33,8 @@ export interface DashboardActivity {
   acknowledged: boolean | null;
   causeDisplayKey: string | null;
   rootItemVersionId: string | null;
+  summaryTitle: string | null;
+  summaryNarrative: string | null;
 }
 
 export interface ProjectDashboard {

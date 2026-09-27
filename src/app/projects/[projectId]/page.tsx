@@ -42,30 +42,43 @@ function activityHref(projectId: string, entry: DashboardActivity) {
 
 function ActivityRow({ projectId, entry }: { projectId: string; entry: DashboardActivity }) {
   const isImpact = entry.kind === 'current_impact';
+  const itemEntry = entry.kind === 'item_created' || isImpact;
   return (
-    <li className="border-surface-dim border-b p-6 last:border-b-0">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-2">
+    <li className="border-surface-dim hover:bg-surface-container-low/50 border-b p-4 last:border-b-0">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
             {entry.displayKey && (
-              <span className="font-mono-code text-on-surface text-xs font-semibold">
+              <span className="font-mono-code bg-surface-container-low border-surface-dim text-on-surface rounded-md border px-2 py-1 text-xs font-semibold">
                 {entry.displayKey}
               </span>
             )}
-            <span className="text-on-surface text-sm font-medium">
-              {isImpact
-                ? 'Potentially affected'
-                : entry.kind === 'item_created'
-                  ? 'Item version created'
-                  : 'Artifact version status changed'}
+            <span className="text-on-surface line-clamp-2 text-sm font-medium">
+              {itemEntry && entry.summaryTitle
+                ? entry.summaryTitle
+                : isImpact
+                  ? 'Potentially affected item'
+                  : entry.kind === 'item_created'
+                    ? 'Item version created'
+                    : 'Artifact version status changed'}
             </span>
             {entry.status && <StatusBadge status={entry.status} />}
             {isImpact && (
               <FlaggedGlyph title={`${entry.displayKey} may be affected by an upstream change`} />
             )}
           </div>
+          {entry.summaryNarrative && (
+            <p className="text-on-surface-variant line-clamp-2 text-xs leading-relaxed">
+              {entry.summaryNarrative}
+            </p>
+          )}
           <p className="text-on-surface-variant text-xs">
-            {LABELS[entry.artifactType]}
+            {isImpact
+              ? 'Current impact'
+              : entry.kind === 'item_created'
+                ? 'Item version created'
+                : 'Status change'}{' '}
+            · {LABELS[entry.artifactType]}
             {entry.versionNumber ? ` · version ${entry.versionNumber}` : ' · retained item version'}
             {entry.revisionNumber && ` · item revision ${entry.revisionNumber}`}
             {isImpact &&
@@ -110,26 +123,25 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
   const dashboard = await getProjectDashboard(projectId);
   const hasVersions = dashboard.tiles.some((tile) => tile.versionId);
   const impacted = dashboard.activity.filter((entry) => entry.kind === 'current_impact');
+  const firstImpact = impacted[0];
+  const itemsInShownVersions = dashboard.tiles.reduce((count, tile) => count + tile.itemCount, 0);
 
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6">
-      <header>
-        <p className="text-on-surface-variant text-xs font-medium tracking-wide uppercase">
-          Project overview
-        </p>
-        <h1 className="text-on-surface mt-1 text-2xl font-semibold">Traceability at a glance</h1>
-        <p className="text-on-surface-variant mt-2 text-sm">
-          Current artifact versions and recent lineage activity for {project.name}.
-        </p>
-      </header>
+    <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6">
+      <h1 className="sr-only">Project overview for {project.name}</h1>
 
       <section aria-label="Artifact status" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {dashboard.tiles.map((tile) => (
           <div
             key={tile.type}
-            className="bg-surface-container-lowest border-surface-dim flex flex-col gap-4 rounded-lg border p-6 shadow-sm"
+            className="bg-surface-container-lowest border-surface-dim flex flex-col justify-between gap-4 rounded-lg border p-6 shadow-sm"
           >
-            <p className="text-on-surface-variant text-xs font-medium">{LABELS[tile.type]}</p>
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-on-surface-variant text-xs font-medium">{LABELS[tile.type]}</p>
+              <span className="text-on-surface-variant shrink-0 font-mono text-xs">
+                {tile.versionNumber ? `v${tile.versionNumber}` : 'No version'}
+              </span>
+            </div>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-on-surface text-2xl font-semibold">
                 {tile.itemCount}
@@ -141,16 +153,18 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
                 <span className="text-on-surface-variant text-xs">No version</span>
               )}
             </div>
-            <Link
-              href={
-                tile.versionId
-                  ? `/projects/${projectId}/versions/${tile.versionId}`
-                  : `/projects/${projectId}/artifacts/${tile.type}`
-              }
-              className="text-primary-container focus-visible:ring-primary w-fit rounded-md text-xs font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none"
-            >
-              {tile.versionId ? `Inspect version ${tile.versionNumber} →` : 'Open artifact →'}
-            </Link>
+            <div className="border-surface-dim border-t pt-3">
+              <Link
+                href={
+                  tile.versionId
+                    ? `/projects/${projectId}/versions/${tile.versionId}`
+                    : `/projects/${projectId}/artifacts/${tile.type}`
+                }
+                className="text-primary-container focus-visible:ring-primary w-fit rounded-md text-xs font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none"
+              >
+                {tile.versionId ? 'Inspect version →' : 'Open artifact →'}
+              </Link>
+            </div>
           </div>
         ))}
       </section>
@@ -160,13 +174,19 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           aria-labelledby="activity-heading"
           className="bg-surface-container-lowest border-surface-dim overflow-hidden rounded-lg border shadow-sm lg:col-span-8"
         >
-          <div className="border-surface-dim border-b p-6">
-            <h2 id="activity-heading" className="text-on-surface text-base font-semibold">
-              Recent activity & lineage
-            </h2>
-            <p className="text-on-surface-variant mt-1 text-xs">
-              Newest changes first; impact entries show the current computed state.
-            </p>
+          <div className="border-surface-dim flex flex-wrap items-start justify-between gap-3 border-b p-6">
+            <div>
+              <h2 id="activity-heading" className="text-on-surface text-base font-semibold">
+                Recent activity & lineage
+              </h2>
+              <p className="text-on-surface-variant mt-1 text-xs">
+                Newest changes first; impact entries show the current computed state.
+              </p>
+            </div>
+            <span className="bg-surface-container-low text-on-surface-variant rounded-md px-2 py-1 text-xs">
+              Showing {dashboard.activity.length}{' '}
+              {dashboard.activity.length === 1 ? 'entry' : 'entries'}
+            </span>
           </div>
           {dashboard.activity.length ? (
             <ol>
@@ -186,37 +206,51 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
             aria-labelledby="health-heading"
             className="bg-surface-container-lowest border-surface-dim rounded-lg border p-6 shadow-sm"
           >
-            <h2 id="health-heading" className="text-on-surface text-base font-semibold">
-              Project health
-            </h2>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 id="health-heading" className="text-on-surface text-base font-semibold">
+                Project health
+              </h2>
+              <span className="bg-surface-container-low border-surface-dim text-on-surface-variant rounded-md border px-2 py-1 text-xs font-medium">
+                {dashboard.flaggedItemCount} flagged{' '}
+                {dashboard.flaggedItemCount === 1 ? 'item' : 'items'}
+              </span>
+            </div>
             {dashboard.flaggedItemCount ? (
-              <div className="mt-4">
-                <p className="flex items-center gap-2 text-sm font-medium">
-                  <FlaggedGlyph title="Current impact found" />
-                  {dashboard.flaggedItemCount} potentially affected{' '}
-                  {dashboard.flaggedItemCount === 1 ? 'item' : 'items'}
-                </p>
-                <p className="text-on-surface-variant mt-2 text-xs">
-                  Review recommended for items based on a superseded source.
-                </p>
-                <ul className="mt-4 flex flex-col gap-2">
-                  {impacted.slice(0, 4).map((entry) => (
-                    <li key={entry.id}>
+              <div className="bg-surface-container-low border-surface-dim mt-4 rounded-lg border p-4">
+                <div className="flex items-start gap-2">
+                  <FlaggedGlyph title="Current impact found" className="mt-1" />
+                  <div>
+                    <p className="text-on-surface text-sm font-medium">
+                      {firstImpact?.displayKey ?? 'An item'} may be affected
+                      {firstImpact?.causeDisplayKey
+                        ? ` by ${firstImpact.causeDisplayKey}`
+                        : ' by an upstream change'}
+                      .
+                    </p>
+                    <p className="text-on-surface-variant mt-2 text-xs leading-relaxed">
+                      {firstImpact?.summaryTitle ? `${firstImpact.summaryTitle} · ` : ''}Review
+                      recommended for this dependency.
+                    </p>
+                    {firstImpact && (
                       <Link
-                        href={activityHref(projectId, entry)}
-                        className="text-primary-container focus-visible:ring-primary rounded-md text-xs font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none"
+                        href={activityHref(projectId, firstImpact)}
+                        className="text-primary-container focus-visible:ring-primary mt-3 inline-flex rounded-md text-xs font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none"
                       >
-                        {entry.displayKey} · inspect impact →
+                        Inspect this cause →
                       </Link>
-                    </li>
-                  ))}
-                </ul>
+                    )}
+                  </div>
+                </div>
               </div>
             ) : (
               <p className="text-status-approved-text bg-status-approved-bg mt-4 rounded-md px-3 py-3 text-sm">
                 ✓ No impact found. Current items have no flagged dependencies.
               </p>
             )}
+            <div className="border-surface-dim mt-4 flex items-center justify-between gap-2 border-t pt-4 text-xs">
+              <span className="text-on-surface-variant">Items in shown versions</span>
+              <span className="text-on-surface font-semibold">{itemsInShownVersions} items</span>
+            </div>
           </section>
           <section
             aria-labelledby="brief-heading"

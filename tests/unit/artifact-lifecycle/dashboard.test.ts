@@ -55,6 +55,8 @@ describe('project dashboard activity (FR-003)', () => {
           revisionNumber: 1,
           createdAt,
           versionIds: ['version-2'],
+          summaryTitle: 'Supports offline edits',
+          summaryNarrative: 'Changes remain available after reconnecting.',
         },
       ],
       [
@@ -74,6 +76,8 @@ describe('project dashboard activity (FR-003)', () => {
       displayKey: 'R-02',
       status: 'approved',
       causeDisplayKey: 'R-01',
+      summaryTitle: 'Supports offline edits',
+      summaryNarrative: 'Changes remain available after reconnecting.',
       at: null,
     });
     expect(result.activity).toContainEqual(

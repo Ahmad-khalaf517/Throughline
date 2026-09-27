@@ -1,5 +1,6 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '@/db';
+import { dashboardItemSummary } from './dashboard-summary';
 
 export interface ProjectItemCreation {
   itemVersionId: string;
@@ -8,6 +9,8 @@ export interface ProjectItemCreation {
   revisionNumber: number;
   createdAt: Date;
   versionIds: string[];
+  summaryTitle?: string | null;
+  summaryNarrative?: string | null;
 }
 
 export interface ProjectItemVersionDetail {
@@ -51,6 +54,7 @@ export async function listProjectItemCreations(projectId: string): Promise<Proje
       itemType: schema.logicalItem.itemType,
       revisionNumber: schema.itemVersion.revisionNumber,
       createdAt: schema.itemVersion.createdAt,
+      payload: schema.itemVersion.payload,
       versionId: schema.artifactVersionItemMembership.artifactVersionId,
     })
     .from(schema.itemVersion)
@@ -66,7 +70,17 @@ export async function listProjectItemCreations(projectId: string): Promise<Proje
   for (const row of rows) {
     let creation = creations.get(row.itemVersionId);
     if (!creation) {
-      creation = { ...row, versionIds: [] };
+      const summary = dashboardItemSummary(row.itemType, row.payload);
+      creation = {
+        itemVersionId: row.itemVersionId,
+        displayKey: row.displayKey,
+        itemType: row.itemType,
+        revisionNumber: row.revisionNumber,
+        createdAt: row.createdAt,
+        versionIds: [],
+        summaryTitle: summary.title,
+        summaryNarrative: summary.narrative,
+      };
       creations.set(row.itemVersionId, creation);
     }
     if (row.versionId) creation.versionIds.push(row.versionId);
