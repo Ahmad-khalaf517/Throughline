@@ -29,6 +29,10 @@ function formatDate(date: Date) {
   });
 }
 
+function itemNoun(count: number) {
+  return count === 1 ? 'item' : 'items';
+}
+
 function activityHref(projectId: string, entry: DashboardActivity) {
   if (entry.kind === 'item_created' && entry.itemVersionId) {
     return `/projects/${projectId}/items/${entry.itemVersionId}`;
@@ -43,6 +47,8 @@ function activityHref(projectId: string, entry: DashboardActivity) {
 function ActivityRow({ projectId, entry }: { projectId: string; entry: DashboardActivity }) {
   const isImpact = entry.kind === 'current_impact';
   const itemEntry = entry.kind === 'item_created' || isImpact;
+  const isVersionCreation =
+    entry.kind === 'version_status' && entry.id.startsWith('version-created-');
   return (
     <li className="border-surface-dim hover:bg-surface-container-low/50 border-b p-4 last:border-b-0">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -60,7 +66,9 @@ function ActivityRow({ projectId, entry }: { projectId: string; entry: Dashboard
                   ? 'Potentially affected item'
                   : entry.kind === 'item_created'
                     ? 'Item version created'
-                    : 'Artifact version status changed'}
+                    : isVersionCreation
+                      ? 'Artifact version created'
+                      : 'Artifact version status changed'}
             </span>
             {entry.status && <StatusBadge status={entry.status} />}
             {isImpact && (
@@ -77,7 +85,9 @@ function ActivityRow({ projectId, entry }: { projectId: string; entry: Dashboard
               ? 'Current impact'
               : entry.kind === 'item_created'
                 ? 'Item version created'
-                : 'Status change'}{' '}
+                : isVersionCreation
+                  ? 'Version created'
+                  : 'Status change'}{' '}
             · {LABELS[entry.artifactType]}
             {entry.versionNumber ? ` · version ${entry.versionNumber}` : ' · retained item version'}
             {entry.revisionNumber && ` · item revision ${entry.revisionNumber}`}
@@ -132,9 +142,14 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
 
       <section aria-label="Artifact status" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {dashboard.tiles.map((tile) => (
-          <div
+          <Link
             key={tile.type}
-            className="bg-surface-container-lowest border-surface-dim flex flex-col justify-between gap-4 rounded-lg border p-6 shadow-sm"
+            href={
+              tile.versionId
+                ? `/projects/${projectId}/versions/${tile.versionId}`
+                : `/projects/${projectId}/artifacts/${tile.type}`
+            }
+            className="group bg-surface-container-lowest border-surface-dim hover:border-outline-variant focus-visible:ring-primary flex flex-col justify-between gap-3 rounded-lg border p-6 shadow-sm transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
             <div className="flex items-start justify-between gap-2">
               <p className="text-on-surface-variant text-xs font-medium">{LABELS[tile.type]}</p>
@@ -145,27 +160,20 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-on-surface text-2xl font-semibold">
                 {tile.itemCount}
-                <span className="text-on-surface-variant ml-1 text-xs font-normal">items</span>
+                <span className="text-on-surface-variant ml-1 text-xs font-normal">
+                  {itemNoun(tile.itemCount)}
+                </span>
               </p>
               {tile.status ? (
                 <StatusBadge status={tile.status} />
               ) : (
-                <span className="text-on-surface-variant text-xs">No version</span>
+                <span className="text-on-surface-variant text-xs">Not generated</span>
               )}
             </div>
-            <div className="border-surface-dim border-t pt-3">
-              <Link
-                href={
-                  tile.versionId
-                    ? `/projects/${projectId}/versions/${tile.versionId}`
-                    : `/projects/${projectId}/artifacts/${tile.type}`
-                }
-                className="text-primary-container focus-visible:ring-primary w-fit rounded-md text-xs font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none"
-              >
-                {tile.versionId ? 'Inspect version →' : 'Open artifact →'}
-              </Link>
-            </div>
-          </div>
+            <span className="text-primary-container text-xs font-medium group-hover:underline group-focus-visible:underline">
+              {tile.versionId ? 'Inspect version →' : 'Open artifact →'}
+            </span>
+          </Link>
         ))}
       </section>
 
@@ -249,7 +257,9 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
             )}
             <div className="border-surface-dim mt-4 flex items-center justify-between gap-2 border-t pt-4 text-xs">
               <span className="text-on-surface-variant">Items in shown versions</span>
-              <span className="text-on-surface font-semibold">{itemsInShownVersions} items</span>
+              <span className="text-on-surface font-semibold">
+                {itemsInShownVersions} {itemNoun(itemsInShownVersions)}
+              </span>
             </div>
           </section>
           <section
