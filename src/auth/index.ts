@@ -182,6 +182,23 @@ export async function updatePassword(newPassword: string): Promise<{ error: stri
   return { error: error?.message ?? null };
 }
 
+/**
+ * Updates the account's display name. Writes Supabase Auth's user_metadata
+ * first - that's the field upsertAppUser re-reads on every future sign-in
+ * (see upsertAppUser above) - then syncs the persisted app_user row through
+ * that same upsert, so the change is visible immediately rather than only
+ * after the next sign-in.
+ */
+export async function updateDisplayName(name: string): Promise<{ error: string | null }> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.auth.updateUser({ data: { display_name: name } });
+  if (error || !data.user?.email) {
+    return { error: error?.message ?? 'Could not update profile.' };
+  }
+  await upsertAppUser({ id: data.user.id, email: data.user.email, displayName: name });
+  return { error: null };
+}
+
 const VALID_OTP_TYPES: readonly EmailOtpType[] = [
   'signup',
   'invite',

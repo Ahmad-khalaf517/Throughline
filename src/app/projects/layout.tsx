@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import { getAppUserById, getVerifiedUser } from '@/auth';
 import { ProjectSidebar } from '@/components/projects/project-sidebar';
 import { UserMenu } from '@/components/projects/user-menu';
-import { signOutAction } from '../actions';
+import { signOutAction, updateDisplayNameAction } from '../actions';
 
 export default async function ProjectsLayout({ children }: LayoutProps<'/projects'>) {
   const user = await getVerifiedUser();
@@ -26,9 +26,10 @@ export default async function ProjectsLayout({ children }: LayoutProps<'/project
           </Link>
           <div className="flex items-center gap-4">
             <UserMenu
-              name={appUser?.displayName ?? user.email}
+              displayName={appUser?.displayName ?? null}
               email={user.email}
               signOutAction={signOutAction}
+              updateDisplayNameAction={updateDisplayNameAction}
             />
           </div>
         </div>

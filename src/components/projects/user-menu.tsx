@@ -1,20 +1,25 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { LogOut } from 'lucide-react';
+import { LogOut, Pencil } from 'lucide-react';
+import { EditProfileDialog, type UpdateDisplayNameState } from './edit-profile-dialog';
 
 interface UserMenuProps {
-  name: string;
+  displayName: string | null;
   email: string;
-  // A server action reference, passed down from the (app-layer) layout -
+  // Server action references, passed down from the (app-layer) layout -
   // `components` may not import from `app` directly (Module Boundaries;
   // enforced by boundaries/element-types).
   signOutAction: () => Promise<void>;
+  updateDisplayNameAction: (
+    prevState: UpdateDisplayNameState,
+    formData: FormData,
+  ) => Promise<UpdateDisplayNameState>;
 }
 
-// `name` is `appUser.displayName ?? user.email` (see projects/layout.tsx) - when
-// it's actually the email, split on the local part so initials read as "KA"
-// rather than the whole address's first two characters.
+// Falls back to splitting the email's local part when there's no display
+// name yet, so initials read as "KA" rather than the whole address's first
+// two characters.
 function initialsOf(name: string): string {
   const base = name.includes('@') ? name.slice(0, name.indexOf('@')) : name;
   const parts = base.trim().split(/\s+/).filter(Boolean);
@@ -32,8 +37,15 @@ function initialsOf(name: string): string {
  * hand-rolled dialog: Escape and outside-click close it, focus returns to the
  * trigger on close (screen-kit skill's keyboard-operability bar).
  */
-export function UserMenu({ name, email, signOutAction }: UserMenuProps) {
+export function UserMenu({
+  displayName,
+  email,
+  signOutAction,
+  updateDisplayNameAction,
+}: UserMenuProps) {
+  const name = displayName ?? email;
   const [open, setOpen] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -86,17 +98,39 @@ export function UserMenu({ name, email, signOutAction }: UserMenuProps) {
             <p className="text-on-surface truncate text-sm font-medium">{name}</p>
             <p className="text-on-surface-variant truncate text-xs">{email}</p>
           </div>
-          <form action={signOutAction} className="p-1">
+          <div className="p-1">
             <button
-              type="submit"
+              type="button"
               role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                setEditingProfile(true);
+              }}
               className="text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface focus-visible:ring-primary flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
             >
-              <LogOut className="size-4" aria-hidden="true" />
-              Sign out
+              <Pencil className="size-4" aria-hidden="true" />
+              Edit profile
             </button>
-          </form>
+            <form action={signOutAction}>
+              <button
+                type="submit"
+                role="menuitem"
+                className="text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface focus-visible:ring-primary flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
+              >
+                <LogOut className="size-4" aria-hidden="true" />
+                Sign out
+              </button>
+            </form>
+          </div>
         </div>
+      )}
+
+      {editingProfile && (
+        <EditProfileDialog
+          currentDisplayName={displayName}
+          updateDisplayNameAction={updateDisplayNameAction}
+          onClose={() => setEditingProfile(false)}
+        />
       )}
     </div>
   );
