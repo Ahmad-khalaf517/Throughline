@@ -26,7 +26,7 @@ export default async function ProjectsLayout({ children }: LayoutProps<'/project
           </Link>
           <div className="flex items-center gap-4">
             <UserMenu
-              name={appUser?.displayName ?? user.email}
+              displayName={appUser?.displayName ?? null}
               email={user.email}
               signOutAction={signOutAction}
             />

@@ -1,10 +1,10 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
-import { getProjectById } from '@/artifact-lifecycle';
+import { getImpactWarningsResolved, getProjectById } from '@/artifact-lifecycle';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
 import { ApiError } from '@/lib/errors';
 import { DependencyGraph } from '@/components/review/dependency-graph';
-import { getFixtureArtifactVersion, getFixtureImpactWarnings } from '@/components/review/fixtures';
+import { loadReviewVersion } from '../artifacts/load-review-version';
 
 interface ProjectDependenciesPageProps {
   params: Promise<{ projectId: string }>;
@@ -17,16 +17,15 @@ interface ProjectDependenciesPageProps {
  * `warnings/page.tsx` exactly (see that file's own comment for why
  * `requireProjectOwner`'s `ApiError('NOT_FOUND')` is caught explicitly).
  *
- * Reads the same fixture data the warning panel reads
- * (`getFixtureImpactWarnings`) plus the Requirements version fixture
- * (`getFixtureArtifactVersion`) - TR section 27's own requirement that the
+ * Reads real data: the same `getImpactWarningsResolved` the warning panel
+ * reads, plus the Requirements version (`loadReviewVersion`, shared with
+ * `artifacts/[type]/page.tsx` so the two never duplicate the version/impact/
+ * quality-issue composition) - TR section 27's own requirement that the
  * visualization "must use the same dependency data and traversal rules as
- * the warning engine," never an independent implementation.
- * `getFixtureArtifactVersion` returning `null` (every artifact type but
- * `requirements`, today) is defended even though it can't currently happen
- * for `'requirements'` - the same graceful "coming soon" treatment
- * `artifacts/[type]/page.tsx` uses, not a 404. E3-S10/E3-S11 are this
- * screen's swap points, same as the sibling review/warning screens.
+ * the warning engine," never an independent implementation. `loadReviewVersion`
+ * returning `null` (no Requirements version generated yet) is the same
+ * graceful "coming soon" treatment `artifacts/[type]/page.tsx` uses, not a
+ * 404.
  */
 export default async function ProjectDependenciesPage({ params }: ProjectDependenciesPageProps) {
   const user = await getVerifiedUser();
@@ -46,8 +45,8 @@ export default async function ProjectDependenciesPage({ params }: ProjectDepende
   const project = await getProjectById(projectId);
   if (!project) notFound();
 
-  const fixture = getFixtureArtifactVersion('requirements');
-  const warnings = getFixtureImpactWarnings(projectId);
+  const reviewData = await loadReviewVersion(projectId, 'requirements');
+  const warnings = await getImpactWarningsResolved(projectId);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-4 py-12 sm:px-6">
@@ -65,8 +64,8 @@ export default async function ProjectDependenciesPage({ params }: ProjectDepende
         </p>
       </header>
 
-      {fixture ? (
-        <DependencyGraph version={fixture.version} warnings={warnings} />
+      {reviewData ? (
+        <DependencyGraph version={reviewData.version} warnings={warnings} />
       ) : (
         <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-8 text-center">
           <p className="text-on-surface text-sm font-medium">

@@ -1,10 +1,9 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
-import { getProjectById } from '@/artifact-lifecycle';
+import { getImpactWarningsResolved, getProjectById } from '@/artifact-lifecycle';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
 import { ApiError } from '@/lib/errors';
 import { WarningPanel } from '@/components/review/warning-panel';
-import { getFixtureImpactWarnings } from '@/components/review/fixtures';
 
 interface ProjectWarningsPageProps {
   params: Promise<{ projectId: string }>;
@@ -15,11 +14,9 @@ interface ProjectWarningsPageProps {
  * from `artifacts/[type]/page.tsx` exactly (see that file's own comment for
  * why `requireProjectOwner`'s `ApiError('NOT_FOUND')` is caught explicitly).
  *
- * E3-S11 (the impact routes) doesn't exist yet, so this page reads fixture
- * data via `getFixtureImpactWarnings` instead of the real
- * `GET /api/projects/:projectId/impact` - see that function's header
- * comment for the swap point. `getProjectById` is still a real read
- * (E1-S8), used here only for the project name shown above the panel.
+ * Reads real data via `artifact-lifecycle.getImpactWarningsResolved`
+ * (SCRUM-86) - the same "read directly, write through api" convention
+ * `getProjectById` below already uses (Module Boundaries 4.8).
  */
 export default async function ProjectWarningsPage({ params }: ProjectWarningsPageProps) {
   const user = await getVerifiedUser();
@@ -39,7 +36,7 @@ export default async function ProjectWarningsPage({ params }: ProjectWarningsPag
   const project = await getProjectById(projectId);
   if (!project) notFound();
 
-  const warnings = getFixtureImpactWarnings(projectId);
+  const warnings = await getImpactWarningsResolved(projectId);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-5 px-4 py-8 sm:px-6 sm:py-10">

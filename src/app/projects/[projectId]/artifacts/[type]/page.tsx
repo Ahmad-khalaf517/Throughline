@@ -5,7 +5,7 @@ import { getVerifiedUser, requireProjectOwner } from '@/auth';
 import { ApiError } from '@/lib/errors';
 import { ARTIFACT_TYPES, type ArtifactType } from '@/lib/serialize';
 import { ArtifactReviewScreen } from '@/components/review/artifact-review-screen';
-import { getFixtureArtifactVersion } from '@/components/review/fixtures';
+import { loadReviewVersion } from '../load-review-version';
 
 interface ArtifactReviewPageProps {
   params: Promise<{ projectId: string; type: string }>;
@@ -30,11 +30,14 @@ function isArtifactType(value: string): value is ArtifactType {
  * why `requireProjectOwner`'s `ApiError('NOT_FOUND')` is caught explicitly
  * rather than left to bubble up).
  *
- * E3-S10 (the artifact API routes) doesn't exist yet, so this page reads
- * fixture data via `getFixtureArtifactVersion` instead of a real route -
- * see that function's header comment for the swap point. `getProjectById`
- * is still a real read (E1-S8), used here only for the project name shown
- * above the review screen, not for artifact data.
+ * Reads real data via `loadReviewVersion` (SCRUM-86) - the newest version of
+ * this artifact type, whatever its status, plus its quality issues - a
+ * "read directly, write through api" page read (Module Boundaries 4.8), same
+ * convention `getProjectById` below already uses. `null` means the artifact
+ * has no versions yet - `ArtifactReviewScreen` renders a real "Generate"
+ * trigger for that case (SCRUM-86 follow-up: `POST .../artifacts/:type/
+ * generate`), not just a dead-end message, since a brand-new project would
+ * otherwise have no way to ever get a first draft to review.
  */
 export default async function ArtifactReviewPage({ params }: ArtifactReviewPageProps) {
   const user = await getVerifiedUser();
@@ -61,7 +64,7 @@ export default async function ArtifactReviewPage({ params }: ArtifactReviewPageP
   const project = await getProjectById(projectId);
   if (!project) notFound();
 
-  const fixture = getFixtureArtifactVersion(type);
+  const reviewData = await loadReviewVersion(projectId, type);
   const artifactTypeName = ARTIFACT_TYPE_LABELS[type];
 
   return (
@@ -75,20 +78,29 @@ export default async function ArtifactReviewPage({ params }: ArtifactReviewPageP
         ← {project.name}
       </Link>
 
-      {fixture ? (
+      {reviewData ? (
+        // Keyed by version id: a manual/AI revision mints a brand-new
+        // `artifact_version` after this page's next read, and this key
+        // forces `ArtifactReviewScreen` to remount (fresh local state) for
+        // that new version rather than keeping stale state from the old one
+        // (see that component's own comment on this).
         <ArtifactReviewScreen
+          key={reviewData.version.id}
+          projectId={projectId}
+          artifactType={type}
           artifactTypeName={artifactTypeName}
-          version={fixture.version}
-          qualityIssues={fixture.qualityIssues}
+          version={reviewData.version}
+          qualityIssues={reviewData.qualityIssues}
         />
       ) : (
         // Not a hard 404: the artifact type is real (it's one of the 4 CHECK
-        // values), it just doesn't have a fixture yet (E5-S3/S4/S5 add the
-        // other 3). Reads as "coming soon" rather than a broken link -
-        // `ArtifactReviewScreen` renders the same message if it's ever
-        // handed `version={null}` directly, but the page checks first so a
-        // reader never even sees the component render before this decides.
+        // values), it just has no version yet (nothing has been generated
+        // into it). `artifactType` is passed through explicitly (not derived
+        // from a version, since there isn't one) so the screen's own
+        // "Generate" trigger knows which `:type` to POST to.
         <ArtifactReviewScreen
+          projectId={projectId}
+          artifactType={type}
           artifactTypeName={artifactTypeName}
           version={null}
           qualityIssues={[]}
