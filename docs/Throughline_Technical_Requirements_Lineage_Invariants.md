@@ -1,10 +1,14 @@
 # Throughline - Technical Requirements & Lineage Invariants
 
-**Document version:** 1.4  
+**Document version:** 1.5  
 **Project type:** AI-assisted software project initialization platform  
 **Delivery context:** Solo capstone project, 8 full-time development days  
-**Status:** Technical baseline aligned with Throughline BRD v2.2 and ERD/Data Model v1.8; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v1.4: NFR-005 changed from invite-only + server-side allowlist to open sign-up + mandatory email verification (accepted-risk note added) - see ERD Appendix B round 9.  
+**Status:** Technical baseline aligned with Throughline BRD v2.3 and ERD/Data Model v1.9; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v1.5: added FR-003/FR-004 (BR-011) for the project dashboard overview and persistent navigation shell.  
 **Primary audience:** Developer, technical reviewers, and AI coding agents
+
+### Revision 1.5 alignment
+
+BRD v2.3 added BR-011: a persistent navigation shell and per-project dashboard overview, carried over from the Stitch design reference but never previously backed by a business requirement or an FR. New section 9A adds **FR-003 - Project Dashboard Overview** and **FR-004 - Persistent Navigation Shell**. Both read data that already exists (`artifact_version.status`, `item_version`, `semantic_dependency`, impact-acknowledgement state) - no ERD change. No new API route: both are Server-Component reads through existing lower-layer modules, the same shape Module Boundaries section 8 already documents for `E5-S1`.
 
 ### Revision 1.4 alignment
 
@@ -31,7 +35,7 @@ Version 1.2 keeps the v1.1 technical baseline unchanged in substance and applies
 
 This document defines the detailed software requirements, lineage invariants, integration behavior, and implementation guardrails for Throughline.
 
-The business case, stakeholders, market risks, cost model, and evaluation goals are defined separately in **Throughline - Business Requirements Document (BRD) v2.2**. This technical document is intentionally engineering-focused and is the direct parent of the ERD/Data Model, modules, API contracts, Jira implementation plan, and code.
+The business case, stakeholders, market risks, cost model, and evaluation goals are defined separately in **Throughline - Business Requirements Document (BRD) v2.3**. This technical document is intentionally engineering-focused and is the direct parent of the ERD/Data Model, modules, API contracts, Jira implementation plan, and code.
 
 It is written to be readable by humans and precise enough for AI coding agents to follow without inventing missing behavior. If a later design or implementation conflicts with this document, the conflict shall be resolved explicitly before coding continues.
 
@@ -113,7 +117,7 @@ Throughline is not intended to be:
 
 ## 4. Business Context Reference
 
-The business problem, target segments, stakeholder analysis, commercial risks, cost model, and success criteria are defined in **Throughline BRD v2.2**.
+The business problem, target segments, stakeholder analysis, commercial risks, cost model, and success criteria are defined in **Throughline BRD v2.3**.
 
 This document focuses on the software behavior required to deliver that business intent.
 
@@ -146,7 +150,7 @@ The capstone implementation has the following fixed constraints:
 | AI | One LLM provider |
 | External systems | GitHub (one pinned starter), one configured Jira project, Google Stitch |
 
-Schema, triggers, the impact function, and connection and hardening rules are specified in the ERD/Data Model v1.4.
+Schema, triggers, the impact function, and connection and hardening rules are specified in the ERD/Data Model v1.9.
 
 ---
 
@@ -284,6 +288,27 @@ Optional context is creation-time input only. Once Requirements are generated, i
 The system shall use an LLM to transform the plain-language brief into structured project context and Requirements.
 
 The LLM may infer suggestions, but inferred assumptions must be visible rather than presented as confirmed facts.
+
+---
+
+## 9A. Project Overview and Navigation
+
+Added in v1.5 (BR-011). Purely presentational - a read-only view over state that already exists elsewhere in this document. Neither FR below mints, mutates, or gates any workflow state; both are void of effect on approval, lineage, or impact.
+
+### FR-003 - Project Dashboard Overview
+
+The system shall provide one overview screen per project showing:
+
+- The current `artifact_version.status` (FR-013/FR-022/FR-041/FR-064) and item count for each of the four artifact types (Requirements, Architecture, UI Requirements, Backlog), rendered with the same status-badge vocabulary used on each artifact type's own review screen (exactly the four `artifact_version.status` values - no fifth state).
+- A chronological feed of recent lineage activity for the project: `item_version` creations, `artifact_version` status changes, and flagged-impact state (INV-020), each entry linking to the item/version it describes.
+
+This screen reads; it does not write. It has no effect on approval gating (FR-083/FR-084), currentness (INV-021), or any other workflow rule in this document - those are unchanged and continue to be evaluated exactly as specified wherever they already are. If a project has generated nothing yet, the screen shows the empty state, not an error (screen-kit "four states" rule).
+
+### FR-004 - Persistent Navigation Shell
+
+Every screen under a project (Overview, Requirements, Architecture, UI Requirements, Backlog, Warnings, Dependencies, Outputs) shall share one navigation shell: a header identifying the current project and a tab/link set reaching every screen listed above, plus a way back to the user's project list.
+
+Only screens that exist as a real FR belong in this shell. Cross-project chrome shown in the Stitch design reference with no backing FR anywhere in this document - a cross-project lineage map, a decisions register, an audit journal, a settings screen - is explicitly **out of scope for this shell** (P1, Jira Plan known-limitations, same treatment as FR-023). Do not add a nav entry that points at a screen this document doesn't define.
 
 ---
 
@@ -1342,7 +1367,7 @@ Users shall be able to understand why a downstream item is flagged when a depend
 
 ### NFR-002 - Data Integrity
 
-The database and the application shall together enforce referential integrity and prevent invalid cross-project references. The database enforces the invariants that protect lineage directly (ERD/Data Model v1.4, integrity matrix); the application enforces the rest through a single write path.
+The database and the application shall together enforce referential integrity and prevent invalid cross-project references. The database enforces the invariants that protect lineage directly (ERD/Data Model v1.9, integrity matrix); the application enforces the rest through a single write path.
 
 ### NFR-003 - History Preservation
 
@@ -1605,7 +1630,7 @@ The system shall not claim unaffected work is stale simply because the parent Re
 
 ## 40. Business and Capstone Evaluation Reference
 
-The business case, business risks, segment-fit limitations, cost assumptions, formal manual-baseline evaluation design, metrics, controlled change test, success criteria, and evaluation limitations are defined in **Throughline BRD v2.2**.
+The business case, business risks, segment-fit limitations, cost assumptions, formal manual-baseline evaluation design, metrics, controlled change test, success criteria, and evaluation limitations are defined in **Throughline BRD v2.3**.
 
 This technical document defines the system behavior and technical acceptance criteria required to support that evaluation. Passing these technical criteria does not by itself prove market demand, product-market fit, or superiority over the manual baseline.
 
@@ -1644,7 +1669,7 @@ Recommended order:
 
 If time becomes tight, P1 features are removed before simplifying the P0 lineage model.
 
-The ERD/Data Model v1.4 (section 14) refines this order into four build slices, each gated by specific tests.
+The ERD/Data Model v1.9 (section 14) refines this order into four build slices, each gated by specific tests.
 
 ---
 
@@ -1803,7 +1828,7 @@ These rules must not be silently changed during implementation.
 
 When using this file as development context:
 
-- Treat this technical requirements document, together with Throughline BRD v2.2 and the ERD/Data Model v1.4, as the current authoritative product baseline.
+- Treat this technical requirements document, together with Throughline BRD v2.3 and the ERD/Data Model v1.9, as the current authoritative product baseline.
 - Do not reopen previously rejected features unless a concrete blocker requires it.
 - Do not introduce two-way synchronization.
 - Do not introduce autonomous code generation.
@@ -1823,7 +1848,7 @@ When using this file as development context:
 
 Recommended next development documents:
 
-1. ERD / Data Model - done (v1.4)
+1. ERD / Data Model - done (v1.9)
 2. Module boundaries
 3. API contracts
 4. Jira implementation plan
@@ -1833,7 +1858,7 @@ Recommended next development documents:
 
 ## 45. Business-to-Technical Traceability
 
-This matrix connects the business requirements in **Throughline BRD v2.2** to the technical requirements and invariants in this document. It is intentionally high-level; the ERD and API contracts will provide the next level of implementation traceability.
+This matrix connects the business requirements in **Throughline BRD v2.3** to the technical requirements and invariants in this document. It is intentionally high-level; the ERD and API contracts will provide the next level of implementation traceability.
 
 | Business Requirement | Technical realization |
 |---|---|
@@ -1847,6 +1872,7 @@ This matrix connects the business requirements in **Throughline BRD v2.2** to th
 | **BR-008** - Explicit, previewed, retry-aware external writes | FR-030, FR-050, FR-070, FR-085; Sections 29-31 |
 | **BR-009** - AI for semantic work; deterministic code for state and integrity | Sections 23-24 and 32-33; all approval/lineage invariants |
 | **BR-010** - Protect core lineage when scope pressure occurs | Sections 36-38 and 41-44 |
+| **BR-011** - Per-project dashboard overview + shared navigation shell | FR-003, FR-004; Section 9A |
 
 ### 45.1 Traceability Rule for Later Artifacts
 
