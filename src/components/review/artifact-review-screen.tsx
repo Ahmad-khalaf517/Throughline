@@ -522,7 +522,7 @@ export function ArtifactReviewScreen({
                       <li
                         key={item.itemVersionId}
                         className={cn(
-                          'border-surface-dim rounded-lg border p-4',
+                          'border-surface-dim hover:border-outline-variant rounded-lg border p-4 transition-colors',
                           isRequirements && 'bg-surface-container-lowest p-5',
                           isRequirements &&
                             itemQualityIssues.length > 0 &&
@@ -656,7 +656,7 @@ export function ArtifactReviewScreen({
 
       <div
         className={cn(
-          'border-surface-dim bg-surface-container-lowest flex flex-wrap items-center gap-3 rounded-xl border p-6',
+          'border-surface-dim bg-surface-container-lowest sticky bottom-4 z-30 flex flex-wrap items-center gap-3 rounded-xl border p-6',
           isRequirements && 'order-4 lg:order-none lg:col-span-2 lg:row-start-4 lg:justify-between',
         )}
       >
