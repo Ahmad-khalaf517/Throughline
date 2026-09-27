@@ -42,18 +42,21 @@ export default async function ProjectWarningsPage({ params }: ProjectWarningsPag
   const warnings = getFixtureImpactWarnings(projectId);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-4 py-12 sm:px-6">
+    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-5 px-4 py-8 sm:px-6 sm:py-10">
       <Link
         href={`/projects/${projectId}`}
-        className="text-on-surface-variant hover:text-on-surface text-sm font-medium"
+        className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary w-fit rounded-md text-xs font-medium focus-visible:ring-2 focus-visible:outline-none"
       >
         ← {project.name}
       </Link>
 
-      <header className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
-        <h1 className="text-on-surface text-display-sm font-semibold">Warnings</h1>
+      <header className="border-surface-dim bg-surface-container-lowest rounded-lg border px-5 py-5 sm:px-6">
+        <p className="font-mono-code text-on-surface-variant text-[10px] font-medium tracking-wide uppercase">
+          Lineage / Impact review
+        </p>
+        <h1 className="text-on-surface text-display-sm mt-1 font-semibold">Impact warnings</h1>
         <p className="text-on-surface-variant mt-1 text-sm">
-          Items potentially affected by an upstream change, across this project.
+          Trace potentially affected items from the upstream source to each downstream dependency.
         </p>
       </header>
 
