@@ -218,6 +218,11 @@ export function ArtifactReviewScreen({
   // other artifact type (requirements/ui_requirements/backlog), so this is
   // always `false` there and the rest of this gate is a no-op.
   const requiresOptionSelection = version.options !== null;
+  const isUiRequirements = version.artifactType === 'ui_requirements';
+  const uiFields = isUiRequirements ? items.map((item) => readKnownFields(item.payload)) : [];
+  const uiTargetUsers = new Set(uiFields.flatMap((fields) => fields.targetUsers ?? []));
+  const uiScreens = new Set(uiFields.flatMap((fields) => fields.screens ?? []));
+  const uiSourceRefs = new Set(uiFields.flatMap((fields) => fields.sourceRefs ?? []));
 
   function handleApproveClick() {
     if (status !== 'draft' || pending) return;
@@ -270,8 +275,26 @@ export function ArtifactReviewScreen({
       <header className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h1 className="text-on-surface text-display-sm font-semibold">{artifactTypeName}</h1>
-            <p className="text-on-surface-variant mt-1 text-sm">Version {version.versionNumber}</p>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h1 className="text-on-surface text-display-sm font-semibold">
+                {isUiRequirements ? 'UI Requirements Review' : artifactTypeName}
+              </h1>
+              {isUiRequirements && (
+                <span className="font-mono-code bg-surface-container-low text-on-surface-variant rounded px-2 py-1 text-xs">
+                  Version {version.versionNumber}
+                </span>
+              )}
+            </div>
+            {isUiRequirements ? (
+              <p className="text-on-surface-variant mt-2 text-sm">
+                Review {items.length} structured UI specification{items.length === 1 ? '' : 's'} and
+                their recorded source references.
+              </p>
+            ) : (
+              <p className="text-on-surface-variant mt-1 text-sm">
+                Version {version.versionNumber}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <StatusBadge status={status} />
@@ -299,6 +322,30 @@ export function ArtifactReviewScreen({
           </p>
         )}
       </header>
+
+      {isUiRequirements && (
+        <section
+          aria-label="UI requirements summary"
+          className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
+        >
+          {[
+            ['Specifications', items.length],
+            ['Target users', uiTargetUsers.size],
+            ['Named screens', uiScreens.size],
+            ['Recorded source refs', uiSourceRefs.size],
+          ].map(([label, count]) => (
+            <div
+              key={label}
+              className="border-surface-dim bg-surface-container-lowest rounded-lg border px-4 py-3"
+            >
+              <p className="text-on-surface-variant text-[11px] font-semibold tracking-wide uppercase">
+                {label}
+              </p>
+              <p className="text-on-surface mt-1 text-2xl font-semibold tabular-nums">{count}</p>
+            </div>
+          ))}
+        </section>
+      )}
 
       {/* Architecture-only options section (FR-020/FR-021/FR-022) - rendered
           only when `version.options` is non-null, so this is invisible for
@@ -531,141 +578,313 @@ export function ArtifactReviewScreen({
         )}
       </section>
 
-      <section
-        aria-labelledby="items-heading"
-        className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6"
-      >
-        <h2
-          id="items-heading"
-          className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase"
+      {isUiRequirements ? (
+        <section
+          aria-labelledby="items-heading"
+          className="border-surface-dim bg-surface-container-lowest overflow-hidden rounded-xl border"
         >
-          Items ({items.length})
-        </h2>
-        {items.length === 0 ? (
-          <p className="text-on-surface-variant mt-3 text-sm">This version has no items yet.</p>
-        ) : (
-          <ul className="mt-3 flex flex-col gap-3">
-            {items.map((item) => {
-              const fields = readKnownFields(item.payload);
-              // Generic parent lookup (e.g. Story -> Epic, API Contracts
-              // 1.8) - works for any item type whose `parentLogicalItemId`
-              // resolves to another item in this same version, not just
-              // backlog's Story/Epic pairing.
-              const parent = item.parentLogicalItemId
-                ? items.find((candidate) => candidate.logicalItemId === item.parentLogicalItemId)
-                : undefined;
-              // Short metadata line at the bottom of the card - every field
-              // here is optional and artifact-type-generic (not just
-              // backlog's or UI Requirements'), joined with a middot only
-              // for whichever of them are actually present.
-              const metaParts: string[] = [];
-              if (fields.priority) metaParts.push(`Priority: ${fields.priority}`);
-              if (fields.sourceRefs && fields.sourceRefs.length > 0) {
-                metaParts.push(`Depends on: ${fields.sourceRefs.join(', ')}`);
-              }
-              if (fields.targetUsers && fields.targetUsers.length > 0) {
-                metaParts.push(`Target users: ${fields.targetUsers.join(', ')}`);
-              }
-              if (fields.screens && fields.screens.length > 0) {
-                metaParts.push(`Screens: ${fields.screens.join(', ')}`);
-              }
-              if (fields.uxPriorities && fields.uxPriorities.length > 0) {
-                metaParts.push(`UX priorities: ${fields.uxPriorities.join(', ')}`);
-              }
-              return (
-                <li key={item.itemVersionId} className="border-surface-dim rounded-lg border p-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono-code border-surface-dim bg-surface-container-low text-on-surface rounded border px-1.5 py-0.5 text-[11px] font-semibold">
-                      {item.displayKey}
-                    </span>
-                    <span className="text-on-surface-variant text-[11px] tracking-wide uppercase">
-                      {fields.type ?? item.itemType}
-                      {fields.dimension && ` · ${fields.dimension}`}
-                    </span>
-                    {parent && (
-                      <span className="text-on-surface-variant text-[11px]">
-                        {formatItemType(parent.itemType)}: {parent.displayKey}
+          <div className="bg-surface-container-low border-surface-dim flex flex-wrap items-center gap-2 border-b px-5 py-4">
+            <h2 id="items-heading" className="text-on-surface text-lg font-semibold">
+              Interface Contract Ledger
+            </h2>
+            <span className="font-mono-code bg-surface-container-high text-on-surface-variant rounded-full px-2 py-0.5 text-[11px]">
+              {items.length} item{items.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          {items.length === 0 ? (
+            <p className="text-on-surface-variant px-5 py-6 text-sm">
+              This version has no items yet.
+            </p>
+          ) : (
+            <div className="w-full overflow-x-auto">
+              <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+                <thead className="text-on-surface-variant text-[11px] font-semibold tracking-wide uppercase">
+                  <tr className="border-surface-dim border-b">
+                    <th scope="col" className="w-24 px-5 py-3">
+                      Item ID
+                    </th>
+                    <th scope="col" className="px-4 py-3">
+                      Screen / behavior description
+                    </th>
+                    <th scope="col" className="w-36 px-4 py-3">
+                      Sourced from
+                    </th>
+                    <th scope="col" className="w-44 px-4 py-3">
+                      Target surface
+                    </th>
+                    <th scope="col" className="w-20 px-5 py-3 text-right">
+                      Edit
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item) => {
+                    const fields = readKnownFields(item.payload);
+                    return (
+                      <Fragment key={item.itemVersionId}>
+                        <tr className="border-surface-dim border-b align-top">
+                          <th scope="row" className="px-5 py-4 font-normal">
+                            <span className="font-mono-code bg-surface-container-low text-on-surface rounded px-2 py-1 text-xs font-semibold">
+                              {item.displayKey}
+                            </span>
+                          </th>
+                          <td className="px-4 py-4">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-on-surface font-semibold">
+                                {fields.title ?? fields.behavior ?? formatItemType(item.itemType)}
+                              </span>
+                              {item.impact ? (
+                                item.impact.acknowledged ? (
+                                  <span className="text-on-surface-variant text-xs">
+                                    Acknowledged
+                                  </span>
+                                ) : (
+                                  <FlaggedGlyph title={`${item.displayKey} is flagged`} />
+                                )
+                              ) : (
+                                <span className="text-on-surface-variant text-xs">No impact</span>
+                              )}
+                            </div>
+                            {fields.description && (
+                              <p className="text-on-surface-variant mt-1 max-w-2xl leading-relaxed">
+                                {fields.description}
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-4 py-4">
+                            {fields.sourceRefs?.length ? (
+                              <div className="flex flex-wrap gap-1">
+                                {fields.sourceRefs.map((ref) => (
+                                  <span
+                                    key={ref}
+                                    className="font-mono-code bg-surface-container-high text-on-surface rounded px-1.5 py-0.5 text-xs"
+                                  >
+                                    {ref}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-on-surface-variant text-xs">None recorded</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-4">
+                            {fields.screens?.length ? (
+                              <ul className="flex flex-wrap gap-1">
+                                {fields.screens.map((screen) => (
+                                  <li
+                                    key={screen}
+                                    className="bg-surface-container-high text-on-surface rounded px-2 py-1 text-xs"
+                                  >
+                                    {screen}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <span className="text-on-surface-variant text-xs">None recorded</span>
+                            )}
+                          </td>
+                          <td className="px-5 py-4 text-right">
+                            <button
+                              type="button"
+                              onClick={() => setEditingItem(item)}
+                              disabled={status !== 'draft'}
+                              title={
+                                status === 'draft' ? `Edit ${item.displayKey}` : EDIT_DISABLED_TITLE
+                              }
+                              aria-label={`Edit ${item.displayKey}`}
+                              className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary inline-flex size-8 items-center justify-center rounded focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <SquarePen className="size-4" aria-hidden="true" />
+                            </button>
+                          </td>
+                        </tr>
+                        <tr className="border-surface-dim border-b last:border-b-0">
+                          <td colSpan={5} className="px-5 pb-4">
+                            <details className="group text-sm">
+                              <summary className="text-primary focus-visible:ring-primary w-fit cursor-pointer rounded text-xs font-medium focus-visible:ring-2 focus-visible:outline-none">
+                                Specification details for {item.displayKey}
+                              </summary>
+                              <dl className="bg-surface-container-low mt-3 grid gap-3 rounded-lg p-4 sm:grid-cols-2">
+                                {[
+                                  ['Target users', fields.targetUsers?.join(', ')],
+                                  ['Navigation', fields.navigationExpectations],
+                                  ['Responsive', fields.responsiveConstraints],
+                                  ['Accessibility', fields.accessibilityConstraints],
+                                  ['UX priorities', fields.uxPriorities?.join('; ')],
+                                  ['Actor', fields.actor],
+                                  ['Behavior', fields.behavior],
+                                  ['Acceptance criteria', fields.acceptanceCriteria?.join('; ')],
+                                ].map(([label, value]) =>
+                                  value ? (
+                                    <div key={label}>
+                                      <dt className="text-on-surface-variant text-xs font-semibold">
+                                        {label}
+                                      </dt>
+                                      <dd className="text-on-surface mt-0.5 leading-relaxed">
+                                        {value}
+                                      </dd>
+                                    </div>
+                                  ) : null,
+                                )}
+                              </dl>
+                            </details>
+                          </td>
+                        </tr>
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      ) : (
+        <section
+          aria-labelledby="items-heading"
+          className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6"
+        >
+          <h2
+            id="items-heading"
+            className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase"
+          >
+            Items ({items.length})
+          </h2>
+          {items.length === 0 ? (
+            <p className="text-on-surface-variant mt-3 text-sm">This version has no items yet.</p>
+          ) : (
+            <ul className="mt-3 flex flex-col gap-3">
+              {items.map((item) => {
+                const fields = readKnownFields(item.payload);
+                // Generic parent lookup (e.g. Story -> Epic, API Contracts
+                // 1.8) - works for any item type whose `parentLogicalItemId`
+                // resolves to another item in this same version, not just
+                // backlog's Story/Epic pairing.
+                const parent = item.parentLogicalItemId
+                  ? items.find((candidate) => candidate.logicalItemId === item.parentLogicalItemId)
+                  : undefined;
+                // Short metadata line at the bottom of the card - every field
+                // here is optional and artifact-type-generic (not just
+                // backlog's or UI Requirements'), joined with a middot only
+                // for whichever of them are actually present.
+                const metaParts: string[] = [];
+                if (fields.priority) metaParts.push(`Priority: ${fields.priority}`);
+                if (fields.sourceRefs && fields.sourceRefs.length > 0) {
+                  metaParts.push(`Depends on: ${fields.sourceRefs.join(', ')}`);
+                }
+                if (fields.targetUsers && fields.targetUsers.length > 0) {
+                  metaParts.push(`Target users: ${fields.targetUsers.join(', ')}`);
+                }
+                if (fields.screens && fields.screens.length > 0) {
+                  metaParts.push(`Screens: ${fields.screens.join(', ')}`);
+                }
+                if (fields.uxPriorities && fields.uxPriorities.length > 0) {
+                  metaParts.push(`UX priorities: ${fields.uxPriorities.join(', ')}`);
+                }
+                return (
+                  <li key={item.itemVersionId} className="border-surface-dim rounded-lg border p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono-code border-surface-dim bg-surface-container-low text-on-surface rounded border px-1.5 py-0.5 text-[11px] font-semibold">
+                        {item.displayKey}
                       </span>
-                    )}
-                    {item.impact ? (
-                      item.impact.acknowledged ? (
-                        <span className="text-on-surface-variant text-[11px]">Acknowledged</span>
+                      <span className="text-on-surface-variant text-[11px] tracking-wide uppercase">
+                        {fields.type ?? item.itemType}
+                        {fields.dimension && ` · ${fields.dimension}`}
+                      </span>
+                      {parent && (
+                        <span className="text-on-surface-variant text-[11px]">
+                          {formatItemType(parent.itemType)}: {parent.displayKey}
+                        </span>
+                      )}
+                      {item.impact ? (
+                        item.impact.acknowledged ? (
+                          <span className="text-on-surface-variant text-[11px]">Acknowledged</span>
+                        ) : (
+                          <FlaggedGlyph title={`${item.displayKey} is flagged`} />
+                        )
                       ) : (
-                        <FlaggedGlyph title={`${item.displayKey} is flagged`} />
-                      )
-                    ) : (
-                      <span className="text-on-surface-variant/70 text-[11px]">No impact</span>
+                        <span className="text-on-surface-variant/70 text-[11px]">No impact</span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setEditingItem(item)}
+                        disabled={status !== 'draft'}
+                        title={status === 'draft' ? `Edit ${item.displayKey}` : EDIT_DISABLED_TITLE}
+                        className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary ml-auto inline-flex items-center gap-1 rounded p-1 text-[11px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <SquarePen className="size-3.5" aria-hidden="true" />
+                        <span className="sr-only">Edit {item.displayKey}</span>
+                      </button>
+                    </div>
+                    {fields.actor && (
+                      <p className="text-on-surface-variant mt-2 text-xs">
+                        <span className="font-medium">Actor:</span> {fields.actor}
+                      </p>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => setEditingItem(item)}
-                      disabled={status !== 'draft'}
-                      title={status === 'draft' ? `Edit ${item.displayKey}` : EDIT_DISABLED_TITLE}
-                      className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary ml-auto inline-flex items-center gap-1 rounded p-1 text-[11px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <SquarePen className="size-3.5" aria-hidden="true" />
-                      <span className="sr-only">Edit {item.displayKey}</span>
-                    </button>
-                  </div>
-                  {fields.actor && (
-                    <p className="text-on-surface-variant mt-2 text-xs">
-                      <span className="font-medium">Actor:</span> {fields.actor}
-                    </p>
-                  )}
-                  {fields.behavior ? (
-                    <p className="text-on-surface mt-2 text-sm leading-relaxed">
-                      {fields.behavior}
-                    </p>
-                  ) : (
-                    <>
-                      {fields.title && (
-                        <p className="text-on-surface mt-2 text-sm leading-relaxed font-medium">
-                          {fields.title}
-                        </p>
-                      )}
-                      {fields.description && (
-                        <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
-                          {fields.description}
-                        </p>
-                      )}
-                    </>
-                  )}
-                  {fields.acceptanceCriteria && fields.acceptanceCriteria.length > 0 && (
-                    <ul className="text-on-surface-variant mt-2 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed">
-                      {fields.acceptanceCriteria.map((criterion, index) => (
-                        <li key={index}>{criterion}</li>
-                      ))}
-                    </ul>
-                  )}
-                  {fields.navigationExpectations && (
-                    <p className="text-on-surface-variant mt-2 text-xs">
-                      <span className="font-medium">Navigation:</span>{' '}
-                      {fields.navigationExpectations}
-                    </p>
-                  )}
-                  {fields.responsiveConstraints && (
-                    <p className="text-on-surface-variant mt-2 text-xs">
-                      <span className="font-medium">Responsive:</span>{' '}
-                      {fields.responsiveConstraints}
-                    </p>
-                  )}
-                  {fields.accessibilityConstraints && (
-                    <p className="text-on-surface-variant mt-2 text-xs">
-                      <span className="font-medium">Accessibility:</span>{' '}
-                      {fields.accessibilityConstraints}
-                    </p>
-                  )}
-                  {metaParts.length > 0 && (
-                    <p className="text-on-surface-variant mt-2 text-xs">{metaParts.join(' · ')}</p>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
+                    {fields.behavior ? (
+                      <p className="text-on-surface mt-2 text-sm leading-relaxed">
+                        {fields.behavior}
+                      </p>
+                    ) : (
+                      <>
+                        {fields.title && (
+                          <p className="text-on-surface mt-2 text-sm leading-relaxed font-medium">
+                            {fields.title}
+                          </p>
+                        )}
+                        {fields.description && (
+                          <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
+                            {fields.description}
+                          </p>
+                        )}
+                      </>
+                    )}
+                    {fields.acceptanceCriteria && fields.acceptanceCriteria.length > 0 && (
+                      <ul className="text-on-surface-variant mt-2 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed">
+                        {fields.acceptanceCriteria.map((criterion, index) => (
+                          <li key={index}>{criterion}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {fields.navigationExpectations && (
+                      <p className="text-on-surface-variant mt-2 text-xs">
+                        <span className="font-medium">Navigation:</span>{' '}
+                        {fields.navigationExpectations}
+                      </p>
+                    )}
+                    {fields.responsiveConstraints && (
+                      <p className="text-on-surface-variant mt-2 text-xs">
+                        <span className="font-medium">Responsive:</span>{' '}
+                        {fields.responsiveConstraints}
+                      </p>
+                    )}
+                    {fields.accessibilityConstraints && (
+                      <p className="text-on-surface-variant mt-2 text-xs">
+                        <span className="font-medium">Accessibility:</span>{' '}
+                        {fields.accessibilityConstraints}
+                      </p>
+                    )}
+                    {metaParts.length > 0 && (
+                      <p className="text-on-surface-variant mt-2 text-xs">
+                        {metaParts.join(' · ')}
+                      </p>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+      )}
 
       <div className="border-surface-dim bg-surface-container-lowest flex flex-wrap items-center gap-3 rounded-xl border p-6">
+        {isUiRequirements && (
+          <div className="text-on-surface-variant w-full text-xs leading-relaxed">
+            <span className="font-semibold">Recorded provenance:</span>{' '}
+            {uiSourceRefs.size > 0
+              ? Array.from(uiSourceRefs).join(', ')
+              : 'No source references recorded in these item payloads.'}
+          </div>
+        )}
         <button
           type="button"
           onClick={handleApproveClick}
