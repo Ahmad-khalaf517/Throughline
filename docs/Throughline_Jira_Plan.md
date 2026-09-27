@@ -1,11 +1,16 @@
 # Throughline - Jira Implementation Plan
 
-**Document version:** 1.4
-**Status:** Derived from ERD/Data Model v1.9, Technical Requirements & Lineage Invariants v1.5, Module Boundaries v1.11, API Contracts v1.6, and Project Setup & Configuration Plan v1.4. Parent of the day-by-day implementation plan and of coding. v1.4: added E5-S11/E5-S12 (BR-011, TR FR-003/FR-004) for the persistent navigation shell and project dashboard overview.
+**Document version:** 1.5
+**Status:** Derived from ERD/Data Model v1.9, Technical Requirements & Lineage Invariants v1.5, Module Boundaries v1.11, API Contracts v1.6, and Project Setup & Configuration Plan v1.4. Parent of the day-by-day implementation plan and of coding. v1.5: added E5-S13 to align the existing Backlog review UI with the Stitch hierarchy and quality-gate layout, without changing FR-063/FR-064 behavior.
 **Purpose:** The ticket breakdown for building **Throughline itself** over the 8-day capstone window - not the in-product Jira *integration* (that is FR-070..074, delivered by Epic 4 below). This plan is what gets created in a real Jira project to run the build.
-**CSV export:** `Throughline_Jira_Import.csv` is not kept in the repo - it was a mechanical, always-derivable restatement of the table below with no decisions of its own. Regenerate it from this plan (same 70 issues, Jira's CSV import format) immediately before the actual bulk-import, rather than carrying a second copy that can drift from this table.
+**CSV export:** `Throughline_Jira_Import.csv` is not kept in the repo - it was a mechanical, always-derivable restatement of the table below with no decisions of its own. Regenerate it from this plan (same 71 issues, Jira's CSV import format) immediately before the actual bulk-import, rather than carrying a second copy that can drift from this table.
 
 > **For AI agents:** every story below cites the exact ERD test id(s), TR requirement id(s), Module Boundaries function(s), and/or API Contracts route(s) it delivers. Do not close a story without its cited tests passing. Do not invent a story that has nothing to cite - if a task doesn't trace to one of the four parent documents, it does not belong in P0. Epic 1's stories are the ticket-level view of `Throughline_Project_Setup.md`'s section 10 setup sequence - that document, not this one, is the authoritative step order and tool list (OpenAI, Tailwind/shadcn, Vitest/Testcontainers, Vercel/GitHub Actions); this plan cites it rather than restating it, so the two cannot drift.
+
+### Revision 1.5 changes
+
+- **Added E5-S13** as a presentation refinement of the existing Backlog review and quality gate (TR FR-063/FR-064, E5-S5): group Stories beneath their Epics and place quality/traceability context in a right rail, matching the Stitch Backlog Review reference. Existing approval, impact, API, and state behavior are unchanged. Actions without real backing remain absent or disabled rather than simulated.
+- Epic 5's Stories/Tasks count increases 12 -> 13; total issue count 70 -> 71. The 4h estimate raises E5 to 38h and the total to 168.5h (+88.5h, 111% over the 80h budget).
 
 ### Revision 1.4 changes
 
@@ -80,21 +85,21 @@ Hours are rough sizing for a single developer already deeply familiar with this 
 | E3 Approval & Generation | 31 | |
 | E4 External Integrations | 27 | |
 | **Backend/lineage subtotal (E1-E4)** | **109.5** | **already +29.5h over budget with no UI and no evaluation** |
-| E5 UI | 34 | |
+| E5 UI | 38 | |
 | E6 Demo & Evaluation | 21 | |
-| **Total** | **164.5** | **+84.5h (106%) over an 8 x 10h budget** |
+| **Total** | **168.5** | **+88.5h (111%) over an 8 x 10h budget** |
 
-This is the single most important finding of this planning pass: the P0 scope as specified across the BRD, Technical Requirements, ERD, Module Boundaries and Project Setup plan - all faithfully carried forward here, nothing added - sizes to roughly **164.5 focused hours**, not the ~68-80 hours an 8-day build literally holds. This was true the moment BRD section 8's P0 list and TR section 36 were written; a ticket-level estimate is just what makes it visible. (v1.0 of this plan put the figure at ~150h; v1.1 revised it up after E1-S5 was re-scoped to actually porting the Appendix C suite rather than just running four tests of it, and after two previously-uncited P0 routes - project creation and the impact endpoints - were given owning stories. Neither change added scope; both were already implied by the frozen parent documents.)
+This is the single most important finding of this planning pass: the P0 scope as specified across the BRD, Technical Requirements, ERD, Module Boundaries and Project Setup plan plus the E5-S13 Stitch presentation refinement sizes to roughly **168.5 focused hours**, not the ~68-80 hours an 8-day build literally holds. This was true the moment BRD section 8's P0 list and TR section 36 were written; a ticket-level estimate is just what makes it visible. (v1.0 of this plan put the figure at ~150h; v1.1 revised it up after E1-S5 was re-scoped to actually porting the Appendix C suite rather than just running four tests of it, and after two previously-uncited P0 routes - project creation and the impact endpoints - were given owning stories. Neither change added scope; both were already implied by the frozen parent documents.)
 
 *As of this revision, E1-T3/E1-T4/E1-T5 (3h, steps 1-3 of Project Setup section 10) are already scaffolded on `chore/project-setup` per Project Setup v1.2 section 13 - the table above still carries their full estimate because it sizes the P0 scope, not remaining work; the true remaining total is ~3h lower than shown. This does not change the shape of the gap.*
 
 **Three honest ways to close the gap, not mutually exclusive:**
 
-1. **Read "8 full-time development days" as covering the build only (E1-E5, 136.5h), with evaluation (E6, 21h) as a distinct wrap-up phase.** This is not a scope cut: BRD section 8 ("MVP Scope") and section 10 ("Success Criteria and Evaluation") are already written as two separate concerns, and TR section 40 treats the evaluation write-up as reference material distinct from the technical build. Closes 21h with no loss of P0 substance. **Recommended default.**
+1. **Read "8 full-time development days" as covering the build only (E1-E5, 147.5h), with evaluation (E6, 21h) as a distinct wrap-up phase.** This is not a scope cut: BRD section 8 ("MVP Scope") and section 10 ("Success Criteria and Evaluation") are already written as two separate concerns, and TR section 40 treats the evaluation write-up as reference material distinct from the technical build. Closes 21h with no loss of P0 substance. **Recommended default.**
 2. **Build one generic, type-parameterized artifact-review screen instead of four bespoke ones** (merge E5-S2/S3/S4/S5, 11h combined, into a single ~6h story). Every artifact type is still reviewable and approvable; only per-type visual bespoke-ness is reduced. Saves ~5h. **Recommended default.**
 3. **If Epic 4 runs long, ship Stitch demo-day-ready in `manual_fallback` mode only** (skip E4-S4's `api` wiring and E4-S5's Spike B under time pressure) and add the live API path back after the demo if time remains. This is not a new cut - FR-054's manual fallback is already the sanctioned P0 degrade path, not an invented one. Saves up to 5h if triggered.
 
-Applying option 1 drops evaluation's 21h out of the 8-day build window, leaving **136.5h** (E1-E5) to build in. Applying option 2 on top brings it to **131.5h** against an 80h budget - still 51.5h (64%) over, which is why option 3 exists as a named release valve, and why the schedule in section 9 still shows E4/E5 overlapping rather than assuming slack. **This gap is a scheduling decision, not an engineering one - it belongs to whoever owns the 8-day deadline, not to this document.** If the real constraint is a literal 8 x 8.5h week, the honest options are: extend the timeline, work materially longer days (not recommended as a plan, only notable as arithmetic), or make a fourth, larger cut this document does not make unilaterally - most plausibly reducing BRD section 10.1's three sample briefs to two, which requires the BRD owner's sign-off because BRD 10.1 states three explicitly.
+Applying option 1 drops evaluation's 21h out of the 8-day build window, leaving **147.5h** (E1-E5) to build in. Applying option 2 on top brings it to **142.5h** against an 80h budget - still 62.5h (78%) over, which is why option 3 exists as a named release valve, and why the schedule in section 9 still shows E4/E5 overlapping rather than assuming slack. **This gap is a scheduling decision, not an engineering one - it belongs to whoever owns the 8-day deadline, not to this document.** If the real constraint is a literal 8 x 8.5h week, the honest options are: extend the timeline, work materially longer days (not recommended as a plan, only notable as arithmetic), or make a fourth, larger cut this document does not make unilaterally - most plausibly reducing BRD section 10.1's three sample briefs to two, which requires the BRD owner's sign-off because BRD 10.1 states three explicitly.
 
 ---
 
@@ -106,10 +111,10 @@ Applying option 1 drops evaluation's 21h out of the 8-day build window, leaving 
 | E2 | Lineage Core | Slice 2 | 2 | 10 |
 | E3 | Approval, Architecture and Generation | Slice 3 | 3-4 | 12 |
 | E4 | External Integrations | Slice 4 | 5-6 | 9 |
-| E5 | UI and Visualization | (cross-cutting) | 4-7 | 12 |
+| E5 | UI and Visualization | (cross-cutting) | 4-7 | 13 |
 | E6 | Demo, Evaluation and Hardening | (none - wrap-up) | 8, then a separate evaluation phase (section 1.6) | 8 |
 
-70 issues (6 epics + 64 stories/tasks) across 8 days, averaging ~8-9 issues/day.
+71 issues (6 epics + 65 stories/tasks) across 8 days, averaging ~8-9 issues/day.
 
 ---
 
@@ -221,6 +226,7 @@ Applying option 1 drops evaluation's 21h out of the 8-day build window, leaving 
 | E5-S10 | Story | Sandboxed Stitch HTML/screenshot preview (separate-origin iframe, no `allow-same-origin`) | TR FR-053; ERD 4.16 | E4-S6 | 2h |
 | E5-S11 | Story | Persistent navigation shell: shared header + tab/link set across every project screen (Overview, Requirements, Architecture, UI Requirements, Backlog, Warnings, Dependencies, Outputs) | TR FR-004 | E5-S1 | 3h |
 | E5-S12 | Story | Project dashboard overview: per-artifact-type status/count tiles + recent lineage activity feed | TR FR-003 | E5-S11, E5-S1 | 4h |
+| E5-S13 | Story | Backlog review Stitch layout: group Stories under Epics; move quality gate and linked-story coverage into a right rail; preserve review actions and state | TR FR-063, FR-064; API Contracts section 4 | E5-S5, E5-S11 | 4h |
 
 **Definition of Done for the epic:** a user can complete the entire workflow - brief through Jira export - by clicking through the UI alone, with no direct API calls.
 

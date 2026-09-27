@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import { ApprovalDialog } from './approval-dialog';
 import { ArchitectureOptions } from './architecture-options';
 import { ItemEditDialog } from './item-edit-dialog';
+import { BacklogReviewLayout } from './backlog-review-layout';
 
 interface ArtifactReviewScreenProps {
   /** Human-readable artifact name for the header (e.g. "Requirements"). */
@@ -246,7 +247,11 @@ export function ArtifactReviewScreen({
               </p>
             )}
             <h1 className="text-on-surface text-display-sm font-semibold">
-              {version.options ? 'Architecture review' : artifactTypeName}
+              {version.artifactType === 'backlog'
+                ? 'Backlog Review'
+                : version.options
+                  ? 'Architecture review'
+                  : artifactTypeName}
               {isRequirements && ` v${version.versionNumber}`}
             </h1>
             {version.options && (
@@ -298,301 +303,325 @@ export function ArtifactReviewScreen({
         />
       )}
 
-      {/* Quality gate (FR-012) - deterministic checks, informational: they
+      {version.artifactType === 'backlog' ? (
+        <BacklogReviewLayout
+          items={items}
+          qualityIssues={qualityIssues}
+          status={status}
+          onEdit={setEditingItem}
+        />
+      ) : (
+        <>
+          {/* Quality gate (FR-012) - deterministic checks, informational: they
           are shown before approval but do not block it (only flagged/
           unacknowledged impact does, per FR-083). */}
-      <section
-        aria-labelledby="quality-gate-heading"
-        className={cn(
-          'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
-          isRequirements &&
-            'lg:border-t-primary-container order-2 lg:order-none lg:col-start-2 lg:row-start-2 lg:border-t-2',
-        )}
-      >
-        {isRequirements && (
-          <p className="text-tertiary mb-1 text-[11px] font-semibold tracking-wider uppercase">
-            Automated verification
-          </p>
-        )}
-        <h2
-          id="quality-gate-heading"
-          className={cn(
-            'text-on-surface-variant text-xs font-semibold tracking-wide uppercase',
-            isRequirements && 'text-on-surface text-base tracking-normal normal-case',
-          )}
-        >
-          Quality gate
-        </h2>
-        {isRequirements && (
-          <p className="text-on-surface-variant mt-1 text-xs leading-relaxed">
-            {qualityIssues.length} deterministic finding{qualityIssues.length === 1 ? '' : 's'}.
-            Review them before approval.
-          </p>
-        )}
-        {qualityIssues.length === 0 ? (
-          <p className="text-on-surface-variant mt-3 text-sm">
-            No deterministic quality issues found.
-          </p>
-        ) : (
-          <ul className="mt-3 flex flex-col gap-2">
-            {qualityIssues.map((issue, index) => {
-              const relatedItem = items.find((item) => item.logicalItemId === issue.logicalItemId);
-              return (
-                <li
-                  key={`${issue.code}-${index}`}
-                  className="border-surface-dim bg-surface-container-low flex items-start gap-2 rounded-lg border p-3"
-                >
-                  <CircleAlert
-                    className="text-tertiary mt-0.5 size-4 shrink-0"
-                    aria-hidden="true"
-                  />
-                  <div>
-                    <p className="text-on-surface text-sm leading-relaxed">{issue.message}</p>
-                    <p className="font-mono-code text-on-surface-variant mt-0.5 text-[11px]">
-                      {issue.code}
-                      {relatedItem && ` · ${relatedItem.displayKey}`}
-                    </p>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
+          <section
+            aria-labelledby="quality-gate-heading"
+            className={cn(
+              'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
+              isRequirements &&
+                'lg:border-t-primary-container order-2 lg:order-none lg:col-start-2 lg:row-start-2 lg:border-t-2',
+            )}
+          >
+            {isRequirements && (
+              <p className="text-tertiary mb-1 text-[11px] font-semibold tracking-wider uppercase">
+                Automated verification
+              </p>
+            )}
+            <h2
+              id="quality-gate-heading"
+              className={cn(
+                'text-on-surface-variant text-xs font-semibold tracking-wide uppercase',
+                isRequirements && 'text-on-surface text-base tracking-normal normal-case',
+              )}
+            >
+              Quality gate
+            </h2>
+            {isRequirements && (
+              <p className="text-on-surface-variant mt-1 text-xs leading-relaxed">
+                {qualityIssues.length} deterministic finding{qualityIssues.length === 1 ? '' : 's'}.
+                Review them before approval.
+              </p>
+            )}
+            {qualityIssues.length === 0 ? (
+              <p className="text-on-surface-variant mt-3 text-sm">
+                No deterministic quality issues found.
+              </p>
+            ) : (
+              <ul className="mt-3 flex flex-col gap-2">
+                {qualityIssues.map((issue, index) => {
+                  const relatedItem = items.find(
+                    (item) => item.logicalItemId === issue.logicalItemId,
+                  );
+                  return (
+                    <li
+                      key={`${issue.code}-${index}`}
+                      className="border-surface-dim bg-surface-container-low flex items-start gap-2 rounded-lg border p-3"
+                    >
+                      <CircleAlert
+                        className="text-tertiary mt-0.5 size-4 shrink-0"
+                        aria-hidden="true"
+                      />
+                      <div>
+                        <p className="text-on-surface text-sm leading-relaxed">{issue.message}</p>
+                        <p className="font-mono-code text-on-surface-variant mt-0.5 text-[11px]">
+                          {issue.code}
+                          {relatedItem && ` · ${relatedItem.displayKey}`}
+                        </p>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
 
-      {/* Aggregate impact state - the screen-kit's 4th state ("no impact
+          {/* Aggregate impact state - the screen-kit's 4th state ("no impact
           found" is a success state, must not read as empty/error). */}
-      <section
-        aria-labelledby="impact-heading"
-        className={cn(
-          'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
-          isRequirements && 'order-3 lg:order-none lg:col-start-2 lg:row-start-3',
-        )}
-      >
-        <h2
-          id="impact-heading"
-          className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase"
-        >
-          Impact
-        </h2>
-        {flaggedItems.length === 0 ? (
-          <div className="bg-surface-container-low mt-3 flex items-start gap-2 rounded-lg p-3">
-            <CircleCheck
-              className="text-status-approved-bg mt-0.5 size-4 shrink-0"
-              aria-hidden="true"
-            />
-            <p className="text-on-surface text-sm">
-              No impact issues found. Every item in this version is current with its dependencies.
-            </p>
-          </div>
-        ) : (
-          <ul className="mt-3 flex flex-col gap-2">
-            {flaggedItems.map((item) => {
-              const impact = item.impact;
-              if (!impact) return null;
-              return (
-                <li
-                  key={item.itemVersionId}
-                  className="border-surface-dim bg-surface-container-low flex items-start gap-2 rounded-lg border p-3"
-                >
-                  {impact.acknowledged ? (
-                    <CircleCheck
-                      className="text-status-approved-bg mt-0.5 size-4 shrink-0"
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <FlaggedGlyph title={`${item.displayKey} is flagged`} className="mt-0.5" />
-                  )}
-                  <p className="text-on-surface text-sm leading-relaxed">
-                    <span className="font-mono-code font-semibold">{item.displayKey}</span> would be
-                    flagged: it depends on{' '}
-                    <span className="font-mono-code font-semibold">{impact.rootDisplayKey}</span>{' '}
-                    (see path: {impact.path.join(' → ')}).
-                    {impact.acknowledged && (
-                      <span className="text-on-surface-variant"> Acknowledged.</span>
-                    )}
-                  </p>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-
-      <section
-        aria-labelledby="items-heading"
-        className={cn(
-          'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
-          isRequirements && 'order-1 lg:order-none lg:col-start-1 lg:row-span-2 lg:row-start-2',
-        )}
-      >
-        <h2
-          id="items-heading"
-          className={cn(
-            'text-on-surface-variant text-xs font-semibold tracking-wide uppercase',
-            isRequirements && 'text-tertiary',
-          )}
-        >
-          {isRequirements ? 'Specifications register' : 'Items'} ({items.length})
-        </h2>
-        {items.length === 0 ? (
-          <p className="text-on-surface-variant mt-3 text-sm">This version has no items yet.</p>
-        ) : (
-          <ul className={cn('mt-3 flex flex-col gap-3', isRequirements && 'gap-4')}>
-            {items.map((item) => {
-              const fields = readKnownFields(item.payload);
-              // Generic parent lookup (e.g. Story -> Epic, API Contracts
-              // 1.8) - works for any item type whose `parentLogicalItemId`
-              // resolves to another item in this same version, not just
-              // backlog's Story/Epic pairing.
-              const parent = item.parentLogicalItemId
-                ? items.find((candidate) => candidate.logicalItemId === item.parentLogicalItemId)
-                : undefined;
-              // Short metadata line at the bottom of the card - every field
-              // here is optional and artifact-type-generic (not just
-              // backlog's or UI Requirements'), joined with a middot only
-              // for whichever of them are actually present.
-              const metaParts: string[] = [];
-              const itemQualityIssues = isRequirements
-                ? qualityIssues.filter((issue) => issue.logicalItemId === item.logicalItemId)
-                : [];
-              if (fields.priority) metaParts.push(`Priority: ${fields.priority}`);
-              if (fields.sourceRefs && fields.sourceRefs.length > 0) {
-                metaParts.push(`Depends on: ${fields.sourceRefs.join(', ')}`);
-              }
-              if (fields.targetUsers && fields.targetUsers.length > 0) {
-                metaParts.push(`Target users: ${fields.targetUsers.join(', ')}`);
-              }
-              if (fields.screens && fields.screens.length > 0) {
-                metaParts.push(`Screens: ${fields.screens.join(', ')}`);
-              }
-              if (fields.uxPriorities && fields.uxPriorities.length > 0) {
-                metaParts.push(`UX priorities: ${fields.uxPriorities.join(', ')}`);
-              }
-              return (
-                <li
-                  key={item.itemVersionId}
-                  className={cn(
-                    'border-surface-dim rounded-lg border p-4',
-                    isRequirements && 'bg-surface-container-lowest p-5',
-                    isRequirements &&
-                      itemQualityIssues.length > 0 &&
-                      'border-l-primary-container border-l-4',
-                  )}
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono-code border-surface-dim bg-surface-container-low text-on-surface rounded border px-1.5 py-0.5 text-[11px] font-semibold">
-                      {item.displayKey}
-                    </span>
-                    <span className="text-on-surface-variant text-[11px] tracking-wide uppercase">
-                      {fields.type ?? item.itemType}
-                      {fields.dimension && ` · ${fields.dimension}`}
-                    </span>
-                    {parent && (
-                      <span className="text-on-surface-variant text-[11px]">
-                        {formatItemType(parent.itemType)}: {parent.displayKey}
-                      </span>
-                    )}
-                    {item.impact ? (
-                      item.impact.acknowledged ? (
-                        <span className="text-on-surface-variant text-[11px]">Acknowledged</span>
+          <section
+            aria-labelledby="impact-heading"
+            className={cn(
+              'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
+              isRequirements && 'order-3 lg:order-none lg:col-start-2 lg:row-start-3',
+            )}
+          >
+            <h2
+              id="impact-heading"
+              className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase"
+            >
+              Impact
+            </h2>
+            {flaggedItems.length === 0 ? (
+              <div className="bg-surface-container-low mt-3 flex items-start gap-2 rounded-lg p-3">
+                <CircleCheck
+                  className="text-status-approved-bg mt-0.5 size-4 shrink-0"
+                  aria-hidden="true"
+                />
+                <p className="text-on-surface text-sm">
+                  No impact issues found. Every item in this version is current with its
+                  dependencies.
+                </p>
+              </div>
+            ) : (
+              <ul className="mt-3 flex flex-col gap-2">
+                {flaggedItems.map((item) => {
+                  const impact = item.impact;
+                  if (!impact) return null;
+                  return (
+                    <li
+                      key={item.itemVersionId}
+                      className="border-surface-dim bg-surface-container-low flex items-start gap-2 rounded-lg border p-3"
+                    >
+                      {impact.acknowledged ? (
+                        <CircleCheck
+                          className="text-status-approved-bg mt-0.5 size-4 shrink-0"
+                          aria-hidden="true"
+                        />
                       ) : (
-                        <FlaggedGlyph title={`${item.displayKey} is flagged`} />
-                      )
-                    ) : (
-                      <span className="text-on-surface-variant/70 text-[11px]">No impact</span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setEditingItem(item)}
-                      disabled={status !== 'draft'}
-                      title={status === 'draft' ? `Edit ${item.displayKey}` : EDIT_DISABLED_TITLE}
-                      className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary ml-auto inline-flex items-center gap-1 rounded p-1 text-[11px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <SquarePen className="size-3.5" aria-hidden="true" />
-                      <span className="sr-only">Edit {item.displayKey}</span>
-                    </button>
-                  </div>
-                  {fields.actor && (
-                    <p className="text-on-surface-variant mt-2 text-xs">
-                      <span className="font-medium">Actor:</span> {fields.actor}
-                    </p>
-                  )}
-                  {fields.behavior ? (
-                    <p
-                      className={cn(
-                        'text-on-surface mt-2 text-sm leading-relaxed',
-                        isRequirements && 'mt-3 text-base font-medium',
+                        <FlaggedGlyph title={`${item.displayKey} is flagged`} className="mt-0.5" />
                       )}
-                    >
-                      {fields.behavior}
-                    </p>
-                  ) : (
-                    <>
-                      {fields.title && (
-                        <p className="text-on-surface mt-2 text-sm leading-relaxed font-medium">
-                          {fields.title}
-                        </p>
-                      )}
-                      {fields.description && (
-                        <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
-                          {fields.description}
-                        </p>
-                      )}
-                    </>
-                  )}
-                  {fields.acceptanceCriteria && fields.acceptanceCriteria.length > 0 && (
-                    <ul
-                      className={cn(
-                        'text-on-surface-variant mt-2 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed',
-                        isRequirements && 'border-surface-dim mt-3 border-t pt-3',
-                      )}
-                    >
-                      {fields.acceptanceCriteria.map((criterion, index) => (
-                        <li key={index}>{criterion}</li>
-                      ))}
-                    </ul>
-                  )}
-                  {itemQualityIssues.length > 0 && (
-                    <div className="bg-surface-container-low mt-3 rounded-lg p-3">
-                      <p className="text-tertiary flex items-center gap-1.5 text-xs font-semibold">
-                        <CircleAlert className="size-4" aria-hidden="true" />
-                        Quality findings
+                      <p className="text-on-surface text-sm leading-relaxed">
+                        <span className="font-mono-code font-semibold">{item.displayKey}</span>{' '}
+                        would be flagged: it depends on{' '}
+                        <span className="font-mono-code font-semibold">
+                          {impact.rootDisplayKey}
+                        </span>{' '}
+                        (see path: {impact.path.join(' → ')}).
+                        {impact.acknowledged && (
+                          <span className="text-on-surface-variant"> Acknowledged.</span>
+                        )}
                       </p>
-                      <ul className="text-on-surface-variant mt-1.5 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed">
-                        {itemQualityIssues.map((issue, index) => (
-                          <li key={`${issue.code}-${index}`}>{issue.message}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {fields.navigationExpectations && (
-                    <p className="text-on-surface-variant mt-2 text-xs">
-                      <span className="font-medium">Navigation:</span>{' '}
-                      {fields.navigationExpectations}
-                    </p>
-                  )}
-                  {fields.responsiveConstraints && (
-                    <p className="text-on-surface-variant mt-2 text-xs">
-                      <span className="font-medium">Responsive:</span>{' '}
-                      {fields.responsiveConstraints}
-                    </p>
-                  )}
-                  {fields.accessibilityConstraints && (
-                    <p className="text-on-surface-variant mt-2 text-xs">
-                      <span className="font-medium">Accessibility:</span>{' '}
-                      {fields.accessibilityConstraints}
-                    </p>
-                  )}
-                  {metaParts.length > 0 && (
-                    <p className="text-on-surface-variant mt-2 text-xs">{metaParts.join(' · ')}</p>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
+          <section
+            aria-labelledby="items-heading"
+            className={cn(
+              'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
+              isRequirements && 'order-1 lg:order-none lg:col-start-1 lg:row-span-2 lg:row-start-2',
+            )}
+          >
+            <h2
+              id="items-heading"
+              className={cn(
+                'text-on-surface-variant text-xs font-semibold tracking-wide uppercase',
+                isRequirements && 'text-tertiary',
+              )}
+            >
+              {isRequirements ? 'Specifications register' : 'Items'} ({items.length})
+            </h2>
+            {items.length === 0 ? (
+              <p className="text-on-surface-variant mt-3 text-sm">This version has no items yet.</p>
+            ) : (
+              <ul className={cn('mt-3 flex flex-col gap-3', isRequirements && 'gap-4')}>
+                {items.map((item) => {
+                  const fields = readKnownFields(item.payload);
+                  // Generic parent lookup (e.g. Story -> Epic, API Contracts
+                  // 1.8) - works for any item type whose `parentLogicalItemId`
+                  // resolves to another item in this same version, not just
+                  // backlog's Story/Epic pairing.
+                  const parent = item.parentLogicalItemId
+                    ? items.find(
+                        (candidate) => candidate.logicalItemId === item.parentLogicalItemId,
+                      )
+                    : undefined;
+                  // Short metadata line at the bottom of the card - every field
+                  // here is optional and artifact-type-generic (not just
+                  // backlog's or UI Requirements'), joined with a middot only
+                  // for whichever of them are actually present.
+                  const metaParts: string[] = [];
+                  const itemQualityIssues = isRequirements
+                    ? qualityIssues.filter((issue) => issue.logicalItemId === item.logicalItemId)
+                    : [];
+                  if (fields.priority) metaParts.push(`Priority: ${fields.priority}`);
+                  if (fields.sourceRefs && fields.sourceRefs.length > 0) {
+                    metaParts.push(`Depends on: ${fields.sourceRefs.join(', ')}`);
+                  }
+                  if (fields.targetUsers && fields.targetUsers.length > 0) {
+                    metaParts.push(`Target users: ${fields.targetUsers.join(', ')}`);
+                  }
+                  if (fields.screens && fields.screens.length > 0) {
+                    metaParts.push(`Screens: ${fields.screens.join(', ')}`);
+                  }
+                  if (fields.uxPriorities && fields.uxPriorities.length > 0) {
+                    metaParts.push(`UX priorities: ${fields.uxPriorities.join(', ')}`);
+                  }
+                  return (
+                    <li
+                      key={item.itemVersionId}
+                      className={cn(
+                        'border-surface-dim rounded-lg border p-4',
+                        isRequirements && 'bg-surface-container-lowest p-5',
+                        isRequirements &&
+                          itemQualityIssues.length > 0 &&
+                          'border-l-primary-container border-l-4',
+                      )}
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono-code border-surface-dim bg-surface-container-low text-on-surface rounded border px-1.5 py-0.5 text-[11px] font-semibold">
+                          {item.displayKey}
+                        </span>
+                        <span className="text-on-surface-variant text-[11px] tracking-wide uppercase">
+                          {fields.type ?? item.itemType}
+                          {fields.dimension && ` · ${fields.dimension}`}
+                        </span>
+                        {parent && (
+                          <span className="text-on-surface-variant text-[11px]">
+                            {formatItemType(parent.itemType)}: {parent.displayKey}
+                          </span>
+                        )}
+                        {item.impact ? (
+                          item.impact.acknowledged ? (
+                            <span className="text-on-surface-variant text-[11px]">
+                              Acknowledged
+                            </span>
+                          ) : (
+                            <FlaggedGlyph title={`${item.displayKey} is flagged`} />
+                          )
+                        ) : (
+                          <span className="text-on-surface-variant/70 text-[11px]">No impact</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setEditingItem(item)}
+                          disabled={status !== 'draft'}
+                          title={
+                            status === 'draft' ? `Edit ${item.displayKey}` : EDIT_DISABLED_TITLE
+                          }
+                          className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary ml-auto inline-flex items-center gap-1 rounded p-1 text-[11px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <SquarePen className="size-3.5" aria-hidden="true" />
+                          <span className="sr-only">Edit {item.displayKey}</span>
+                        </button>
+                      </div>
+                      {fields.actor && (
+                        <p className="text-on-surface-variant mt-2 text-xs">
+                          <span className="font-medium">Actor:</span> {fields.actor}
+                        </p>
+                      )}
+                      {fields.behavior ? (
+                        <p
+                          className={cn(
+                            'text-on-surface mt-2 text-sm leading-relaxed',
+                            isRequirements && 'mt-3 text-base font-medium',
+                          )}
+                        >
+                          {fields.behavior}
+                        </p>
+                      ) : (
+                        <>
+                          {fields.title && (
+                            <p className="text-on-surface mt-2 text-sm leading-relaxed font-medium">
+                              {fields.title}
+                            </p>
+                          )}
+                          {fields.description && (
+                            <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
+                              {fields.description}
+                            </p>
+                          )}
+                        </>
+                      )}
+                      {fields.acceptanceCriteria && fields.acceptanceCriteria.length > 0 && (
+                        <ul
+                          className={cn(
+                            'text-on-surface-variant mt-2 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed',
+                            isRequirements && 'border-surface-dim mt-3 border-t pt-3',
+                          )}
+                        >
+                          {fields.acceptanceCriteria.map((criterion, index) => (
+                            <li key={index}>{criterion}</li>
+                          ))}
+                        </ul>
+                      )}
+                      {itemQualityIssues.length > 0 && (
+                        <div className="bg-surface-container-low mt-3 rounded-lg p-3">
+                          <p className="text-tertiary flex items-center gap-1.5 text-xs font-semibold">
+                            <CircleAlert className="size-4" aria-hidden="true" />
+                            Quality findings
+                          </p>
+                          <ul className="text-on-surface-variant mt-1.5 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed">
+                            {itemQualityIssues.map((issue, index) => (
+                              <li key={`${issue.code}-${index}`}>{issue.message}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {fields.navigationExpectations && (
+                        <p className="text-on-surface-variant mt-2 text-xs">
+                          <span className="font-medium">Navigation:</span>{' '}
+                          {fields.navigationExpectations}
+                        </p>
+                      )}
+                      {fields.responsiveConstraints && (
+                        <p className="text-on-surface-variant mt-2 text-xs">
+                          <span className="font-medium">Responsive:</span>{' '}
+                          {fields.responsiveConstraints}
+                        </p>
+                      )}
+                      {fields.accessibilityConstraints && (
+                        <p className="text-on-surface-variant mt-2 text-xs">
+                          <span className="font-medium">Accessibility:</span>{' '}
+                          {fields.accessibilityConstraints}
+                        </p>
+                      )}
+                      {metaParts.length > 0 && (
+                        <p className="text-on-surface-variant mt-2 text-xs">
+                          {metaParts.join(' · ')}
+                        </p>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+        </>
+      )}
 
       <div
         className={cn(
