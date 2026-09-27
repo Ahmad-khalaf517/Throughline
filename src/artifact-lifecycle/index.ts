@@ -43,14 +43,18 @@ export {
   getArtifactId,
   listArtifactVersions,
   getArtifactVersionDetail,
+  getArtifactVersionDetailResolved,
   type ArtifactVersionRef,
   type ArtifactVersionRecord,
   type ArtifactVersionDetail,
   type VersionItem,
   type ImpactRow,
+  type ResolvedArtifactVersionDetail,
+  type ResolvedVersionItem,
 } from './versions';
 export {
   getImpactWarnings,
+  getImpactWarningsResolved,
   getCurrentItemImpactCauses,
   getItemVersionProjectIds,
   acknowledgeImpactWarning,
