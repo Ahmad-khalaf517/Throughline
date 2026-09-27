@@ -88,6 +88,52 @@ describe('withProjectLock', () => {
     },
   );
 
+  // The lock key is the exact text Postgres hashes, and a uuid has more than
+  // one spelling (`requireProjectOwner` accepts uppercase; Postgres compares
+  // uuids case-insensitively). Every spelling of one project must take the SAME
+  // lock, or a route handed an uppercase `:projectId` would not be serialized
+  // against approval / acknowledgement, which pass the lowercase id Postgres returns.
+  describe('lock key canonicalization', () => {
+    const LOWER = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
+    const OTHER = 'f0e1d2c3-b4a5-4968-8776-655443322110';
+
+    async function lockKeyFor(projectId: string): Promise<unknown[]> {
+      executeMock.mockClear();
+      await withProjectLock(projectId, async () => undefined);
+      expect(executeMock).toHaveBeenCalledTimes(1);
+      const { sql: renderedSql, params } = toParameterizedQuery(executeMock.mock.calls[0]?.[0]);
+      expect(renderedSql).toBe('select pg_advisory_xact_lock(hashtextextended($1, 0))');
+      return params;
+    }
+
+    it('derives the same lock key for the lowercase, UPPERCASE and mixed-case spellings of one uuid', async () => {
+      const mixed = 'A1b2C3d4-E5f6-4A7b-8C9d-0E1f2A3b4C5d';
+
+      const lower = await lockKeyFor(LOWER);
+      const upper = await lockKeyFor(LOWER.toUpperCase());
+      const mixedCase = await lockKeyFor(mixed);
+
+      expect(lower).toEqual([LOWER]);
+      expect(upper).toEqual(lower);
+      expect(mixedCase).toEqual(lower);
+    });
+
+    it('leaves an already-lowercase id exactly as it was, so nothing else changes', async () => {
+      await expect(lockKeyFor(LOWER)).resolves.toEqual([LOWER]);
+      await expect(lockKeyFor('project-123')).resolves.toEqual(['project-123']);
+    });
+
+    it('still derives different lock keys for two different uuids, whatever their case', async () => {
+      const first = await lockKeyFor(LOWER);
+      const second = await lockKeyFor(OTHER);
+      const secondUpper = await lockKeyFor(OTHER.toUpperCase());
+
+      expect(second).not.toEqual(first);
+      expect(secondUpper).toEqual(second);
+      expect(secondUpper).not.toEqual(first);
+    });
+  });
+
   it('rejects with the lock error and never calls fn when the advisory lock statement fails', async () => {
     // Guards ERD section 9 R1/R2: if a future refactor wrapped the lock
     // statement in a try/catch (or otherwise swallowed its rejection), the

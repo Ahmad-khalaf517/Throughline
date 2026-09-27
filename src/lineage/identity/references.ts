@@ -175,6 +175,29 @@ export async function getDisplayKeysByItemVersionId(
   return new Map(rows.map((row) => [row.id, row.displayKey]));
 }
 
+// Added by E3-S11 (SCRUM-46): `item_version.id -> item_version.project_id`, for
+// ids that may not exist at all. `POST /api/impact/acknowledgements` (API
+// Contracts 6) receives bare item-version ids in its body and, per API
+// Contracts 1.4, must resolve each one to its project BEFORE
+// `requireProjectOwner` - so another owner's item version and a nonexistent
+// one answer the identical 404. Layer 6 cannot import `identity` and
+// `item_version` is this module's table (Module Boundaries section 5), so the
+// lookup lives here and artifact-lifecycle re-exports it for the route. Only ids
+// that exist appear in the map (an unknown id is simply absent); empty input
+// runs no query. Read-only, additive, same shape as its siblings above.
+export async function getItemVersionProjectIds(
+  tx: Tx,
+  itemVersionIds: string[],
+): Promise<Map<string, string>> {
+  const uniqueIds = [...new Set(itemVersionIds)];
+  if (!uniqueIds.length) return new Map();
+  const rows = await tx
+    .select({ id: schema.itemVersion.id, projectId: schema.itemVersion.projectId })
+    .from(schema.itemVersion)
+    .where(inArray(schema.itemVersion.id, uniqueIds));
+  return new Map(rows.map((row) => [row.id, row.projectId]));
+}
+
 export async function getCurrentItemVersionIds(
   tx: Tx,
   projectId: string,

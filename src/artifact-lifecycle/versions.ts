@@ -13,20 +13,16 @@ import { getSourceVersionMembers, type ItemType } from '@/lineage/identity';
 import { getWarnings, type ImpactRow } from '@/lineage/impact';
 import type { ArtifactType, ArtifactVersionStatus } from '@/lib/serialize';
 import type { ArtifactVersion } from './generation';
+import { UUID_RE } from './shared';
 
 // `impact` is layer 1 and layer 6 cannot import it, but `VersionItem.impact`
 // (below) is its id-based row type - re-exported so a route can name it when
 // it maps that row to `ImpactRowDTO` (display keys resolved server-side).
 export type { ImpactRow };
 
-// Same shape check `auth.requireProjectOwner` applies to `:projectId`: a
-// version id never has any other legal shape (uuid primary key), so a
-// malformed path param is answered here as "not found" instead of reaching
-// Postgres and surfacing its raw 22P02 "invalid input syntax for type uuid"
-// as a 500. Copied rather than imported: `auth` is layer 0 and could be
-// imported, but its regex is a private constant and exporting it just for
-// this would widen auth's surface for one line.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// `UUID_RE` (./shared): a version id never has any other legal shape (uuid
+// primary key), so a malformed path param is answered here as "not found"
+// instead of reaching Postgres and surfacing its raw 22P02 as a 500.
 
 export interface ArtifactVersionRef {
   versionId: string;

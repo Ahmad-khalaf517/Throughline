@@ -61,9 +61,18 @@ function toImpactRow(row: ImpactFunctionRow): ImpactRow {
  * `impact(project)` with no candidate - the warning panel (ERD 6.3, Module
  * Boundaries 4.2). `p_candidate_version_id` takes its own SQL `DEFAULT
  * NULL`; nothing here ever runs as a candidate/gate evaluation.
+ *
+ * `executor` (E3-S11) defaults to the pool. A caller that already holds an
+ * open transaction - artifact-lifecycle's `acknowledgeImpactWarning`, under
+ * the project lock - passes its `tx` so the check and the write it guards read
+ * ONE consistent snapshot instead of the check running on a second connection.
+ * Purely additive: with no second argument this is exactly what it was.
  */
-export async function getWarnings(projectId: string): Promise<ImpactRow[]> {
-  const rows = await db.execute<ImpactFunctionRow>(
+export async function getWarnings(
+  projectId: string,
+  executor: Tx | typeof db = db,
+): Promise<ImpactRow[]> {
+  const rows = await executor.execute<ImpactFunctionRow>(
     sql`select subject_kind, subject_id, root_item_version_id, depth, path, acknowledged
         from impact(${projectId}::uuid)`,
   );
@@ -161,9 +170,12 @@ export async function getExternalDrift(
  * section 6's transaction-discipline rule) and trusts that caller's scope,
  * the same pattern used elsewhere in this codebase (system boundaries
  * validate, internal domain functions trust). The real cross-tenant check
- * belongs to the future `POST /api/impact/acknowledgements` route (E3-S11,
- * API Contracts line 299 - `404 NOT_FOUND` when subject or root is not in
- * the caller's project), not here.
+ * belongs to the `POST /api/impact/acknowledgements` route (E3-S11, API
+ * Contracts line 299 - `404 NOT_FOUND` when subject or root is not in the
+ * caller's project), not here; that route reaches this function only through
+ * `artifact-lifecycle.acknowledgeImpactWarning`, which also re-checks under
+ * the project lock that the (subject, root) pair is a row `getWarnings` reports
+ * right now and is not already acknowledged.
  */
 export async function acknowledge(
   tx: Tx,

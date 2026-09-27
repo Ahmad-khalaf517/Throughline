@@ -3,6 +3,7 @@ export {
   resolveDisplayKeys,
   getSourceVersionMembers,
   getDisplayKeysByItemVersionId,
+  getItemVersionProjectIds,
   getCurrentItemVersionIds,
   getUpstreamDependencies,
 } from './references';

@@ -1,12 +1,26 @@
 // artifact-lifecycle: helpers shared by the two ways a new draft gets
 // created - AI generation (generation.ts, ERD 3.3) and manual revision
 // (manual-revision.ts, ERD 3.6). Extracted rather than duplicated because
-// both call sites need the exact same three pieces (Jira E2-S7).
+// both call sites need the exact same three pieces (Jira E2-S7). `UUID_RE`
+// (E3-S11) is the one piece here that is not about draft creation: the id shape
+// check both read-only accessor files (versions.ts, impact.ts) apply.
 //
 // Nothing outside src/artifact-lifecycle may import this file directly - it
 // is internal to the module, not re-exported through ./index.ts.
 import { and, desc, eq } from 'drizzle-orm';
 import { db, schema, type Tx } from '@/db';
+
+// Same shape check `auth.requireProjectOwner` applies to `:projectId`: an id
+// this module is handed by an API route never has any other legal shape (uuid
+// primary keys), so a malformed one is answered as "not found" (`versions.ts`'s
+// `getVersionRef`/`getArtifactVersionDetail`) or dropped (`impact.ts`'s
+// `getItemVersionProjectIds`) instead of reaching Postgres and surfacing its
+// raw 22P02 "invalid input syntax for type uuid" as a 500. Shared here by the
+// two read files (E3-S10, E3-S11) rather than copied a second time inside this
+// module; copied rather than imported from `auth` (layer 0 could be imported)
+// because `auth`'s is a private constant and exporting it for one line would
+// widen its surface.
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Shared by the pre-generate()/pre-lock capture (outside any transaction, or
 // before this module's own lookups) and the re-check inside the persist

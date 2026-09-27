@@ -5,11 +5,12 @@ Next.js route handlers only (module 17, layer 6). Every handler:
 serialize the result. The route sets enumerated below call layer 2
 (`artifact-lifecycle`) directly, or make more than one domain call, instead; and
 a `:versionId`/`:operationId` route first resolves that id to its project with a
-read-only lookup, then runs `requireProjectOwner` (Module Boundaries section 4.1).
+read-only lookup, then runs `requireProjectOwner` (Module Boundaries section 4.1);
+`POST /api/impact/acknowledgements` does the same from the ids in its body.
 
-No handler imports `db` or `identity` directly. Four documented exceptions to
-that shape (Module Boundaries section 4.7) - three route sets that call
-`artifact-lifecycle` directly (1, 3 and 4) and one that is not project-scoped (2):
+No handler imports `db` or `identity` directly. Five documented exceptions to
+that shape (Module Boundaries section 4.7) - four route sets that call
+`artifact-lifecycle` directly (1, 3, 4 and 5) and one that is not project-scoped (2):
 
 1. **`/api/projects` routes (E1-S8)**: `project`/`artifact` are owned by
    `artifact-lifecycle` (layer 2) with no artifact-type module, so `POST/GET
@@ -69,5 +70,25 @@ that shape (Module Boundaries section 4.7) - three route sets that call
    prerequisite table, the `:type` -> module dispatch table, the lifecycle-error
    mapper, `loadVersionDTO`) and `_shared/body.ts` (the optional-JSON-body
    reader); neither holds lineage, matching, hashing or transaction logic.
+
+5. **The two impact routes (E3-S11; API Contracts section 6)**: API Contracts
+   annotates them `-> impact.getWarnings` / `-> impact.acknowledge`, but layer 6
+   may not import `impact` (or `identity`), and an acknowledgement must be written
+   inside the project lock, which only `artifact-lifecycle` takes - so they call
+   `artifact-lifecycle` directly (Module Boundaries 4.3, 4.7):
+
+   - `GET /api/projects/:projectId/impact` calls `getImpactWarnings` (rows in a
+     deterministic order) and serializes them with `toImpactRowDTOs`.
+   - `POST /api/impact/acknowledgements` has no `:projectId`, so it resolves one
+     from the ids in its body first: `getItemVersionProjectIds` for an
+     item-version subject and for the obsolete root, `getRefById` (from
+     `external-operations`) for an external-ref subject. A missing id, a subject
+     and root in different projects, and a project the caller does not own all answer ONE
+     identical `404` (same code and message, as `resolveOwnedVersion` does for a
+     version), then `requireProjectOwner`, then `acknowledgeImpactWarning`, which
+     re-checks the warning under the lock (`409 NOT_CURRENTLY_FLAGGED` if it is not
+     flagged) and writes nothing for an already-acknowledged pair (still `201`).
+     Its request schema is `impact/schemas.ts`; the resolution helpers stay in the
+     route file because nothing else uses them.
 
 Every other route still goes through layer 3/4/5 only.

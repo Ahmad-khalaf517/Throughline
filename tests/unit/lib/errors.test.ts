@@ -4,8 +4,9 @@ import { ApiError, errorResponse } from '@/lib/errors';
 // API Contracts 1.3 (error shape) and section 11 (code -> status table),
 // as far as the routes built so far wire them up: the first four are E1's,
 // the ten after them are E3-S10's artifact/version/item-edit routes (API
-// Contracts sections 4-5). `DRAFT_EXISTS` (reserved) and `NOT_CURRENTLY_FLAGGED`
-// (E3-S11's) are deliberately absent from ErrorCode.
+// Contracts sections 4-5), and `NOT_CURRENTLY_FLAGGED` is E3-S11's (the
+// acknowledgement route, section 6). `DRAFT_EXISTS` (reserved, never fires) is
+// deliberately absent from ErrorCode.
 describe('ApiError', () => {
   it.each([
     ['VALIDATION_ERROR', 400],
@@ -22,6 +23,7 @@ describe('ApiError', () => {
     ['STACK_UNCHANGED_DECISIONS', 409],
     ['OPTION_NOT_SELECTED', 422],
     ['OPTION_COUNT_INVALID', 422],
+    ['NOT_CURRENTLY_FLAGGED', 409],
   ] as const)('maps %s to status %i', (code, status) => {
     const error = new ApiError(code, 'message');
     expect(error.code).toBe(code);

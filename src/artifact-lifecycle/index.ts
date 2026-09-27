@@ -42,6 +42,12 @@ export {
   type VersionItem,
   type ImpactRow,
 } from './versions';
+export {
+  getImpactWarnings,
+  getItemVersionProjectIds,
+  acknowledgeImpactWarning,
+  type AcknowledgeImpactWarningResult,
+} from './impact';
 
 // `commitItemEdit`/`proposeItemEdit` throw identity's own `ItemEditError`
 // (codes VERSION_NOT_DRAFT / ITEM_NOT_IN_VERSION / UPSTREAM_REMOVED /

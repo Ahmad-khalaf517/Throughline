@@ -12,8 +12,9 @@ import { NextResponse } from 'next/server';
 // the external-refs/GitHub/Jira/Stitch routes actually throw. The ten codes
 // after `REQUEST_CONFLICT` are E3-S10's (API Contracts sections 4-5, the
 // artifact/version/item-edit routes), again exactly what those routes throw,
-// no more: `DRAFT_EXISTS` is reserved and never fires (API Contracts 4), and
-// `NOT_CURRENTLY_FLAGGED` belongs to the acknowledgement routes (E3-S11).
+// no more: `DRAFT_EXISTS` is reserved and never fires (API Contracts 4).
+// `NOT_CURRENTLY_FLAGGED`, last in the union, is E3-S11's (API Contracts 6,
+// `POST /api/impact/acknowledgements`): the one code that route adds.
 export type ErrorCode =
   | 'VALIDATION_ERROR'
   | 'UNAUTHENTICATED'
@@ -34,7 +35,8 @@ export type ErrorCode =
   | 'APPROVAL_BLOCKED'
   | 'STACK_UNCHANGED_DECISIONS'
   | 'OPTION_NOT_SELECTED'
-  | 'OPTION_COUNT_INVALID';
+  | 'OPTION_COUNT_INVALID'
+  | 'NOT_CURRENTLY_FLAGGED';
 
 const STATUS_BY_CODE: Record<ErrorCode, number> = {
   VALIDATION_ERROR: 400,
@@ -57,6 +59,7 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   STACK_UNCHANGED_DECISIONS: 409,
   OPTION_NOT_SELECTED: 422,
   OPTION_COUNT_INVALID: 422,
+  NOT_CURRENTLY_FLAGGED: 409,
 };
 
 // The one error shape every route handler throws and every response maps
