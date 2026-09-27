@@ -1,27 +1,42 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getVerifiedUser } from '@/auth';
-import { Footer } from '@/components/marketing/footer';
-import { Navbar } from '@/components/marketing/navbar';
+import { ProjectSidebar } from '@/components/projects/project-sidebar';
 import { signOutAction } from '../actions';
 
-/**
- * Shared nav/footer + the auth guard for every `/projects` screen (E5-S1
- * review fix). Composes `Navbar`/`Footer` the same way `app/page.tsx` does -
- * `app/layout.tsx` itself renders neither. Pages under here keep their own
- * `getVerifiedUser()` call too (they need `user.id` for their own queries,
- * and a layout can't pass props down to a page); `getVerifiedUser` is
- * `React.cache`-wrapped (`src/auth/index.ts`) so the two calls in one
- * request share a single Supabase round trip.
- */
 export default async function ProjectsLayout({ children }: LayoutProps<'/projects'>) {
   const user = await getVerifiedUser();
   if (!user) redirect('/sign-in');
 
   return (
-    <>
-      <Navbar userEmail={user.email} onSignOut={signOutAction} />
-      {children}
-      <Footer userEmail={user.email} />
-    </>
+    <div className="bg-surface text-on-surface min-h-screen">
+      <header className="border-surface-dim bg-surface-container-lowest sticky top-0 z-40 border-b">
+        <div className="mx-auto flex min-h-10 max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-6">
+          <Link
+            href="/projects"
+            className="text-on-surface focus-visible:ring-primary rounded-md text-xs font-semibold tracking-tight focus-visible:ring-2 focus-visible:outline-none"
+          >
+            THROUGHLINE
+          </Link>
+          <div className="flex items-center gap-4">
+            <span className="text-on-surface-variant hidden max-w-48 truncate text-xs sm:block">
+              {user.email}
+            </span>
+            <form action={signOutAction}>
+              <button
+                type="submit"
+                className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary rounded-md px-2 py-1 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none"
+              >
+                Sign out
+              </button>
+            </form>
+          </div>
+        </div>
+      </header>
+      <div className="mx-auto flex w-full max-w-[1440px]">
+        <ProjectSidebar />
+        <div className="min-w-0 flex-1">{children}</div>
+      </div>
+    </div>
   );
 }

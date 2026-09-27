@@ -1,10 +1,10 @@
 # Throughline - Business Requirements Document (BRD)
 
-**Document version:** 2.2  
+**Document version:** 2.3  
 **Project:** Throughline  
 **Project type:** AI-assisted software project initialization and traceability platform  
 **Delivery context:** Solo capstone project, 8 full-time development days  
-**Status:** Business baseline for Technical Requirements -> ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation  
+**Status:** Business baseline for Technical Requirements -> ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v2.3: added BR-011 - the Stitch design reference includes a persistent navigation shell and per-project dashboard overview that had no business requirement behind them; added so the Jira Plan stories building that UI cite something real instead of nothing.  
 **Primary audience:** Instructor/mentor, project reviewer, developer, and future product stakeholders
 
 ---
@@ -142,6 +142,7 @@ GitHub, Stitch, and Jira are useful outputs of the planning process. They do not
 | **BR-008** | External writes shall be explicit, previewed, retry-aware, and recoverable after ambiguous failures where practical. Third-party failures shall not corrupt internal project history. | BO-005 |
 | **BR-009** | AI shall be used for interpretation, generation, trade-off reasoning, and semantic mapping. Deterministic code shall own identifiers, validation, workflow state, approvals, lineage storage, traversal, and external-operation state. | BO-002, BO-006 |
 | **BR-010** | When scope pressure occurs, optional AI commentary and advanced polish shall be removed before weakening the core lineage, approval, versioning, or traceability behavior. | BO-005, BO-006 |
+| **BR-011** | Throughline shall present each project's current approval status across artifact types and its recent lineage activity in one overview screen, reachable through navigation shared by every project screen, so a user can see the state of the traceability chain without opening each artifact type individually. | BO-001, BO-004 |
 
 ---
 

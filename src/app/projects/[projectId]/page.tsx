@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { getProjectById } from '@/artifact-lifecycle';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
@@ -45,71 +44,16 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
   });
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-4 py-12 sm:px-6">
-      <Link
-        href="/projects"
-        className="text-on-surface-variant hover:text-on-surface text-sm font-medium"
-      >
-        ← All projects
-      </Link>
-
-      <div className="bg-surface-container-lowest border-surface-dim rounded-xl border p-6">
-        <h1 className="text-on-surface text-display-sm font-semibold">{project.name}</h1>
+    <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6">
+      <div className="bg-surface-container-lowest border-surface-dim rounded-lg border p-6">
+        <h1 className="text-on-surface text-2xl font-semibold">Project brief</h1>
         <p className="text-on-surface-variant mt-1 text-xs">
           Created <time dateTime={project.createdAt.toISOString()}>{createdAt}</time>
         </p>
 
-        <h2 className="text-on-surface-variant mt-6 text-xs font-semibold tracking-wide uppercase">
-          Brief
-        </h2>
-        <p className="text-on-surface mt-2 text-sm leading-relaxed whitespace-pre-wrap">
+        <p className="text-on-surface mt-6 text-sm leading-relaxed whitespace-pre-wrap">
           {project.brief}
         </p>
-
-        <div className="mt-6 flex flex-wrap gap-x-6 gap-y-2">
-          <Link
-            href={`/projects/${project.id}/artifacts/requirements`}
-            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
-          >
-            Review requirements →
-          </Link>
-          <Link
-            href={`/projects/${project.id}/artifacts/architecture`}
-            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
-          >
-            Architecture →
-          </Link>
-          <Link
-            href={`/projects/${project.id}/artifacts/ui_requirements`}
-            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
-          >
-            UI Requirements →
-          </Link>
-          <Link
-            href={`/projects/${project.id}/artifacts/backlog`}
-            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
-          >
-            Backlog →
-          </Link>
-          <Link
-            href={`/projects/${project.id}/warnings`}
-            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
-          >
-            Warnings →
-          </Link>
-          <Link
-            href={`/projects/${project.id}/dependencies`}
-            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
-          >
-            Dependencies →
-          </Link>
-          <Link
-            href={`/projects/${project.id}/outputs`}
-            className="text-primary-container hover:text-primary-container-hover text-sm font-medium"
-          >
-            Outputs →
-          </Link>
-        </div>
       </div>
     </main>
   );
