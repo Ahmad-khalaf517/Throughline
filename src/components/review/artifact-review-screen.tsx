@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { CircleAlert, CircleCheck, Loader2, SquarePen } from 'lucide-react';
 import type {
   ArtifactVersionDTO,
@@ -11,7 +11,10 @@ import type {
 import { FlaggedGlyph, StatusBadge } from '@/components/status/status-badge';
 import { cn } from '@/lib/utils';
 import { ApprovalDialog } from './approval-dialog';
+import { ArchitectureOptions } from './architecture-options';
 import { ItemEditDialog } from './item-edit-dialog';
+import { BacklogReviewLayout } from './backlog-review-layout';
+import { UiRequirementsReviewLayout } from './ui-requirements-review-layout';
 
 interface ArtifactReviewScreenProps {
   /** Human-readable artifact name for the header (e.g. "Requirements"). */
@@ -96,54 +99,6 @@ function readKnownFields(payload: unknown): KnownItemFields {
   };
 }
 
-// `ArchitectureOptionDTO.stack`/`candidateDecisions`/`tradeoffs` are
-// similarly `unknown`/`unknown[]` in the shared DTO (fixtures.ts's local
-// `ArchitectureStack`/`ArchitectureCandidateDecision` types are fixture-side
-// only) - read defensively here too, same pattern as `readKnownFields` above.
-interface KnownStackFields {
-  frontend?: string | undefined;
-  backend?: string | undefined;
-  database?: string | undefined;
-  hosting?: string | undefined;
-  repositoryLayout?: string | undefined;
-}
-
-function readKnownStack(stack: unknown): KnownStackFields {
-  if (typeof stack !== 'object' || stack === null) return {};
-  const record = stack as Record<string, unknown>;
-  const pick = (key: string) =>
-    typeof record[key] === 'string' ? (record[key] as string) : undefined;
-  return {
-    frontend: pick('frontend'),
-    backend: pick('backend'),
-    database: pick('database'),
-    hosting: pick('hosting'),
-    repositoryLayout: pick('repositoryLayout'),
-  };
-}
-
-interface KnownCandidateDecisionFields {
-  decision?: string | undefined;
-  drivenBy?: string[] | undefined;
-  rationale?: string | undefined;
-}
-
-function readKnownCandidateDecision(entry: unknown): KnownCandidateDecisionFields {
-  if (typeof entry !== 'object' || entry === null) return {};
-  const record = entry as Record<string, unknown>;
-  return {
-    decision: typeof record.decision === 'string' ? record.decision : undefined,
-    drivenBy: Array.isArray(record.drivenBy)
-      ? record.drivenBy.filter((entry): entry is string => typeof entry === 'string')
-      : undefined,
-    rationale: typeof record.rationale === 'string' ? record.rationale : undefined,
-  };
-}
-
-function readTradeoffStrings(tradeoffs: unknown[]): string[] {
-  return tradeoffs.filter((entry): entry is string => typeof entry === 'string');
-}
-
 // Generic label for an item's `itemType` (e.g. `epic` -> "Epic",
 // `architecture_decision` -> "Architecture decision") - used only to label a
 // resolved parent item below, not tied to any one artifact type.
@@ -218,11 +173,11 @@ export function ArtifactReviewScreen({
   // other artifact type (requirements/ui_requirements/backlog), so this is
   // always `false` there and the rest of this gate is a no-op.
   const requiresOptionSelection = version.options !== null;
+  const isRequirements = version.artifactType === 'requirements';
   const isUiRequirements = version.artifactType === 'ui_requirements';
-  const uiFields = isUiRequirements ? items.map((item) => readKnownFields(item.payload)) : [];
-  const uiTargetUsers = new Set(uiFields.flatMap((fields) => fields.targetUsers ?? []));
-  const uiScreens = new Set(uiFields.flatMap((fields) => fields.screens ?? []));
-  const uiSourceRefs = new Set(uiFields.flatMap((fields) => fields.sourceRefs ?? []));
+  const uiSourceRefs = new Set(
+    isUiRequirements ? items.flatMap((item) => readKnownFields(item.payload).sourceRefs ?? []) : [],
+  );
 
   function handleApproveClick() {
     if (status !== 'draft' || pending) return;
@@ -271,13 +226,41 @@ export function ArtifactReviewScreen({
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <header className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
+    <div
+      className={cn(
+        'flex flex-col gap-6',
+        isRequirements && 'lg:grid lg:grid-cols-[minmax(0,2fr)_minmax(17rem,1fr)] lg:items-start',
+      )}
+    >
+      <header
+        className={cn(
+          'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
+          isRequirements && 'px-5 py-4 sm:px-6 lg:col-span-2',
+          version.options && 'border-l-primary border-l-4',
+        )}
+      >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
+            {version.options && (
+              <p className="font-mono-code text-primary mb-1 text-[11px] font-semibold tracking-wide uppercase">
+                Review · Version {version.versionNumber}
+              </p>
+            )}
+            {isRequirements && (
+              <p className="text-tertiary mb-1 text-[11px] font-semibold tracking-wider uppercase">
+                Specifications audit
+              </p>
+            )}
             <div className="flex flex-wrap items-center gap-2.5">
               <h1 className="text-on-surface text-display-sm font-semibold">
-                {isUiRequirements ? 'UI Requirements Review' : artifactTypeName}
+                {version.artifactType === 'backlog'
+                  ? 'Backlog Review'
+                  : version.options
+                    ? 'Architecture review'
+                    : isUiRequirements
+                      ? 'UI Requirements Review'
+                      : artifactTypeName}
+                {isRequirements && ` v${version.versionNumber}`}
               </h1>
               {isUiRequirements && (
                 <span className="font-mono-code bg-surface-container-low text-on-surface-variant rounded px-2 py-1 text-xs">
@@ -285,12 +268,19 @@ export function ArtifactReviewScreen({
                 </span>
               )}
             </div>
-            {isUiRequirements ? (
+            {version.options && (
+              <p className="text-on-surface-variant mt-1 text-sm">
+                Compare the proposed stacks, decisions, and trade-offs before choosing one
+                architecture.
+              </p>
+            )}
+            {isUiRequirements && (
               <p className="text-on-surface-variant mt-2 text-sm">
                 Review {items.length} structured UI specification{items.length === 1 ? '' : 's'} and
                 their recorded source references.
               </p>
-            ) : (
+            )}
+            {!isRequirements && !version.options && !isUiRequirements && (
               <p className="text-on-surface-variant mt-1 text-sm">
                 Version {version.versionNumber}
               </p>
@@ -323,567 +313,384 @@ export function ArtifactReviewScreen({
         )}
       </header>
 
-      {isUiRequirements && (
-        <section
-          aria-label="UI requirements summary"
-          className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
-        >
-          {[
-            ['Specifications', items.length],
-            ['Target users', uiTargetUsers.size],
-            ['Named screens', uiScreens.size],
-            ['Recorded source refs', uiSourceRefs.size],
-          ].map(([label, count]) => (
-            <div
-              key={label}
-              className="border-surface-dim bg-surface-container-lowest rounded-lg border px-4 py-3"
-            >
-              <p className="text-on-surface-variant text-[11px] font-semibold tracking-wide uppercase">
-                {label}
-              </p>
-              <p className="text-on-surface mt-1 text-2xl font-semibold tabular-nums">{count}</p>
-            </div>
-          ))}
-        </section>
-      )}
-
-      {/* Architecture-only options section (FR-020/FR-021/FR-022) - rendered
-          only when `version.options` is non-null, so this is invisible for
-          every other artifact type and there is zero regression risk to the
-          rest of this generic screen. */}
       {version.options && (
-        <section
-          aria-labelledby="architecture-options-heading"
-          className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6"
-        >
-          <h2
-            id="architecture-options-heading"
-            className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase"
-          >
-            Architecture options
-          </h2>
-          <p className="text-on-surface-variant mt-1 text-sm">
-            Select exactly one option before approving - an Architecture version cannot become
-            authoritative otherwise (FR-022).
-          </p>
-
-          <div
-            role="radiogroup"
-            aria-labelledby="architecture-options-heading"
-            className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2"
-          >
-            {version.options.map((option) => {
-              const stack = readKnownStack(option.stack);
-              const stackRows: Array<[string, string | undefined]> = [
-                ['Frontend', stack.frontend],
-                ['Backend', stack.backend],
-                ['Database', stack.database],
-                ['Hosting', stack.hosting],
-                ['Repository layout', stack.repositoryLayout],
-              ];
-              const decisions = option.candidateDecisions.map(readKnownCandidateDecision);
-              const tradeoffs = readTradeoffStrings(option.tradeoffs);
-              const inputId = `architecture-option-${option.id}`;
-              const isSelected = selectedOptionId === option.id;
-
-              return (
-                <label
-                  key={option.id}
-                  htmlFor={inputId}
-                  className={cn(
-                    'border-surface-dim bg-surface-container-low flex cursor-pointer flex-col gap-3 rounded-lg border p-4 transition-colors',
-                    isSelected && 'border-primary ring-primary ring-1',
-                    status !== 'draft' && 'cursor-not-allowed opacity-80',
-                  )}
-                >
-                  <div className="flex items-start gap-3">
-                    <input
-                      type="radio"
-                      id={inputId}
-                      name="architecture-option"
-                      value={option.id}
-                      checked={isSelected}
-                      onChange={() => setSelectedOptionId(option.id)}
-                      disabled={status !== 'draft'}
-                      className="border-outline-variant text-primary focus-visible:ring-primary mt-1 size-4 shrink-0 focus-visible:ring-2 focus-visible:outline-none"
-                    />
-                    <div>
-                      <span className="font-mono-code border-surface-dim bg-surface-container-lowest text-on-surface inline-block rounded border px-1.5 py-0.5 text-[11px] font-semibold">
-                        Option {option.optionKey}
-                      </span>
-                      <h3 className="text-on-surface mt-1 text-sm font-semibold">{option.title}</h3>
-                    </div>
-                  </div>
-
-                  <p className="text-on-surface text-sm leading-relaxed">{option.summary}</p>
-
-                  {stackRows.some(([, value]) => value) && (
-                    <dl className="border-surface-dim grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-t pt-3 text-xs">
-                      {stackRows.map(([label, value]) =>
-                        value ? (
-                          <Fragment key={label}>
-                            <dt className="text-on-surface-variant font-medium">{label}</dt>
-                            <dd className="text-on-surface">{value}</dd>
-                          </Fragment>
-                        ) : null,
-                      )}
-                    </dl>
-                  )}
-
-                  {decisions.length > 0 && (
-                    <div>
-                      <h4 className="text-on-surface-variant text-[11px] font-semibold tracking-wide uppercase">
-                        Candidate decisions
-                      </h4>
-                      <ul className="mt-1.5 flex flex-col gap-1.5 text-xs leading-relaxed">
-                        {decisions.map((decision, index) =>
-                          decision.decision ? (
-                            <li key={index} className="text-on-surface">
-                              {decision.decision}
-                              {decision.rationale && (
-                                <span className="text-on-surface-variant">
-                                  {' '}
-                                  — {decision.rationale}
-                                </span>
-                              )}
-                              {decision.drivenBy && decision.drivenBy.length > 0 && (
-                                <span className="font-mono-code text-on-surface-variant">
-                                  {' '}
-                                  ({decision.drivenBy.join(', ')})
-                                </span>
-                              )}
-                            </li>
-                          ) : null,
-                        )}
-                      </ul>
-                    </div>
-                  )}
-
-                  {tradeoffs.length > 0 && (
-                    <div>
-                      <h4 className="text-on-surface-variant text-[11px] font-semibold tracking-wide uppercase">
-                        Trade-offs
-                      </h4>
-                      <ul className="text-on-surface-variant mt-1.5 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed">
-                        {tradeoffs.map((tradeoff, index) => (
-                          <li key={index}>{tradeoff}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </label>
-              );
-            })}
-          </div>
-        </section>
+        <ArchitectureOptions
+          options={version.options}
+          status={status}
+          selectedOptionId={selectedOptionId}
+          approvedOptionId={selectedArchitectureOptionId}
+          onSelect={setSelectedOptionId}
+        />
       )}
 
-      {/* Quality gate (FR-012) - deterministic checks, informational: they
+      {isUiRequirements && (
+        <UiRequirementsReviewLayout items={items} status={status} onEdit={setEditingItem} />
+      )}
+
+      {version.artifactType === 'backlog' ? (
+        <BacklogReviewLayout
+          items={items}
+          qualityIssues={qualityIssues}
+          status={status}
+          onEdit={setEditingItem}
+        />
+      ) : (
+        <>
+          {/* Quality gate (FR-012) - deterministic checks, informational: they
           are shown before approval but do not block it (only flagged/
           unacknowledged impact does, per FR-083). */}
-      <section
-        aria-labelledby="quality-gate-heading"
-        className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6"
-      >
-        <h2
-          id="quality-gate-heading"
-          className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase"
-        >
-          Quality gate
-        </h2>
-        {qualityIssues.length === 0 ? (
-          <p className="text-on-surface-variant mt-3 text-sm">
-            No deterministic quality issues found.
-          </p>
-        ) : (
-          <ul className="mt-3 flex flex-col gap-2">
-            {qualityIssues.map((issue, index) => {
-              const relatedItem = items.find((item) => item.logicalItemId === issue.logicalItemId);
-              return (
-                <li
-                  key={`${issue.code}-${index}`}
-                  className="border-surface-dim bg-surface-container-low flex items-start gap-2 rounded-lg border p-3"
-                >
-                  <CircleAlert
-                    className="text-tertiary mt-0.5 size-4 shrink-0"
-                    aria-hidden="true"
-                  />
-                  <div>
-                    <p className="text-on-surface text-sm leading-relaxed">{issue.message}</p>
-                    <p className="font-mono-code text-on-surface-variant mt-0.5 text-[11px]">
-                      {issue.code}
-                      {relatedItem && ` · ${relatedItem.displayKey}`}
-                    </p>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-
-      {/* Aggregate impact state - the screen-kit's 4th state ("no impact
-          found" is a success state, must not read as empty/error). */}
-      <section
-        aria-labelledby="impact-heading"
-        className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6"
-      >
-        <h2
-          id="impact-heading"
-          className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase"
-        >
-          Impact
-        </h2>
-        {flaggedItems.length === 0 ? (
-          <div className="bg-surface-container-low mt-3 flex items-start gap-2 rounded-lg p-3">
-            <CircleCheck
-              className="text-status-approved-bg mt-0.5 size-4 shrink-0"
-              aria-hidden="true"
-            />
-            <p className="text-on-surface text-sm">
-              No impact issues found. Every item in this version is current with its dependencies.
-            </p>
-          </div>
-        ) : (
-          <ul className="mt-3 flex flex-col gap-2">
-            {flaggedItems.map((item) => {
-              const impact = item.impact;
-              if (!impact) return null;
-              return (
-                <li
-                  key={item.itemVersionId}
-                  className="border-surface-dim bg-surface-container-low flex items-start gap-2 rounded-lg border p-3"
-                >
-                  {impact.acknowledged ? (
-                    <CircleCheck
-                      className="text-status-approved-bg mt-0.5 size-4 shrink-0"
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <FlaggedGlyph title={`${item.displayKey} is flagged`} className="mt-0.5" />
-                  )}
-                  <p className="text-on-surface text-sm leading-relaxed">
-                    <span className="font-mono-code font-semibold">{item.displayKey}</span> would be
-                    flagged: it depends on{' '}
-                    <span className="font-mono-code font-semibold">{impact.rootDisplayKey}</span>{' '}
-                    (see path: {impact.path.join(' → ')}).
-                    {impact.acknowledged && (
-                      <span className="text-on-surface-variant"> Acknowledged.</span>
-                    )}
-                  </p>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-
-      {isUiRequirements ? (
-        <section
-          aria-labelledby="items-heading"
-          className="border-surface-dim bg-surface-container-lowest overflow-hidden rounded-xl border"
-        >
-          <div className="bg-surface-container-low border-surface-dim flex flex-wrap items-center gap-2 border-b px-5 py-4">
-            <h2 id="items-heading" className="text-on-surface text-lg font-semibold">
-              Interface Contract Ledger
+          <section
+            aria-labelledby="quality-gate-heading"
+            className={cn(
+              'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
+              isRequirements &&
+                'lg:border-t-primary-container order-2 lg:order-none lg:col-start-2 lg:row-start-2 lg:border-t-2',
+            )}
+          >
+            {isRequirements && (
+              <p className="text-tertiary mb-1 text-[11px] font-semibold tracking-wider uppercase">
+                Automated verification
+              </p>
+            )}
+            <h2
+              id="quality-gate-heading"
+              className={cn(
+                'text-on-surface-variant text-xs font-semibold tracking-wide uppercase',
+                isRequirements && 'text-on-surface text-base tracking-normal normal-case',
+              )}
+            >
+              Quality gate
             </h2>
-            <span className="font-mono-code bg-surface-container-high text-on-surface-variant rounded-full px-2 py-0.5 text-[11px]">
-              {items.length} item{items.length === 1 ? '' : 's'}
-            </span>
-          </div>
-          {items.length === 0 ? (
-            <p className="text-on-surface-variant px-5 py-6 text-sm">
-              This version has no items yet.
-            </p>
-          ) : (
-            <div className="w-full overflow-x-auto">
-              <table className="w-full min-w-[760px] border-collapse text-left text-sm">
-                <thead className="text-on-surface-variant text-[11px] font-semibold tracking-wide uppercase">
-                  <tr className="border-surface-dim border-b">
-                    <th scope="col" className="w-24 px-5 py-3">
-                      Item ID
-                    </th>
-                    <th scope="col" className="px-4 py-3">
-                      Screen / behavior description
-                    </th>
-                    <th scope="col" className="w-36 px-4 py-3">
-                      Sourced from
-                    </th>
-                    <th scope="col" className="w-44 px-4 py-3">
-                      Target surface
-                    </th>
-                    <th scope="col" className="w-20 px-5 py-3 text-right">
-                      Edit
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
+            {isRequirements && (
+              <p className="text-on-surface-variant mt-1 text-xs leading-relaxed">
+                {qualityIssues.length} deterministic finding{qualityIssues.length === 1 ? '' : 's'}.
+                Review them before approval.
+              </p>
+            )}
+            {qualityIssues.length === 0 ? (
+              <p className="text-on-surface-variant mt-3 text-sm">
+                No deterministic quality issues found.
+              </p>
+            ) : (
+              <ul className="mt-3 flex flex-col gap-2">
+                {qualityIssues.map((issue, index) => {
+                  const relatedItem = items.find(
+                    (item) => item.logicalItemId === issue.logicalItemId,
+                  );
+                  return (
+                    <li
+                      key={`${issue.code}-${index}`}
+                      className="border-surface-dim bg-surface-container-low flex items-start gap-2 rounded-lg border p-3"
+                    >
+                      <CircleAlert
+                        className="text-tertiary mt-0.5 size-4 shrink-0"
+                        aria-hidden="true"
+                      />
+                      <div>
+                        <p className="text-on-surface text-sm leading-relaxed">{issue.message}</p>
+                        <p className="font-mono-code text-on-surface-variant mt-0.5 text-[11px]">
+                          {issue.code}
+                          {relatedItem && ` · ${relatedItem.displayKey}`}
+                        </p>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
+          {/* Aggregate impact state - the screen-kit's 4th state ("no impact
+          found" is a success state, must not read as empty/error). */}
+          <section
+            aria-labelledby="impact-heading"
+            className={cn(
+              'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
+              isRequirements && 'order-3 lg:order-none lg:col-start-2 lg:row-start-3',
+            )}
+          >
+            <h2
+              id="impact-heading"
+              className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase"
+            >
+              Impact
+            </h2>
+            {flaggedItems.length === 0 ? (
+              <div className="bg-surface-container-low mt-3 flex items-start gap-2 rounded-lg p-3">
+                <CircleCheck
+                  className="text-status-approved-bg mt-0.5 size-4 shrink-0"
+                  aria-hidden="true"
+                />
+                <p className="text-on-surface text-sm">
+                  No impact issues found. Every item in this version is current with its
+                  dependencies.
+                </p>
+              </div>
+            ) : (
+              <ul className="mt-3 flex flex-col gap-2">
+                {flaggedItems.map((item) => {
+                  const impact = item.impact;
+                  if (!impact) return null;
+                  return (
+                    <li
+                      key={item.itemVersionId}
+                      className="border-surface-dim bg-surface-container-low flex items-start gap-2 rounded-lg border p-3"
+                    >
+                      {impact.acknowledged ? (
+                        <CircleCheck
+                          className="text-status-approved-bg mt-0.5 size-4 shrink-0"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <FlaggedGlyph title={`${item.displayKey} is flagged`} className="mt-0.5" />
+                      )}
+                      <p className="text-on-surface text-sm leading-relaxed">
+                        <span className="font-mono-code font-semibold">{item.displayKey}</span>{' '}
+                        would be flagged: it depends on{' '}
+                        <span className="font-mono-code font-semibold">
+                          {impact.rootDisplayKey}
+                        </span>{' '}
+                        (see path: {impact.path.join(' → ')}).
+                        {impact.acknowledged && (
+                          <span className="text-on-surface-variant"> Acknowledged.</span>
+                        )}
+                      </p>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
+          {!isUiRequirements && (
+            <section
+              aria-labelledby="items-heading"
+              className={cn(
+                'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
+                isRequirements &&
+                  'order-1 lg:order-none lg:col-start-1 lg:row-span-2 lg:row-start-2',
+              )}
+            >
+              <h2
+                id="items-heading"
+                className={cn(
+                  'text-on-surface-variant text-xs font-semibold tracking-wide uppercase',
+                  isRequirements && 'text-tertiary',
+                )}
+              >
+                {isRequirements ? 'Specifications register' : 'Items'} ({items.length})
+              </h2>
+              {items.length === 0 ? (
+                <p className="text-on-surface-variant mt-3 text-sm">
+                  This version has no items yet.
+                </p>
+              ) : (
+                <ul className={cn('mt-3 flex flex-col gap-3', isRequirements && 'gap-4')}>
                   {items.map((item) => {
                     const fields = readKnownFields(item.payload);
+                    // Generic parent lookup (e.g. Story -> Epic, API Contracts
+                    // 1.8) - works for any item type whose `parentLogicalItemId`
+                    // resolves to another item in this same version, not just
+                    // backlog's Story/Epic pairing.
+                    const parent = item.parentLogicalItemId
+                      ? items.find(
+                          (candidate) => candidate.logicalItemId === item.parentLogicalItemId,
+                        )
+                      : undefined;
+                    // Short metadata line at the bottom of the card - every field
+                    // here is optional and artifact-type-generic (not just
+                    // backlog's or UI Requirements'), joined with a middot only
+                    // for whichever of them are actually present.
+                    const metaParts: string[] = [];
+                    const itemQualityIssues = isRequirements
+                      ? qualityIssues.filter((issue) => issue.logicalItemId === item.logicalItemId)
+                      : [];
+                    if (fields.priority) metaParts.push(`Priority: ${fields.priority}`);
+                    if (fields.sourceRefs && fields.sourceRefs.length > 0) {
+                      metaParts.push(`Depends on: ${fields.sourceRefs.join(', ')}`);
+                    }
+                    if (fields.targetUsers && fields.targetUsers.length > 0) {
+                      metaParts.push(`Target users: ${fields.targetUsers.join(', ')}`);
+                    }
+                    if (fields.screens && fields.screens.length > 0) {
+                      metaParts.push(`Screens: ${fields.screens.join(', ')}`);
+                    }
+                    if (fields.uxPriorities && fields.uxPriorities.length > 0) {
+                      metaParts.push(`UX priorities: ${fields.uxPriorities.join(', ')}`);
+                    }
                     return (
-                      <Fragment key={item.itemVersionId}>
-                        <tr className="border-surface-dim border-b align-top">
-                          <th scope="row" className="px-5 py-4 font-normal">
-                            <span className="font-mono-code bg-surface-container-low text-on-surface rounded px-2 py-1 text-xs font-semibold">
-                              {item.displayKey}
+                      <li
+                        key={item.itemVersionId}
+                        className={cn(
+                          'border-surface-dim rounded-lg border p-4',
+                          isRequirements && 'bg-surface-container-lowest p-5',
+                          isRequirements &&
+                            itemQualityIssues.length > 0 &&
+                            'border-l-primary-container border-l-4',
+                        )}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono-code border-surface-dim bg-surface-container-low text-on-surface rounded border px-1.5 py-0.5 text-[11px] font-semibold">
+                            {item.displayKey}
+                          </span>
+                          <span className="text-on-surface-variant text-[11px] tracking-wide uppercase">
+                            {fields.type ?? item.itemType}
+                            {fields.dimension && ` · ${fields.dimension}`}
+                          </span>
+                          {parent && (
+                            <span className="text-on-surface-variant text-[11px]">
+                              {formatItemType(parent.itemType)}: {parent.displayKey}
                             </span>
-                          </th>
-                          <td className="px-4 py-4">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-on-surface font-semibold">
-                                {fields.title ?? fields.behavior ?? formatItemType(item.itemType)}
+                          )}
+                          {item.impact ? (
+                            item.impact.acknowledged ? (
+                              <span className="text-on-surface-variant text-[11px]">
+                                Acknowledged
                               </span>
-                              {item.impact ? (
-                                item.impact.acknowledged ? (
-                                  <span className="text-on-surface-variant text-xs">
-                                    Acknowledged
-                                  </span>
-                                ) : (
-                                  <FlaggedGlyph title={`${item.displayKey} is flagged`} />
-                                )
-                              ) : (
-                                <span className="text-on-surface-variant text-xs">No impact</span>
-                              )}
-                            </div>
+                            ) : (
+                              <FlaggedGlyph title={`${item.displayKey} is flagged`} />
+                            )
+                          ) : (
+                            <span className="text-on-surface-variant/70 text-[11px]">
+                              No impact
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setEditingItem(item)}
+                            disabled={status !== 'draft'}
+                            title={
+                              status === 'draft' ? `Edit ${item.displayKey}` : EDIT_DISABLED_TITLE
+                            }
+                            className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary ml-auto inline-flex items-center gap-1 rounded p-1 text-[11px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <SquarePen className="size-3.5" aria-hidden="true" />
+                            <span className="sr-only">Edit {item.displayKey}</span>
+                          </button>
+                        </div>
+                        {fields.actor && (
+                          <p className="text-on-surface-variant mt-2 text-xs">
+                            <span className="font-medium">Actor:</span> {fields.actor}
+                          </p>
+                        )}
+                        {fields.behavior ? (
+                          <p
+                            className={cn(
+                              'text-on-surface mt-2 text-sm leading-relaxed',
+                              isRequirements && 'mt-3 text-base font-medium',
+                            )}
+                          >
+                            {fields.behavior}
+                          </p>
+                        ) : (
+                          <>
+                            {fields.title && (
+                              <p className="text-on-surface mt-2 text-sm leading-relaxed font-medium">
+                                {fields.title}
+                              </p>
+                            )}
                             {fields.description && (
-                              <p className="text-on-surface-variant mt-1 max-w-2xl leading-relaxed">
+                              <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
                                 {fields.description}
                               </p>
                             )}
-                          </td>
-                          <td className="px-4 py-4">
-                            {fields.sourceRefs?.length ? (
-                              <div className="flex flex-wrap gap-1">
-                                {fields.sourceRefs.map((ref) => (
-                                  <span
-                                    key={ref}
-                                    className="font-mono-code bg-surface-container-high text-on-surface rounded px-1.5 py-0.5 text-xs"
-                                  >
-                                    {ref}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : (
-                              <span className="text-on-surface-variant text-xs">None recorded</span>
+                          </>
+                        )}
+                        {fields.acceptanceCriteria && fields.acceptanceCriteria.length > 0 && (
+                          <ul
+                            className={cn(
+                              'text-on-surface-variant mt-2 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed',
+                              isRequirements && 'border-surface-dim mt-3 border-t pt-3',
                             )}
-                          </td>
-                          <td className="px-4 py-4">
-                            {fields.screens?.length ? (
-                              <ul className="flex flex-wrap gap-1">
-                                {fields.screens.map((screen) => (
-                                  <li
-                                    key={screen}
-                                    className="bg-surface-container-high text-on-surface rounded px-2 py-1 text-xs"
-                                  >
-                                    {screen}
-                                  </li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <span className="text-on-surface-variant text-xs">None recorded</span>
-                            )}
-                          </td>
-                          <td className="px-5 py-4 text-right">
-                            <button
-                              type="button"
-                              onClick={() => setEditingItem(item)}
-                              disabled={status !== 'draft'}
-                              title={
-                                status === 'draft' ? `Edit ${item.displayKey}` : EDIT_DISABLED_TITLE
-                              }
-                              aria-label={`Edit ${item.displayKey}`}
-                              className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary inline-flex size-8 items-center justify-center rounded focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              <SquarePen className="size-4" aria-hidden="true" />
-                            </button>
-                          </td>
-                        </tr>
-                        <tr className="border-surface-dim border-b last:border-b-0">
-                          <td colSpan={5} className="px-5 pb-4">
-                            <details className="group text-sm">
-                              <summary className="text-primary focus-visible:ring-primary w-fit cursor-pointer rounded text-xs font-medium focus-visible:ring-2 focus-visible:outline-none">
-                                Specification details for {item.displayKey}
-                              </summary>
-                              <dl className="bg-surface-container-low mt-3 grid gap-3 rounded-lg p-4 sm:grid-cols-2">
-                                {[
-                                  ['Target users', fields.targetUsers?.join(', ')],
-                                  ['Navigation', fields.navigationExpectations],
-                                  ['Responsive', fields.responsiveConstraints],
-                                  ['Accessibility', fields.accessibilityConstraints],
-                                  ['UX priorities', fields.uxPriorities?.join('; ')],
-                                  ['Actor', fields.actor],
-                                  ['Behavior', fields.behavior],
-                                  ['Acceptance criteria', fields.acceptanceCriteria?.join('; ')],
-                                ].map(([label, value]) =>
-                                  value ? (
-                                    <div key={label}>
-                                      <dt className="text-on-surface-variant text-xs font-semibold">
-                                        {label}
-                                      </dt>
-                                      <dd className="text-on-surface mt-0.5 leading-relaxed">
-                                        {value}
-                                      </dd>
-                                    </div>
-                                  ) : null,
-                                )}
-                              </dl>
-                            </details>
-                          </td>
-                        </tr>
-                      </Fragment>
+                          >
+                            {fields.acceptanceCriteria.map((criterion, index) => (
+                              <li key={index}>{criterion}</li>
+                            ))}
+                          </ul>
+                        )}
+                        {itemQualityIssues.length > 0 && (
+                          <div className="bg-surface-container-low mt-3 rounded-lg p-3">
+                            <p className="text-tertiary flex items-center gap-1.5 text-xs font-semibold">
+                              <CircleAlert className="size-4" aria-hidden="true" />
+                              Quality findings
+                            </p>
+                            <ul className="text-on-surface-variant mt-1.5 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed">
+                              {itemQualityIssues.map((issue, index) => (
+                                <li key={`${issue.code}-${index}`}>{issue.message}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {fields.navigationExpectations && (
+                          <p className="text-on-surface-variant mt-2 text-xs">
+                            <span className="font-medium">Navigation:</span>{' '}
+                            {fields.navigationExpectations}
+                          </p>
+                        )}
+                        {fields.responsiveConstraints && (
+                          <p className="text-on-surface-variant mt-2 text-xs">
+                            <span className="font-medium">Responsive:</span>{' '}
+                            {fields.responsiveConstraints}
+                          </p>
+                        )}
+                        {fields.accessibilityConstraints && (
+                          <p className="text-on-surface-variant mt-2 text-xs">
+                            <span className="font-medium">Accessibility:</span>{' '}
+                            {fields.accessibilityConstraints}
+                          </p>
+                        )}
+                        {metaParts.length > 0 && (
+                          <p className="text-on-surface-variant mt-2 text-xs">
+                            {metaParts.join(' · ')}
+                          </p>
+                        )}
+                      </li>
                     );
                   })}
-                </tbody>
-              </table>
-            </div>
+                </ul>
+              )}
+            </section>
           )}
-        </section>
-      ) : (
-        <section
-          aria-labelledby="items-heading"
-          className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6"
-        >
-          <h2
-            id="items-heading"
-            className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase"
-          >
-            Items ({items.length})
-          </h2>
-          {items.length === 0 ? (
-            <p className="text-on-surface-variant mt-3 text-sm">This version has no items yet.</p>
-          ) : (
-            <ul className="mt-3 flex flex-col gap-3">
-              {items.map((item) => {
-                const fields = readKnownFields(item.payload);
-                // Generic parent lookup (e.g. Story -> Epic, API Contracts
-                // 1.8) - works for any item type whose `parentLogicalItemId`
-                // resolves to another item in this same version, not just
-                // backlog's Story/Epic pairing.
-                const parent = item.parentLogicalItemId
-                  ? items.find((candidate) => candidate.logicalItemId === item.parentLogicalItemId)
-                  : undefined;
-                // Short metadata line at the bottom of the card - every field
-                // here is optional and artifact-type-generic (not just
-                // backlog's or UI Requirements'), joined with a middot only
-                // for whichever of them are actually present.
-                const metaParts: string[] = [];
-                if (fields.priority) metaParts.push(`Priority: ${fields.priority}`);
-                if (fields.sourceRefs && fields.sourceRefs.length > 0) {
-                  metaParts.push(`Depends on: ${fields.sourceRefs.join(', ')}`);
-                }
-                if (fields.targetUsers && fields.targetUsers.length > 0) {
-                  metaParts.push(`Target users: ${fields.targetUsers.join(', ')}`);
-                }
-                if (fields.screens && fields.screens.length > 0) {
-                  metaParts.push(`Screens: ${fields.screens.join(', ')}`);
-                }
-                if (fields.uxPriorities && fields.uxPriorities.length > 0) {
-                  metaParts.push(`UX priorities: ${fields.uxPriorities.join(', ')}`);
-                }
-                return (
-                  <li key={item.itemVersionId} className="border-surface-dim rounded-lg border p-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono-code border-surface-dim bg-surface-container-low text-on-surface rounded border px-1.5 py-0.5 text-[11px] font-semibold">
-                        {item.displayKey}
-                      </span>
-                      <span className="text-on-surface-variant text-[11px] tracking-wide uppercase">
-                        {fields.type ?? item.itemType}
-                        {fields.dimension && ` · ${fields.dimension}`}
-                      </span>
-                      {parent && (
-                        <span className="text-on-surface-variant text-[11px]">
-                          {formatItemType(parent.itemType)}: {parent.displayKey}
-                        </span>
-                      )}
-                      {item.impact ? (
-                        item.impact.acknowledged ? (
-                          <span className="text-on-surface-variant text-[11px]">Acknowledged</span>
-                        ) : (
-                          <FlaggedGlyph title={`${item.displayKey} is flagged`} />
-                        )
-                      ) : (
-                        <span className="text-on-surface-variant/70 text-[11px]">No impact</span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => setEditingItem(item)}
-                        disabled={status !== 'draft'}
-                        title={status === 'draft' ? `Edit ${item.displayKey}` : EDIT_DISABLED_TITLE}
-                        className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary ml-auto inline-flex items-center gap-1 rounded p-1 text-[11px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <SquarePen className="size-3.5" aria-hidden="true" />
-                        <span className="sr-only">Edit {item.displayKey}</span>
-                      </button>
-                    </div>
-                    {fields.actor && (
-                      <p className="text-on-surface-variant mt-2 text-xs">
-                        <span className="font-medium">Actor:</span> {fields.actor}
-                      </p>
-                    )}
-                    {fields.behavior ? (
-                      <p className="text-on-surface mt-2 text-sm leading-relaxed">
-                        {fields.behavior}
-                      </p>
-                    ) : (
-                      <>
-                        {fields.title && (
-                          <p className="text-on-surface mt-2 text-sm leading-relaxed font-medium">
-                            {fields.title}
-                          </p>
-                        )}
-                        {fields.description && (
-                          <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
-                            {fields.description}
-                          </p>
-                        )}
-                      </>
-                    )}
-                    {fields.acceptanceCriteria && fields.acceptanceCriteria.length > 0 && (
-                      <ul className="text-on-surface-variant mt-2 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed">
-                        {fields.acceptanceCriteria.map((criterion, index) => (
-                          <li key={index}>{criterion}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {fields.navigationExpectations && (
-                      <p className="text-on-surface-variant mt-2 text-xs">
-                        <span className="font-medium">Navigation:</span>{' '}
-                        {fields.navigationExpectations}
-                      </p>
-                    )}
-                    {fields.responsiveConstraints && (
-                      <p className="text-on-surface-variant mt-2 text-xs">
-                        <span className="font-medium">Responsive:</span>{' '}
-                        {fields.responsiveConstraints}
-                      </p>
-                    )}
-                    {fields.accessibilityConstraints && (
-                      <p className="text-on-surface-variant mt-2 text-xs">
-                        <span className="font-medium">Accessibility:</span>{' '}
-                        {fields.accessibilityConstraints}
-                      </p>
-                    )}
-                    {metaParts.length > 0 && (
-                      <p className="text-on-surface-variant mt-2 text-xs">
-                        {metaParts.join(' · ')}
-                      </p>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
+        </>
       )}
 
-      <div className="border-surface-dim bg-surface-container-lowest flex flex-wrap items-center gap-3 rounded-xl border p-6">
+      <div
+        className={cn(
+          'border-surface-dim bg-surface-container-lowest flex flex-wrap items-center gap-3 rounded-xl border p-6',
+          isRequirements && 'order-4 lg:order-none lg:col-span-2 lg:row-start-4 lg:justify-between',
+        )}
+      >
+        {isRequirements && (
+          <p className="text-on-surface-variant w-full text-xs leading-relaxed lg:w-auto lg:max-w-xs">
+            {blockingItems.length > 0
+              ? `${blockingItems.length} flagged, unacknowledged item${blockingItems.length === 1 ? '' : 's'} require${blockingItems.length === 1 ? 's' : ''} review before approval.`
+              : 'Review the specification and quality findings before approval.'}
+          </p>
+        )}
+        {version.options && (
+          <div className="min-w-0 flex-1 basis-full sm:basis-60">
+            <p className="text-on-surface text-sm font-semibold">
+              {status === 'draft'
+                ? selectedOptionId
+                  ? `Option ${version.options.find((option) => option.id === selectedOptionId)?.optionKey ?? ''} selected for review`
+                  : 'Choose one option to approve'
+                : status === 'approved'
+                  ? 'Option approved in this preview'
+                  : 'Review closed'}
+            </p>
+            <p className="text-on-surface-variant mt-1 text-xs leading-relaxed">
+              In the full approval flow, only the selected option’s candidate decisions become
+              canonical. This fixture preview keeps approval in this page only.
+            </p>
+          </div>
+        )}
         {isUiRequirements && (
-          <div className="text-on-surface-variant w-full text-xs leading-relaxed">
+          <p className="text-on-surface-variant w-full text-xs leading-relaxed">
             <span className="font-semibold">Recorded provenance:</span>{' '}
             {uiSourceRefs.size > 0
               ? Array.from(uiSourceRefs).join(', ')
               : 'No source references recorded in these item payloads.'}
-          </div>
+          </p>
         )}
         <button
           type="button"
@@ -897,7 +704,13 @@ export function ArtifactReviewScreen({
           className="bg-primary-container text-on-primary-container hover:bg-primary-container-hover focus-visible:ring-primary flex h-11 items-center gap-2 rounded-lg px-5 text-sm font-medium shadow-sm transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
         >
           {pending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
-          {status === 'approved' ? 'Approved' : pending ? 'Approving…' : 'Approve'}
+          {status === 'approved'
+            ? 'Approved'
+            : pending
+              ? 'Approving…'
+              : version.options
+                ? 'Approve selected option'
+                : 'Approve'}
         </button>
         <button
           type="button"
