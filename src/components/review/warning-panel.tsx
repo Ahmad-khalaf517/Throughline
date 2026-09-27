@@ -243,7 +243,7 @@ function WarningRow({ warning, note, onAcknowledge }: WarningRowProps) {
   }
 
   return (
-    <li className="border-surface-dim bg-surface-container-low rounded-md border p-3">
+    <li className="border-surface-dim bg-surface-container-low hover:border-outline-variant rounded-md border p-3 transition-colors">
       <div className="flex items-start gap-2">
         {warning.acknowledged ? (
           <CircleCheck

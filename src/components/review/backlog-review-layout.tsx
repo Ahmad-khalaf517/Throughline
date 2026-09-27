@@ -46,7 +46,7 @@ function BacklogItem({
 }) {
   const fields = readFields(item.payload);
   return (
-    <li className="border-surface-dim bg-surface-container-lowest rounded-lg border p-4 shadow-sm">
+    <li className="border-surface-dim bg-surface-container-lowest hover:border-outline-variant rounded-lg border p-4 shadow-sm transition-colors">
       <div className="flex flex-wrap items-start gap-2">
         <span className="font-mono-code bg-surface-container-low text-on-surface rounded px-2 py-0.5 text-xs font-semibold">
           {item.displayKey}
