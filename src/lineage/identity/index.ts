@@ -9,6 +9,13 @@ export {
 } from './references';
 export { copyMembership } from './copy-membership';
 export {
+  listProjectItemCreations,
+  countVersionItems,
+  getProjectItemVersionDetail,
+  type ProjectItemCreation,
+  type ProjectItemVersionDetail,
+} from './dashboard';
+export {
   rebindDraftItem,
   ItemEditError,
   type RebindDiff,
