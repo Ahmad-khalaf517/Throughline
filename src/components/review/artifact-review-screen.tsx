@@ -218,6 +218,7 @@ export function ArtifactReviewScreen({
   // other artifact type (requirements/ui_requirements/backlog), so this is
   // always `false` there and the rest of this gate is a no-op.
   const requiresOptionSelection = version.options !== null;
+  const isRequirements = version.artifactType === 'requirements';
 
   function handleApproveClick() {
     if (status !== 'draft' || pending) return;
@@ -266,12 +267,34 @@ export function ArtifactReviewScreen({
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <header className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
+    <div
+      className={cn(
+        'flex flex-col gap-6',
+        isRequirements && 'lg:grid lg:grid-cols-[minmax(0,2fr)_minmax(17rem,1fr)] lg:items-start',
+      )}
+    >
+      <header
+        className={cn(
+          'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
+          isRequirements && 'px-5 py-4 sm:px-6 lg:col-span-2',
+        )}
+      >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h1 className="text-on-surface text-display-sm font-semibold">{artifactTypeName}</h1>
-            <p className="text-on-surface-variant mt-1 text-sm">Version {version.versionNumber}</p>
+            {isRequirements && (
+              <p className="text-tertiary mb-1 text-[11px] font-semibold tracking-wider uppercase">
+                Specifications audit
+              </p>
+            )}
+            <h1 className="text-on-surface text-display-sm font-semibold">
+              {artifactTypeName}
+              {isRequirements && ` v${version.versionNumber}`}
+            </h1>
+            {!isRequirements && (
+              <p className="text-on-surface-variant mt-1 text-sm">
+                Version {version.versionNumber}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <StatusBadge status={status} />
@@ -436,14 +459,32 @@ export function ArtifactReviewScreen({
           unacknowledged impact does, per FR-083). */}
       <section
         aria-labelledby="quality-gate-heading"
-        className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6"
+        className={cn(
+          'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
+          isRequirements &&
+            'lg:border-t-primary-container order-2 lg:order-none lg:col-start-2 lg:row-start-2 lg:border-t-2',
+        )}
       >
+        {isRequirements && (
+          <p className="text-tertiary mb-1 text-[11px] font-semibold tracking-wider uppercase">
+            Automated verification
+          </p>
+        )}
         <h2
           id="quality-gate-heading"
-          className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase"
+          className={cn(
+            'text-on-surface-variant text-xs font-semibold tracking-wide uppercase',
+            isRequirements && 'text-on-surface text-base tracking-normal normal-case',
+          )}
         >
           Quality gate
         </h2>
+        {isRequirements && (
+          <p className="text-on-surface-variant mt-1 text-xs leading-relaxed">
+            {qualityIssues.length} deterministic finding{qualityIssues.length === 1 ? '' : 's'}.
+            Review them before approval.
+          </p>
+        )}
         {qualityIssues.length === 0 ? (
           <p className="text-on-surface-variant mt-3 text-sm">
             No deterministic quality issues found.
@@ -479,7 +520,10 @@ export function ArtifactReviewScreen({
           found" is a success state, must not read as empty/error). */}
       <section
         aria-labelledby="impact-heading"
-        className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6"
+        className={cn(
+          'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
+          isRequirements && 'order-3 lg:order-none lg:col-start-2 lg:row-start-3',
+        )}
       >
         <h2
           id="impact-heading"
@@ -533,18 +577,24 @@ export function ArtifactReviewScreen({
 
       <section
         aria-labelledby="items-heading"
-        className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6"
+        className={cn(
+          'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
+          isRequirements && 'order-1 lg:order-none lg:col-start-1 lg:row-span-2 lg:row-start-2',
+        )}
       >
         <h2
           id="items-heading"
-          className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase"
+          className={cn(
+            'text-on-surface-variant text-xs font-semibold tracking-wide uppercase',
+            isRequirements && 'text-tertiary',
+          )}
         >
-          Items ({items.length})
+          {isRequirements ? 'Specifications register' : 'Items'} ({items.length})
         </h2>
         {items.length === 0 ? (
           <p className="text-on-surface-variant mt-3 text-sm">This version has no items yet.</p>
         ) : (
-          <ul className="mt-3 flex flex-col gap-3">
+          <ul className={cn('mt-3 flex flex-col gap-3', isRequirements && 'gap-4')}>
             {items.map((item) => {
               const fields = readKnownFields(item.payload);
               // Generic parent lookup (e.g. Story -> Epic, API Contracts
@@ -559,6 +609,9 @@ export function ArtifactReviewScreen({
               // backlog's or UI Requirements'), joined with a middot only
               // for whichever of them are actually present.
               const metaParts: string[] = [];
+              const itemQualityIssues = isRequirements
+                ? qualityIssues.filter((issue) => issue.logicalItemId === item.logicalItemId)
+                : [];
               if (fields.priority) metaParts.push(`Priority: ${fields.priority}`);
               if (fields.sourceRefs && fields.sourceRefs.length > 0) {
                 metaParts.push(`Depends on: ${fields.sourceRefs.join(', ')}`);
@@ -573,7 +626,16 @@ export function ArtifactReviewScreen({
                 metaParts.push(`UX priorities: ${fields.uxPriorities.join(', ')}`);
               }
               return (
-                <li key={item.itemVersionId} className="border-surface-dim rounded-lg border p-4">
+                <li
+                  key={item.itemVersionId}
+                  className={cn(
+                    'border-surface-dim rounded-lg border p-4',
+                    isRequirements && 'bg-surface-container-lowest p-5',
+                    isRequirements &&
+                      itemQualityIssues.length > 0 &&
+                      'border-l-primary-container border-l-4',
+                  )}
+                >
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono-code border-surface-dim bg-surface-container-low text-on-surface rounded border px-1.5 py-0.5 text-[11px] font-semibold">
                       {item.displayKey}
@@ -613,7 +675,12 @@ export function ArtifactReviewScreen({
                     </p>
                   )}
                   {fields.behavior ? (
-                    <p className="text-on-surface mt-2 text-sm leading-relaxed">
+                    <p
+                      className={cn(
+                        'text-on-surface mt-2 text-sm leading-relaxed',
+                        isRequirements && 'mt-3 text-base font-medium',
+                      )}
+                    >
                       {fields.behavior}
                     </p>
                   ) : (
@@ -631,11 +698,29 @@ export function ArtifactReviewScreen({
                     </>
                   )}
                   {fields.acceptanceCriteria && fields.acceptanceCriteria.length > 0 && (
-                    <ul className="text-on-surface-variant mt-2 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed">
+                    <ul
+                      className={cn(
+                        'text-on-surface-variant mt-2 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed',
+                        isRequirements && 'border-surface-dim mt-3 border-t pt-3',
+                      )}
+                    >
                       {fields.acceptanceCriteria.map((criterion, index) => (
                         <li key={index}>{criterion}</li>
                       ))}
                     </ul>
+                  )}
+                  {itemQualityIssues.length > 0 && (
+                    <div className="bg-surface-container-low mt-3 rounded-lg p-3">
+                      <p className="text-tertiary flex items-center gap-1.5 text-xs font-semibold">
+                        <CircleAlert className="size-4" aria-hidden="true" />
+                        Quality findings
+                      </p>
+                      <ul className="text-on-surface-variant mt-1.5 flex list-disc flex-col gap-1 pl-4 text-xs leading-relaxed">
+                        {itemQualityIssues.map((issue, index) => (
+                          <li key={`${issue.code}-${index}`}>{issue.message}</li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
                   {fields.navigationExpectations && (
                     <p className="text-on-surface-variant mt-2 text-xs">
@@ -665,7 +750,19 @@ export function ArtifactReviewScreen({
         )}
       </section>
 
-      <div className="border-surface-dim bg-surface-container-lowest flex flex-wrap items-center gap-3 rounded-xl border p-6">
+      <div
+        className={cn(
+          'border-surface-dim bg-surface-container-lowest flex flex-wrap items-center gap-3 rounded-xl border p-6',
+          isRequirements && 'order-4 lg:order-none lg:col-span-2 lg:row-start-4 lg:justify-between',
+        )}
+      >
+        {isRequirements && (
+          <p className="text-on-surface-variant w-full text-xs leading-relaxed lg:w-auto lg:max-w-xs">
+            {blockingItems.length > 0
+              ? `${blockingItems.length} flagged, unacknowledged item${blockingItems.length === 1 ? '' : 's'} require${blockingItems.length === 1 ? 's' : ''} review before approval.`
+              : 'Review the specification and quality findings before approval.'}
+          </p>
+        )}
         <button
           type="button"
           onClick={handleApproveClick}
