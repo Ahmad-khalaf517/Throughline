@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
+import { sql as drizzleSql } from 'drizzle-orm';
 import type postgres from 'postgres';
+import type { OptionInput } from '@/architecture-materialization';
 import { connect } from './support/connection';
 import * as fx from './support/fixtures';
 import { asAnon } from './support/roles';
@@ -182,6 +184,21 @@ let jiraExportRoute: typeof import('@/app/api/projects/[projectId]/jira/export/r
 let jiraPreviewRoute: typeof import('@/app/api/projects/[projectId]/jira/preview/route').GET;
 let externalRefsRoute: typeof import('@/app/api/projects/[projectId]/external-refs/route').GET;
 
+// E3-T1 additions: the artifact-lifecycle workflow-transition routes (E3-S10/
+// E3-S11) T6-T10/T22-T24/T30/T40 below drive for real, plus `architecture`
+// (for `createOptions` - building an Architecture draft's two options has no
+// route of its own, generation is the only writer and that path is blocked by
+// the `@/ai-client` mock above, so this is setup, same status as the `fx.*`
+// fixtures) and `dbModule` (for `withProjectLock` - T10's own external-hold
+// probe, same technique tests/integration/db-lock.test.ts uses to force real
+// lock contention rather than trust Node's scheduling).
+let architecture: typeof import('@/artifact-types/architecture');
+let dbModule: typeof import('@/db');
+let reviseRoute: typeof import('@/app/api/projects/[projectId]/artifacts/[type]/revise/route').POST;
+let approveRoute: typeof import('@/app/api/artifact-versions/[versionId]/approve/route').POST;
+let itemEditPreviewRoute: typeof import('@/app/api/artifact-versions/[versionId]/items/[logicalItemId]/edit/preview/route').POST;
+let commitItemEditRoute: typeof import('@/app/api/artifact-versions/[versionId]/items/[logicalItemId]/route').PUT;
+
 // E4-T3 provider config constants - same shape as
 // tests/integration/external/github.test.ts / jira.test.ts's own constants,
 // duplicated here rather than imported (this file's own "every file builds
@@ -233,6 +250,16 @@ beforeAll(async () => {
   jiraExportRoute = (await import('@/app/api/projects/[projectId]/jira/export/route')).POST;
   jiraPreviewRoute = (await import('@/app/api/projects/[projectId]/jira/preview/route')).GET;
   externalRefsRoute = (await import('@/app/api/projects/[projectId]/external-refs/route')).GET;
+  architecture = await import('@/artifact-types/architecture');
+  dbModule = await import('@/db');
+  reviseRoute = (await import('@/app/api/projects/[projectId]/artifacts/[type]/revise/route')).POST;
+  approveRoute = (await import('@/app/api/artifact-versions/[versionId]/approve/route')).POST;
+  itemEditPreviewRoute = (
+    await import('@/app/api/artifact-versions/[versionId]/items/[logicalItemId]/edit/preview/route')
+  ).POST;
+  commitItemEditRoute = (
+    await import('@/app/api/artifact-versions/[versionId]/items/[logicalItemId]/route')
+  ).PUT;
 });
 
 afterAll(async () => {
@@ -449,6 +476,137 @@ function getRequest(url: string): Request {
 
 function routeParams(projectId: string): { params: Promise<{ projectId: string }> } {
   return { params: Promise.resolve({ projectId }) };
+}
+
+// --- E3-T1 additions: request/params builders for the version-scoped routes ---
+
+function versionRouteParams(versionId: string): { params: Promise<{ versionId: string }> } {
+  return { params: Promise.resolve({ versionId }) };
+}
+
+function artifactTypeRouteParams(
+  projectId: string,
+  type: string,
+): { params: Promise<{ projectId: string; type: string }> } {
+  return { params: Promise.resolve({ projectId, type }) };
+}
+
+function itemRouteParams(
+  versionId: string,
+  logicalItemId: string,
+): { params: Promise<{ versionId: string; logicalItemId: string }> } {
+  return { params: Promise.resolve({ versionId, logicalItemId }) };
+}
+
+function putJsonRequest(url: string, body: unknown): Request {
+  return new Request(url, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+function approveUrl(versionId: string): string {
+  return `http://localhost/api/artifact-versions/${versionId}/approve`;
+}
+
+// --- E3-T1 additions: Architecture draft/option builders for T8/T9/T30 -----
+//
+// Building an Architecture draft's two options has no route of its own -
+// generation is the only writer (architecture.generate -> createOptions,
+// composed by the real POST .../generate route) and that path is blocked by
+// the file-wide `@/ai-client` mock (T43's own reasoning, restated at the top
+// of this file) - so a raw insert here (base_approved_version_id +
+// generation_context_ref, same shape tests/integration/
+// architecture-materialization.test.ts's own `draft()` helper builds) plus the
+// REAL `architecture.createOptions` module call (not a raw architecture_option
+// insert - createOptions is the real production write path, only its HTTP
+// front door is unreachable under this file's mock) is the setup; approval
+// itself - what T8/T9/T30 actually test - always goes through the real
+// `POST .../approve` route below.
+async function createArchitectureDraftVersion(
+  artifactId: string,
+  versionNumber: number,
+  opts: { baseVersionId?: string | null; sourceVersionIds?: string[] } = {},
+): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    INSERT INTO artifact_version
+      (artifact_id, version_number, status, schema_version, payload, base_approved_version_id)
+    VALUES (${artifactId}, ${versionNumber}, 'draft', 1, '{}', ${opts.baseVersionId ?? null})
+    RETURNING id
+  `;
+  const id = row!.id;
+  for (const sourceVersionId of opts.sourceVersionIds ?? []) {
+    await sql`
+      INSERT INTO generation_context_ref (target_artifact_version_id, source_artifact_version_id)
+      VALUES (${id}, ${sourceVersionId})
+    `;
+  }
+  return id;
+}
+
+function architectureOptionInput(
+  decisions: { previousDisplayKey?: string | null; title: string; upstreamRefs?: string[] }[],
+  stack: Record<string, unknown> = { database: 'postgres', frontend: 'react' },
+): OptionInput {
+  return {
+    title: 'Architecture',
+    summary: 'Project-specific approach',
+    stack,
+    tradeoffs: [{ factor: 'deadline', assessment: 'Use the existing team skills' }],
+    candidateDecisions: decisions.map((d) => ({
+      previousDisplayKey: d.previousDisplayKey ?? null,
+      title: d.title,
+      decision: d.title,
+      technologyOrApproach: 'implementation',
+      constraints: [],
+      significantTradeoffs: [],
+      upstreamRefs: d.upstreamRefs ?? [],
+    })),
+  };
+}
+
+// --- E3-T1 addition: Backlog Story generation for T6/T40 -------------------
+//
+// Same technique as `generateRequirements` above (a deterministic in-process
+// fake `generate` through the real `createDraftFromGeneration`), for a Story
+// depending on a given Requirements version's own current members -
+// `upstreamRefs` are resolved by `identity.matchAndPersistItems`/`dependency-
+// binding.bindUpstreamRefs` against `contextSourceVersionIds`' real membership,
+// not a raw `fx.createSemanticDependency` edge - this is the real generation
+// mechanism T6's own scenario is about ("Backlog draft generated from
+// Requirements v2").
+async function generateBacklogStory(
+  projectId: string,
+  backlogArtifactId: string,
+  userId: string,
+  contextSourceVersionIds: string[],
+  candidates: {
+    previousDisplayKey?: string | null;
+    payload: Record<string, unknown>;
+    upstreamRefs: string[];
+  }[],
+): Promise<{ versionId: string; stale: boolean }> {
+  const result = await lifecycle.createDraftFromGeneration({
+    projectId,
+    artifactId: backlogArtifactId,
+    itemType: 'story',
+    contextSourceVersionIds,
+    actorUserId: userId,
+    generate: async () => {
+      const runId = await fx.createAiGenerationRun(sql, { projectId });
+      return {
+        payload: { modelNote: 'appendix-c T6/T40 fixture' },
+        candidates: candidates.map((c) => ({
+          previousDisplayKey: c.previousDisplayKey ?? null,
+          payload: c.payload,
+          upstreamRefs: c.upstreamRefs,
+        })),
+        runId,
+      };
+    },
+  });
+  return { versionId: result.version.id, stale: result.stale };
 }
 
 // ---------------------------------------------------------------------------
@@ -1431,42 +1589,614 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // note rejected by CHECK; override with a note approves, writes
   // acknowledgements + overrode_stale_check; regenerate passes without
   // override.
-  // Turns green with E3-T1 (approval/architecture/generation gate - needs
-  // approveVersion, which doesn't exist yet).
-  it.todo('T6');
+  // E3-T1: real, driven through the real POST .../approve route (E3-S10/
+  // E3-S11) - Requirements' own v1/v2/v3 setup stays on the raw-SQL
+  // `approveSupersedingCurrent` helper (it isn't itself under test here); the
+  // Backlog draft's approval - blocked, then blank-override-rejected, then
+  // overridden, then a clean regeneration - is what this test proves, and it
+  // goes through the real route every time.
+  describe('T6 - Backlog draft generated from Requirements v2; Requirements v3 changes R-07 before approval', () => {
+    it('approval is blocked with the blocking rows; a blank override note is rejected; a real note approves and records the override; a clean regeneration then approves without one', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+        name: 'appendix-c: T6',
+      });
+      mockAuthAsOwner(userId);
+      const requirementsArtifactId = await fx.createArtifact(sql, projectId, 'requirements');
+      const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
+
+      const rPayload = {
+        type: 'functional',
+        actor: 'Analyst',
+        behavior: 'View the quarterly report',
+        constraints: [],
+        acceptanceCriteria: ['Report renders within 2s'],
+        dimension: null,
+        value: null,
+      };
+      const v1 = await generateRequirements(projectId, requirementsArtifactId, userId, [
+        { payload: rPayload },
+      ]);
+      await fx.approveArtifactVersion(sql, v1.versionId);
+      const [r] = await currentMembership(requirementsArtifactId, v1.versionId);
+      if (!r) throw new Error('R-07 membership missing after v1 approval');
+
+      // Requirements v2 (D) - the Backlog draft below is generated FROM this
+      // version, per the ERD's own wording.
+      const v2 = await generateRequirements(projectId, requirementsArtifactId, userId, [
+        {
+          previousDisplayKey: r.display_key,
+          payload: { ...rPayload, behavior: 'View the quarterly report, v2 text' },
+        },
+      ]);
+      await approveSupersedingCurrent(requirementsArtifactId, v2.versionId);
+      const [rD] = await currentMembership(requirementsArtifactId, v2.versionId);
+      if (!rD) throw new Error('R-07@D membership missing');
+
+      // Backlog draft generated from Requirements v2 - a Story depending on
+      // R-07@D, through real generation (identity.matchAndPersistItems binds
+      // the edge), not a raw fixture dependency.
+      const storyPayload = { title: 'Story depending on R-07' };
+      const backlogDraft = await generateBacklogStory(
+        projectId,
+        backlogArtifactId,
+        userId,
+        [v2.versionId],
+        [{ payload: storyPayload, upstreamRefs: [rD.display_key] }],
+      );
+      expect(backlogDraft.stale).toBe(false);
+      const [story] = await currentMembership(backlogArtifactId, backlogDraft.versionId);
+      if (!story) throw new Error('Story membership missing from the Backlog draft');
+
+      // Requirements v3 (F) - R-07 changes AGAIN, before the Backlog draft
+      // above is ever approved.
+      const v3 = await generateRequirements(projectId, requirementsArtifactId, userId, [
+        {
+          previousDisplayKey: r.display_key,
+          payload: { ...rPayload, behavior: 'View the quarterly report, v3 text' },
+        },
+      ]);
+      await approveSupersedingCurrent(requirementsArtifactId, v3.versionId);
+
+      // Approve the (now stale-dependent) Backlog draft through the real
+      // route - blocked with the blocking rows.
+      const blockedResponse = await approveRoute(
+        jsonRequest(approveUrl(backlogDraft.versionId), {}),
+        versionRouteParams(backlogDraft.versionId),
+      );
+      expect(blockedResponse.status).toBe(409);
+      const blockedBody = await blockedResponse.json();
+      expect(blockedBody.error.code).toBe('APPROVAL_BLOCKED');
+      expect(blockedBody.error.details.blocking).toContainEqual(
+        expect.objectContaining({
+          subjectId: story.item_version_id,
+          rootDisplayKey: r.display_key,
+        }),
+      );
+
+      // Override without a note (blank/whitespace): the route's own zod
+      // validation (approveSchema.overrideNote's refine) rejects it before
+      // the DB CHECK (approval_event_override_requires_note) is ever reached
+      // - the CHECK is only the backstop, so a 400 here is the right
+      // assertion, not a 500 or a DB-level error.
+      const blankOverride = await approveRoute(
+        jsonRequest(approveUrl(backlogDraft.versionId), { overrideNote: '   ' }),
+        versionRouteParams(backlogDraft.versionId),
+      );
+      expect(blankOverride.status).toBe(400);
+      expect((await blankOverride.json()).error.code).toBe('VALIDATION_ERROR');
+
+      // Override with a real note - approves.
+      const overriddenResponse = await approveRoute(
+        jsonRequest(approveUrl(backlogDraft.versionId), {
+          overrideNote: 'Reviewed, text is still accurate',
+        }),
+        versionRouteParams(backlogDraft.versionId),
+      );
+      expect(overriddenResponse.status).toBe(200);
+
+      const events = await sql<
+        { action: string; overrode_stale_check: boolean; feedback: string | null }[]
+      >`
+        SELECT action, overrode_stale_check, feedback FROM approval_event
+        WHERE artifact_version_id = ${backlogDraft.versionId}
+      `;
+      expect(events).toContainEqual({
+        action: 'approved',
+        overrode_stale_check: true,
+        feedback: 'Reviewed, text is still accurate',
+      });
+
+      const acks = await sql<{ id: string }[]>`
+        SELECT id FROM impact_acknowledgement
+        WHERE subject_item_version_id = ${story.item_version_id}
+          AND obsolete_upstream_item_version_id = ${rD.item_version_id}
+      `;
+      expect(acks.length).toBeGreaterThanOrEqual(1);
+
+      // Regenerate: a fresh Backlog draft with the Story's dependency
+      // rebuilt against the NEW current R-07 (F) - passes without an
+      // override.
+      const regenerated = await generateBacklogStory(
+        projectId,
+        backlogArtifactId,
+        userId,
+        [v3.versionId],
+        [
+          {
+            previousDisplayKey: story.display_key,
+            payload: storyPayload,
+            upstreamRefs: [r.display_key],
+          },
+        ],
+      );
+      expect(regenerated.stale).toBe(false);
+      const [restory] = await currentMembership(backlogArtifactId, regenerated.versionId);
+      expect(restory?.item_version_id).not.toBe(story.item_version_id); // a real new revision (INV-016's hash change)
+
+      const cleanResponse = await approveRoute(
+        jsonRequest(approveUrl(regenerated.versionId), {}),
+        versionRouteParams(regenerated.versionId),
+      );
+      expect(cleanResponse.status).toBe(200);
+    });
+  });
 
   // T7 - Context changes while generation is in flight.
   // Expected: persisted as rejected / stale_generation_context, no items
   // minted, tokens still recorded.
-  // Turns green with E3-T1. (The pre-approval half of this scenario - that
-  // a stale-context result never mints items - is exercisable once
-  // generation persistence lands at E2-S9, but E3-T1 is where the Jira
-  // Plan's own citation places it, so that's what this stub cites; not
-  // splitting it into two tests to avoid inventing scope.)
-  it.todo('T7');
+  // NOT drivable through the real POST .../generate ROUTE: `generate()` (the
+  // route's dispatch -> the type module's own `generate` -> `ai-client.
+  // generateStructured`, mocked to throw at the top of this file for T43's
+  // sake) always runs BEFORE `createDraftFromGeneration` ever opens the
+  // persist transaction or re-checks `baseVersionId` (src/artifact-lifecycle/
+  // generation.ts's own doc comment: "Step 3 (LLM call): outside any
+  // transaction... Left uncaught on purpose") - the mocked throw always fires
+  // first, so the route genuinely cannot reach the stale path while that mock
+  // is active. Exercised instead at the same layer
+  // tests/integration/artifact-lifecycle-generation.test.ts's own "T7: stale
+  // (base_changed)..." test already covers (a direct
+  // `lifecycle.createDraftFromGeneration` call with a deterministic fake
+  // `generate`, including its own `rawOutput` shape assertion, line ~241 of
+  // that file) - reproduced here (this file cites T7 in its own right, per
+  // the Jira Plan's E3-T1 row) with the one assertion that file's test does
+  // not make: the `ai_generation_run` row's own tokens survive the
+  // rejection.
+  it('T7: a race that changes the artifact base mid-flight persists as rejected/stale_generation_context - no items minted, tokens still recorded', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T7' });
+    const uiRequirementsArtifactId = await fx.createArtifact(sql, projectId, 'ui_requirements');
+    const firstDraftId = await fx.createDraftArtifactVersion(sql, uiRequirementsArtifactId, {
+      versionNumber: 1,
+    });
+    await fx.approveArtifactVersion(sql, firstDraftId);
+
+    let capturedRunId = '';
+    const rawCandidates = [
+      {
+        payload: {
+          screenOrFlow: 'Dashboard',
+          interactionRequirement: 'View metrics',
+          responsiveConstraints: [],
+          accessibilityConstraints: [],
+        },
+        upstreamRefs: [] as string[],
+      },
+    ];
+    const result = await lifecycle.createDraftFromGeneration({
+      projectId,
+      artifactId: uiRequirementsArtifactId,
+      itemType: 'ui_requirement',
+      contextSourceVersionIds: [],
+      actorUserId: userId,
+      generate: async () => {
+        // Simulate a concurrent regeneration-and-approval landing between
+        // this function's base capture (already done, before `generate()`
+        // was called) and its persist transaction (about to open) - ERD 3.3
+        // step 4/5.
+        const secondDraftId = await fx.createDraftArtifactVersion(sql, uiRequirementsArtifactId, {
+          versionNumber: 2,
+        });
+        await sql.begin(async (tx) => {
+          await tx`UPDATE artifact_version SET status = 'superseded' WHERE id = ${firstDraftId}`;
+          await fx.approveArtifactVersion(tx, secondDraftId);
+        });
+        capturedRunId = await fx.createAiGenerationRun(sql, { projectId });
+        // A real `generateStructured` call records token usage on the SAME
+        // row before this function returns (`ai-client` owns
+        // `ai_generation_run`) - simulated here via a direct UPDATE since the
+        // fixture helper has no token fields of its own.
+        await sql`
+          UPDATE ai_generation_run SET input_tokens = 543, output_tokens = 210
+          WHERE id = ${capturedRunId}
+        `;
+        return {
+          payload: { modelNote: 'T7 in-flight race' },
+          candidates: rawCandidates,
+          runId: capturedRunId,
+        };
+      },
+    });
+
+    expect(result.stale).toBe(true);
+    if (!result.stale) throw new Error('unreachable');
+    expect(result.reason).toBe('base_changed');
+
+    const row = await sql<
+      { status: string; status_reason: string | null; raw_output: unknown; payload: unknown }[]
+    >`
+      SELECT status, status_reason, raw_output, payload FROM artifact_version WHERE id = ${result.version.id}
+    `;
+    expect(row[0]?.status).toBe('rejected');
+    expect(row[0]?.status_reason).toBe('stale_generation_context');
+    expect(row[0]?.raw_output).toEqual({
+      payload: { modelNote: 'T7 in-flight race' },
+      candidates: rawCandidates,
+    });
+    expect(row[0]?.payload).toEqual({});
+
+    const items = await sql<{ id: string }[]>`
+      SELECT id FROM logical_item WHERE artifact_id = ${uiRequirementsArtifactId}
+    `;
+    expect(items).toHaveLength(0); // no items minted
+
+    const runRow = await sql<
+      {
+        artifact_version_id: string | null;
+        input_tokens: number | null;
+        output_tokens: number | null;
+      }[]
+    >`
+      SELECT artifact_version_id, input_tokens, output_tokens FROM ai_generation_run WHERE id = ${capturedRunId}
+    `;
+    expect(runRow[0]?.artifact_version_id).toBe(result.version.id);
+    expect(runRow[0]?.input_tokens).toBe(543); // tokens still recorded
+    expect(runRow[0]?.output_tokens).toBe(210);
+  });
 
   // T8 - Architecture v3 approval: ADR-01/02 unchanged, ADR-03 changed,
   // ADR-04 dropped.
   // Expected: ADR-01/02 reuse ItemVersions; ADR-03 gets a new revision
   // under the same LogicalItem; ADR-04 removed and its downstream flagged;
   // no ADR-05..08 minted.
-  // Turns green with E3-T1 (needs approveVersion/materialize).
-  it.todo('T8');
+  // E3-T1: real. Building the two drafts' OWN options has no route of its
+  // own (generation is the only writer, and that path is blocked by the
+  // file-wide `@/ai-client` mock) - `architecture.createOptions` (the real
+  // module call, same technique tests/integration/
+  // architecture-materialization.test.ts's own T8/T9 test uses) is the setup;
+  // both approvals - what this test actually proves - go through the real
+  // `POST .../approve` route.
+  it('T8: Architecture v3 approval reuses ADR-01/02 verbatim, revises ADR-03, removes ADR-04 (flagging its downstream), and mints no ADR-05..08', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T8' });
+    mockAuthAsOwner(userId);
+    const requirementsArtifactId = await fx.createArtifact(sql, projectId, 'requirements');
+    const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+    const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
+
+    const r01Payload = {
+      type: 'functional',
+      actor: 'Analyst',
+      behavior: 'View the quarterly report',
+      constraints: [],
+      acceptanceCriteria: ['Report renders within 2s'],
+      dimension: null,
+      value: null,
+    };
+    const rV1 = await generateRequirements(projectId, requirementsArtifactId, userId, [
+      { payload: r01Payload },
+    ]);
+    await fx.approveArtifactVersion(sql, rV1.versionId);
+    const [r01] = await currentMembership(requirementsArtifactId, rV1.versionId);
+    if (!r01) throw new Error('R-01 membership missing');
+
+    // Architecture v1: two options, the selected one with 4 ADRs, all
+    // depending on R-01.
+    const v1 = await createArchitectureDraftVersion(architectureArtifactId, 1, {
+      sourceVersionIds: [rV1.versionId],
+    });
+    const [optionA] = await architecture.createOptions(v1, [
+      architectureOptionInput([
+        { title: 'one', upstreamRefs: [r01.display_key] },
+        { title: 'two', upstreamRefs: [r01.display_key] },
+        { title: 'three', upstreamRefs: [r01.display_key] },
+        { title: 'four', upstreamRefs: [r01.display_key] },
+      ]),
+      architectureOptionInput([{ title: 'unused' }]),
+    ]);
+    const approveV1 = await approveRoute(
+      jsonRequest(approveUrl(v1), { selectedArchitectureOptionId: optionA!.id }),
+      versionRouteParams(v1),
+    );
+    expect(approveV1.status).toBe(200);
+    const baseAdrs = await currentMembership(architectureArtifactId, v1);
+    expect(baseAdrs.map((a) => a.display_key)).toEqual(['ADR-01', 'ADR-02', 'ADR-03', 'ADR-04']);
+    const [adr01, adr02, adr03, adr04] = baseAdrs;
+
+    // Downstream Backlog Story depends on ADR-04.
+    const story = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: backlogArtifactId,
+      itemType: 'story',
+    });
+    await fx.createSemanticDependency(sql, {
+      projectId,
+      downstreamItemVersionId: story.itemVersionId,
+      upstreamItemVersionId: adr04!.item_version_id,
+    });
+    await approveItemsVersion(backlogArtifactId, [
+      { logicalItemId: story.logicalItemId, itemVersionId: story.itemVersionId },
+    ]);
+
+    // Architecture v2: ADR-01/02 verbatim (reuse), ADR-03 changed, ADR-04
+    // omitted entirely.
+    const v2 = await createArchitectureDraftVersion(architectureArtifactId, 2, {
+      baseVersionId: v1,
+      sourceVersionIds: [rV1.versionId],
+    });
+    const [, selected] = await architecture.createOptions(v2, [
+      architectureOptionInput([{ title: 'unused v2' }]),
+      architectureOptionInput([
+        { previousDisplayKey: 'ADR-01', title: 'one', upstreamRefs: [r01.display_key] },
+        { previousDisplayKey: 'ADR-02', title: 'two', upstreamRefs: [r01.display_key] },
+        {
+          previousDisplayKey: 'ADR-03',
+          title: 'three CHANGED',
+          upstreamRefs: [r01.display_key],
+        },
+      ]),
+    ]);
+    const approveV2 = await approveRoute(
+      jsonRequest(approveUrl(v2), { selectedArchitectureOptionId: selected!.id }),
+      versionRouteParams(v2),
+    );
+    expect(approveV2.status).toBe(200);
+
+    const v2Adrs = await currentMembership(architectureArtifactId, v2);
+    expect(v2Adrs).toHaveLength(3); // ADR-04 removed, no ADR-05..08 minted
+    const v2Adr01 = v2Adrs.find((a) => a.logical_item_id === adr01!.logical_item_id);
+    const v2Adr02 = v2Adrs.find((a) => a.logical_item_id === adr02!.logical_item_id);
+    const v2Adr03 = v2Adrs.find((a) => a.logical_item_id === adr03!.logical_item_id);
+    expect(v2Adr01?.item_version_id).toBe(adr01!.item_version_id); // reused verbatim
+    expect(v2Adr02?.item_version_id).toBe(adr02!.item_version_id); // reused verbatim
+    expect(v2Adr03?.item_version_id).not.toBe(adr03!.item_version_id); // new revision, same LogicalItem
+    expect(v2Adrs.some((a) => a.logical_item_id === adr04!.logical_item_id)).toBe(false); // removed
+
+    const adrCount = await sql<{ count: string }[]>`
+      SELECT count(*)::int AS count FROM logical_item
+      WHERE artifact_id = ${architectureArtifactId} AND item_type = 'architecture_decision'
+    `;
+    expect(Number(adrCount[0]!.count)).toBe(4); // no ADR-05..08 minted
+
+    const warnings = await impact.getWarnings(projectId);
+    expect(warnings.find((w) => w.subjectId === story.itemVersionId)).toMatchObject({
+      rootItemVersionId: adr04!.item_version_id,
+    });
+  });
 
   // T9 - Select an option from another version; approve Architecture with
   // no selection; approve with 1 or 3 options.
   // Expected: all rejected by FK / guard trigger. Unselected option's ADRs
   // do not exist to be referenced.
-  // Turns green with E3-T1.
-  it.todo('T9');
+  // E3-T1: (a)/(b) real, through the real POST .../approve route. (c) is a
+  // deliberate, explained narrowing (see its own comment below) - not
+  // reachable through the API as documented.
+  describe('T9 - select an option from another version; approve Architecture with no selection; approve with 1 or 3 options', () => {
+    it('no selectedArchitectureOptionId at all is a 400 VALIDATION_ERROR', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+        name: 'appendix-c: T9a',
+      });
+      mockAuthAsOwner(userId);
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const v = await createArchitectureDraftVersion(architectureArtifactId, 1);
+      await architecture.createOptions(v, [
+        architectureOptionInput([{ title: 'one' }]),
+        architectureOptionInput([{ title: 'two' }]),
+      ]);
+
+      const response = await approveRoute(jsonRequest(approveUrl(v), {}), versionRouteParams(v));
+      expect(response.status).toBe(400);
+      expect((await response.json()).error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('selecting an option that belongs to a DIFFERENT architecture draft is 422 OPTION_NOT_SELECTED', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+        name: 'appendix-c: T9b',
+      });
+      mockAuthAsOwner(userId);
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const v = await createArchitectureDraftVersion(architectureArtifactId, 1);
+      await architecture.createOptions(v, [
+        architectureOptionInput([{ title: 'one' }]),
+        architectureOptionInput([{ title: 'two' }]),
+      ]);
+
+      // A genuinely different architecture draft (a different project
+      // entirely) whose option id is real - just not one of THIS draft's
+      // own two.
+      const foreign = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T9b-foreign' });
+      const foreignArtifactId = await fx.createArtifact(sql, foreign.projectId, 'architecture');
+      const foreignVersion = await createArchitectureDraftVersion(foreignArtifactId, 1);
+      const [foreignOption] = await architecture.createOptions(foreignVersion, [
+        architectureOptionInput([{ title: 'foreign' }]),
+        architectureOptionInput([{ title: 'alternative' }]),
+      ]);
+
+      const response = await approveRoute(
+        jsonRequest(approveUrl(v), { selectedArchitectureOptionId: foreignOption!.id }),
+        versionRouteParams(v),
+      );
+      expect(response.status).toBe(422);
+      expect((await response.json()).error.code).toBe('OPTION_NOT_SELECTED');
+    });
+
+    // "1 or 3 options" is a DB-level guard, not reachable through the normal
+    // API flow: the real write path (`architecture.createOptions`/
+    // `materialize`) only ever inserts exactly 2 rows, and
+    // `architecture_option_option_key_check` (`option_key IN ('A','B')`,
+    // `UNIQUE(artifact_version_id, option_key)`) makes a THIRD row for one
+    // `artifact_version` structurally impossible to insert AT ALL - an even
+    // stronger guarantee than the `artifact_version_guard` trigger's own
+    // "<> 2" check, which a 3-option case could then never even reach. Only
+    // the "1 option" half is exercisable, and only against the trigger
+    // directly (raw SQL), the same way T27/T28 already do for their own
+    // triggers in this file - a deliberate, explained scope narrowing of the
+    // ERD's literal wording, not an oversight.
+    it('an architecture_version with only 1 option raises from the guard trigger on approval (a 3rd option cannot be inserted at all)', async () => {
+      const { projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T9c' });
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const v = await createArchitectureDraftVersion(architectureArtifactId, 1);
+      const onlyOption = await fx.createArchitectureOption(sql, {
+        artifactVersionId: v,
+        optionKey: 'A',
+      });
+
+      await expect(
+        sql`
+          UPDATE artifact_version
+          SET status = 'approved', selected_architecture_option_id = ${onlyOption}
+          WHERE id = ${v}
+        `,
+      ).rejects.toThrow(/exactly 2 options/i);
+
+      // A second row under a THIRD key is rejected before it could ever
+      // reach that trigger.
+      await expect(
+        sql`
+          INSERT INTO architecture_option
+            (artifact_version_id, option_key, title, summary, stack, candidate_decisions, tradeoffs)
+          VALUES (${v}, 'C', 'Option C', 'summary', '{}', '[]', '{}')
+        `,
+      ).rejects.toThrow();
+    });
+  });
 
   // T10 - Approve Requirements and Backlog concurrently; double-approve one
   // draft.
   // Expected: serialized by the project lock; exactly one approved version
   // per artifact; second gate sees first commit.
-  // Turns green with E3-T1 (needs withProjectLock's caller, artifact-
-  // lifecycle's approveVersion).
-  it.todo('T10');
+  // E3-T1: real, through the real POST .../approve route.
+  describe('T10 - approve Requirements and Backlog concurrently; double-approve one draft', () => {
+    it('two different artifacts in the same project both approve; approving the same already-approved draft again is refused', async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+        name: 'appendix-c: T10a',
+      });
+      mockAuthAsOwner(userId);
+      const requirementsArtifactId = await fx.createArtifact(sql, projectId, 'requirements');
+      const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
+      const requirementsDraftId = await fx.createDraftArtifactVersion(sql, requirementsArtifactId, {
+        versionNumber: 1,
+      });
+      const backlogDraftId = await fx.createDraftArtifactVersion(sql, backlogArtifactId, {
+        versionNumber: 1,
+      });
+
+      const [reqResponse, backlogResponse] = await Promise.all([
+        approveRoute(
+          jsonRequest(approveUrl(requirementsDraftId), {}),
+          versionRouteParams(requirementsDraftId),
+        ),
+        approveRoute(
+          jsonRequest(approveUrl(backlogDraftId), {}),
+          versionRouteParams(backlogDraftId),
+        ),
+      ]);
+      expect(reqResponse.status).toBe(200); // different artifacts don't contend
+      expect(backlogResponse.status).toBe(200);
+
+      const reqApprovedCount = await sql<{ count: string }[]>`
+        SELECT count(*)::int AS count FROM artifact_version
+        WHERE artifact_id = ${requirementsArtifactId} AND status = 'approved'
+      `;
+      const backlogApprovedCount = await sql<{ count: string }[]>`
+        SELECT count(*)::int AS count FROM artifact_version
+        WHERE artifact_id = ${backlogArtifactId} AND status = 'approved'
+      `;
+      expect(Number(reqApprovedCount[0]!.count)).toBe(1);
+      expect(Number(backlogApprovedCount[0]!.count)).toBe(1);
+
+      const secondApproval = await approveRoute(
+        jsonRequest(approveUrl(requirementsDraftId), {}),
+        versionRouteParams(requirementsDraftId),
+      );
+      expect(secondApproval.status).toBe(409);
+      expect((await secondApproval.json()).error.code).toBe('VERSION_NOT_DRAFT');
+    });
+
+    it("two concurrent approvals of the SAME draft are serialized by the project lock - exactly one 200, the other sees the first's commit (409 VERSION_NOT_DRAFT)", async () => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+        name: 'appendix-c: T10b',
+      });
+      mockAuthAsOwner(userId);
+      const uiRequirementsArtifactId = await fx.createArtifact(sql, projectId, 'ui_requirements');
+      const draftId = await fx.createDraftArtifactVersion(sql, uiRequirementsArtifactId, {
+        versionNumber: 1,
+      });
+
+      // Hold the SAME project lock externally first, so both approve calls
+      // below are FORCED to queue behind it and each other - without this,
+      // two real HTTP calls fired via Promise.all could simply run
+      // start-to-finish one after another purely by Node's own scheduling
+      // (both are fast, no LLM/network call involved), which would look
+      // identical (one 200, one 409) even if withProjectLock's own lock were
+      // a no-op. Same probe tests/integration/db-lock.test.ts uses for the
+      // Module Boundaries section 6 proof, reused here for the real
+      // `approve` route.
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let onLocked!: (pid: number) => void;
+      const locked = new Promise<number>((resolve) => {
+        onLocked = resolve;
+      });
+      const holderDone = dbModule.withProjectLock(projectId, async (tx) => {
+        const rows = await tx.execute<{ pid: number }>(drizzleSql`select pg_backend_pid() as pid`);
+        onLocked(rows[0]!.pid);
+        await gate;
+      });
+      const holderPid = await locked;
+
+      const approveOnce = () =>
+        approveRoute(jsonRequest(approveUrl(draftId), {}), versionRouteParams(draftId));
+      const firstCall = approveOnce();
+      const secondCall = approveOnce();
+
+      let queuedCount = 0;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const [row] = await sql<{ waiting: number }[]>`
+          select count(*)::int as waiting
+          from pg_locks held
+          join pg_locks queued
+            on queued.locktype = held.locktype
+           and queued.database is not distinct from held.database
+           and queued.classid is not distinct from held.classid
+           and queued.objid is not distinct from held.objid
+           and queued.objsubid is not distinct from held.objsubid
+          where held.pid = ${holderPid}
+            and held.locktype = 'advisory'
+            and held.granted
+            and not queued.granted
+        `;
+        queuedCount = row!.waiting;
+        if (queuedCount >= 2) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(queuedCount).toBeGreaterThanOrEqual(2); // both calls genuinely contended, not luck
+
+      release();
+      await holderDone;
+      const [firstResponse, secondResponse] = await Promise.all([firstCall, secondCall]);
+
+      const statuses = [firstResponse.status, secondResponse.status].sort();
+      expect(statuses).toEqual([200, 409]); // never both 200
+      const failed = firstResponse.status === 409 ? firstResponse : secondResponse;
+      expect((await failed.json()).error.code).toBe('VERSION_NOT_DRAFT');
+
+      const approvedCount = await sql<{ count: string }[]>`
+        SELECT count(*)::int AS count FROM artifact_version
+        WHERE artifact_id = ${uiRequirementsArtifactId} AND status = 'approved'
+      `;
+      expect(Number(approvedCount[0]!.count)).toBe(1); // never both committed
+    });
+  });
 
   // T11 - Lost response on repo/issue creation; unrelated repo with same
   // name; double-click; stale pending.
@@ -2330,20 +3060,330 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // Expected: no error (regression test for the v1.1 runtime failure). Must
   // be a Requirements candidate - a Backlog candidate does not reproduce
   // it.
-  // Turns green with E2-S9 (the gate query itself) and again with E3-T1
-  // (the full approval workflow it's embedded in).
-  it.todo('T22');
+  // E3-T1: real, driven through the real POST .../approve route (E2-S9
+  // already fixed the gate query itself - `evaluateGate`/`impact()`'s
+  // "Round-5 fix", ERD section 6.3 - this proves it end to end through the
+  // full approval workflow that query is embedded in).
+  //
+  // The v1.1 bug needed TWO simultaneous "current" rows for the SAME
+  // LogicalItem: the old approved version's own membership row, AND the
+  // candidate's own membership row for that same item - which can only
+  // happen when the item that depends on the changed root is ITSELF a
+  // member of the CANDIDATE being approved (`evaluateGate`'s own filter:
+  // "subject_id IN (draft members)", ERD 6.5) - i.e. the dependent item and
+  // the root it depends on must belong to the SAME artifact as the
+  // candidate. A Backlog candidate approving a Story that depends on a
+  // changed Requirement does NOT reproduce it (the Story isn't a
+  // Requirements-artifact member, so `evaluateGate`'s filter excludes its
+  // row entirely, bug or no bug); two Requirements items depending on each
+  // other does - unusual in practice, but syntactically legal
+  // (`semantic_dependency` has no item-type ordering constraint) and exactly
+  // what reproduces the v1.1 crash.
+  describe('T22 / T23 - approval gate for a Requirements candidate with an acknowledgement whose root has since moved', () => {
+    async function buildScenario() {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+        name: 'appendix-c: T22-T23',
+      });
+      mockAuthAsOwner(userId);
+      const requirementsArtifactId = await fx.createArtifact(sql, projectId, 'requirements');
 
-  // T23 - During that gate, an acknowledgement recorded against the
-  // currently-approved version of the root.
-  // Expected: acknowledged = false - the candidate supersedes that
-  // version, so the acknowledgement stops matching.
-  // Turns green with E2-S9 and E3-T1 (see T22).
-  it.todo('T23');
+      const r07Payload = {
+        type: 'functional',
+        actor: 'Analyst',
+        behavior: 'View the quarterly report',
+        constraints: [],
+        acceptanceCriteria: ['Report renders within 2s'],
+        dimension: null,
+        value: null,
+      };
+      const r15Payload = {
+        type: 'functional',
+        actor: 'Manager',
+        behavior: 'Approve the quarterly report',
+        constraints: [],
+        acceptanceCriteria: ['Approval is logged'],
+        dimension: null,
+        value: null,
+      };
+      const v1 = await generateRequirements(projectId, requirementsArtifactId, userId, [
+        { payload: r07Payload },
+        { payload: r15Payload },
+      ]);
+      await fx.approveArtifactVersion(sql, v1.versionId);
+      const v1Members = await membershipWithPayload(requirementsArtifactId, v1.versionId);
+      const r07 = v1Members.find((m) => (m.payload as { actor: string }).actor === 'Analyst');
+      const r15 = v1Members.find((m) => (m.payload as { actor: string }).actor === 'Manager');
+      if (!r07 || !r15) throw new Error('expected both requirements after v1');
+
+      // R-15 depends on R-07@v1 - both Requirements items, in the SAME
+      // artifact (the precondition the v1.1 bug needed).
+      await fx.createSemanticDependency(sql, {
+        projectId,
+        downstreamItemVersionId: r15.item_version_id,
+        upstreamItemVersionId: r07.item_version_id,
+      });
+
+      // R-07 moves to v2 (approved, supersedes v1) - R-15 (reused
+      // verbatim, unchanged) is NOW genuinely flagged: its dependency edge
+      // still points at the now-obsolete v1.
+      const v2 = await generateRequirements(projectId, requirementsArtifactId, userId, [
+        {
+          previousDisplayKey: r07.display_key,
+          payload: { ...r07Payload, behavior: 'View the quarterly report, v2' },
+        },
+        { previousDisplayKey: r15.display_key, payload: r15Payload },
+      ]);
+      await approveSupersedingCurrent(requirementsArtifactId, v2.versionId);
+      const v2Members = await currentMembership(requirementsArtifactId, v2.versionId);
+      const r15AtV2 = v2Members.find((m) => m.logical_item_id === r15.logical_item_id);
+      expect(r15AtV2?.item_version_id).toBe(r15.item_version_id); // reused verbatim
+
+      const sanityBeforeAck = await impact.getWarnings(projectId);
+      expect(sanityBeforeAck.find((w) => w.subjectId === r15.item_version_id)).toMatchObject({
+        rootItemVersionId: r07.item_version_id,
+        acknowledged: false,
+      });
+
+      // Acknowledge NOW, with R-07's CURRENT approved version genuinely at
+      // v2 (T23's own wording: "recorded against the currently-approved
+      // version of the root") - `impact.acknowledge` re-reads the root's
+      // CURRENT version at call time itself (src/lineage/impact/index.ts's
+      // own doc comment; never accepted from the caller), so this resolves
+      // to v2's own item_version_id, which is DISTINCT from the obsolete
+      // v1 id being acknowledged - satisfying
+      // `impact_acknowledgement_obsolete_not_against_check`. Acknowledging
+      // while R-07 was STILL at v1 (this test's own first attempt) would
+      // make "obsolete" and "current" the SAME id and violate that CHECK -
+      // there is nothing to legitimately acknowledge until the root has
+      // already moved at least once.
+      await withTx((tx) =>
+        impact.acknowledge(tx, {
+          projectId,
+          subject: { itemVersionId: r15.item_version_id },
+          obsoleteUpstreamItemVersionId: r07.item_version_id, // v1, the obsolete root
+          userId,
+          note: 'reviewed against R-07@v2 - text is still accurate',
+        }),
+      );
+      const sanityAfterAck = await impact.getWarnings(projectId);
+      expect(sanityAfterAck.find((w) => w.subjectId === r15.item_version_id)).toMatchObject({
+        acknowledged: true, // matches for now - R-07 is still at v2
+      });
+
+      // Requirements v3: R-07 changes AGAIN (v2 -> v3); R-15 comes back
+      // verbatim (reused) - R-15's item_version_id (the subject the
+      // acknowledgement names) is a MEMBER of THIS candidate, satisfying
+      // `evaluateGate`'s own filter ("subject_id IN (draft members)", ERD
+      // 6.5). The acknowledgement was recorded against v2 specifically -
+      // once v3 replaces it, the ack no longer matches (T23).
+      const v3 = await generateRequirements(projectId, requirementsArtifactId, userId, [
+        {
+          previousDisplayKey: r07.display_key,
+          payload: { ...r07Payload, behavior: 'View the quarterly report, v3' },
+        },
+        { previousDisplayKey: r15.display_key, payload: r15Payload },
+      ]);
+      expect(v3.stale).toBe(false);
+      const v3Members = await currentMembership(requirementsArtifactId, v3.versionId);
+      const r15InCandidate = v3Members.find((m) => m.logical_item_id === r15.logical_item_id);
+      expect(r15InCandidate?.item_version_id).toBe(r15.item_version_id); // still reused verbatim
+
+      return { projectId, r07, r15, v3VersionId: v3.versionId };
+    }
+
+    it('T22: the gate does not crash (the v1.1 regression: "more than one row returned by a subquery")', async () => {
+      const { v3VersionId } = await buildScenario();
+
+      const response = await approveRoute(
+        jsonRequest(approveUrl(v3VersionId), {}),
+        versionRouteParams(v3VersionId),
+      );
+      expect(response.status).not.toBe(500);
+    });
+
+    it('T23: the acknowledgement no longer matches once R-07 moves again - the candidate is blocked, not silently approved', async () => {
+      const { r07, r15, v3VersionId } = await buildScenario();
+
+      const response = await approveRoute(
+        jsonRequest(approveUrl(v3VersionId), {}),
+        versionRouteParams(v3VersionId),
+      );
+      // The candidate (v3) replaces R-07's approved version (ERD 6.5) - the
+      // acknowledgement was recorded against v2, which v3 now replaces, so
+      // it no longer matches `root_now` and R-15 is (correctly) still
+      // blocking rather than silently waved through.
+      expect(response.status).toBe(409);
+      const body = await response.json();
+      expect(body.error.code).toBe('APPROVAL_BLOCKED');
+      expect(body.error.details.blocking).toContainEqual(
+        expect.objectContaining({
+          subjectId: r15.item_version_id,
+          rootDisplayKey: r07.display_key,
+        }),
+      );
+    });
+  });
 
   // T24 - E3-S5 covers manual Story editing, rollback, confirmed user edges
   // to current upstream versions, and cleared candidate impact in
   // tests/integration/artifact-lifecycle-item-edit.test.ts.
+  //
+  // This duplicates that file's own proof one layer up, through the real API
+  // routes - exactly this story's stated purpose (E3-T1 re-runs T6-T10, T22-
+  // T24, T30, T40 "end to end through the API routes"). Not a
+  // duplicate-maintained copy: that file stays the one place this mechanism's
+  // full edge-case coverage lives (rollback, UPSTREAM_REMOVED, etc.); this is
+  // just the one canonical path (preview -> refuse without confirmation ->
+  // confirm) driven through `POST .../edit/preview` and `PUT .../items/
+  // :logicalItemId` instead of `artifact-lifecycle.proposeItemEdit`/
+  // `commitItemEdit` directly.
+  it('T24: editing a draft Story bound to an obsolete upstream version rebinds to the current one on confirmation, and clears its own flag', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T24' });
+    mockAuthAsOwner(userId);
+    const requirementsArtifactId = await fx.createArtifact(sql, projectId, 'requirements');
+    const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
+
+    const rPayload = {
+      type: 'functional',
+      actor: 'Analyst',
+      behavior: 'View the quarterly report',
+      constraints: [],
+      acceptanceCriteria: ['Report renders within 2s'],
+      dimension: null,
+      value: null,
+    };
+    const v1 = await generateRequirements(projectId, requirementsArtifactId, userId, [
+      { payload: rPayload },
+    ]);
+    await fx.approveArtifactVersion(sql, v1.versionId);
+    const [r] = await currentMembership(requirementsArtifactId, v1.versionId);
+    if (!r) throw new Error('R-07 membership missing after v1 approval');
+
+    // R-07 moves on to a second, approved revision - the Story below is
+    // bound (via a raw fixture edge, same technique T1-T5 use for
+    // Architecture/Backlog dependency edges) to the now-OBSOLETE first
+    // revision.
+    const v2 = await generateRequirements(projectId, requirementsArtifactId, userId, [
+      {
+        previousDisplayKey: r.display_key,
+        payload: { ...rPayload, behavior: 'View the quarterly report, v2' },
+      },
+    ]);
+    await approveSupersedingCurrent(requirementsArtifactId, v2.versionId);
+    const [rCurrent] = await currentMembership(requirementsArtifactId, v2.versionId);
+    if (!rCurrent) throw new Error('R-07@current membership missing');
+
+    // The Story is approved into a REAL Backlog version (not just left in a
+    // bespoke draft) so it is genuinely CURRENT - impact()'s `current_m` (and
+    // therefore `impact.getWarnings`) only ever considers approved
+    // memberships (T5's own point: "a draft never contributes to warnings,
+    // whether pending or rejected"), so a story that only ever existed in an
+    // unapproved draft could never show up as flagged here regardless of
+    // whether its dependency is obsolete - the "before" assertion below would
+    // be vacuous otherwise.
+    const story = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: backlogArtifactId,
+      itemType: 'story',
+    });
+    await fx.createSemanticDependency(sql, {
+      projectId,
+      downstreamItemVersionId: story.itemVersionId,
+      upstreamItemVersionId: r.item_version_id, // the OBSOLETE first revision
+    });
+    await approveItemsVersion(backlogArtifactId, [
+      { logicalItemId: story.logicalItemId, itemVersionId: story.itemVersionId },
+    ]);
+
+    const warningsBefore = await impact.getWarnings(projectId);
+    expect(warningsBefore.find((w) => w.subjectId === story.itemVersionId)).toMatchObject({
+      rootItemVersionId: r.item_version_id,
+    });
+
+    // A manual revision draft that reuses the Story's item_version unchanged
+    // - the same shape `createManualRevisionDraft`/`identity.copyMembership`
+    // (ERD 3.6) would produce - built directly via fixtures rather than the
+    // real `POST .../artifacts/backlog/revise` route: that route's own
+    // FR-080 gate (`missingPrerequisites`, `_shared/artifacts.ts`) requires
+    // Requirements + Architecture + UI Requirements ALL approved before
+    // Backlog can be revised, which is unrelated to what T24 tests (only
+    // Requirements exists in this project) - standing up unrelated
+    // Architecture/UI-Requirements artifacts and approvals just to get past
+    // that check would widen this test's scope for no reason. T24's real
+    // subject is the item-edit preview/commit routes below; this draft-
+    // creation step is setup, same status as this file's other `fx.*`
+    // fixtures for state that isn't itself under test (T1-T5/T8/T9's own
+    // convention).
+    const backlogDraftId = await fx.createDraftArtifactVersion(sql, backlogArtifactId, {
+      versionNumber: 2, // version 1 is the approved one from approveItemsVersion above
+    });
+    await fx.createMembership(sql, {
+      artifactVersionId: backlogDraftId,
+      artifactId: backlogArtifactId,
+      logicalItemId: story.logicalItemId,
+      itemVersionId: story.itemVersionId,
+    });
+
+    const editedPayload = { title: 'Edited Story title' };
+    const previewUrl = `http://localhost/api/artifact-versions/${backlogDraftId}/items/${story.logicalItemId}/edit/preview`;
+    const previewResponse = await itemEditPreviewRoute(
+      jsonRequest(previewUrl, { payload: editedPayload }),
+      itemRouteParams(backlogDraftId, story.logicalItemId),
+    );
+    expect(previewResponse.status).toBe(200);
+    const previewBody = await previewResponse.json();
+    expect(previewBody.changedRefs).toContainEqual(
+      expect.objectContaining({
+        logicalItemId: r.logical_item_id,
+        from: r.item_version_id,
+        to: rCurrent.item_version_id,
+      }),
+    );
+
+    const commitUrl = `http://localhost/api/artifact-versions/${backlogDraftId}/items/${story.logicalItemId}`;
+    const refusedCommit = await commitItemEditRoute(
+      putJsonRequest(commitUrl, { payload: editedPayload, confirmed: false }),
+      itemRouteParams(backlogDraftId, story.logicalItemId),
+    );
+    expect(refusedCommit.status).toBe(409);
+    const refusedBody = await refusedCommit.json();
+    expect(refusedBody.error.code).toBe('CONFIRMATION_REQUIRED');
+    expect(refusedBody.error.details.changedRefs).toContainEqual(
+      expect.objectContaining({ logicalItemId: r.logical_item_id }),
+    );
+
+    const confirmedCommit = await commitItemEditRoute(
+      putJsonRequest(commitUrl, { payload: editedPayload, confirmed: true }),
+      itemRouteParams(backlogDraftId, story.logicalItemId),
+    );
+    expect(confirmedCommit.status).toBe(200);
+    const confirmedBody = await confirmedCommit.json();
+    expect(confirmedBody.item.itemVersionId).not.toBe(story.itemVersionId); // a new ItemVersion
+
+    const newEdges = await sql<{ proposed_by: string; upstream_item_version_id: string }[]>`
+      SELECT proposed_by, upstream_item_version_id FROM semantic_dependency
+      WHERE downstream_item_version_id = ${confirmedBody.item.itemVersionId}
+    `;
+    expect(newEdges).toEqual([
+      { proposed_by: 'user', upstream_item_version_id: rCurrent.item_version_id },
+    ]);
+
+    // `impact.getWarnings` is approved-state only (INV-025 - impact() is the
+    // only source of truth, evaluated against CURRENT approved membership,
+    // never a draft), so "no longer flagged" is only a meaningful assertion
+    // once the edited ItemVersion is itself current - approve the draft
+    // through the real route first.
+    const approveResponse = await approveRoute(
+      jsonRequest(approveUrl(backlogDraftId), {}),
+      versionRouteParams(backlogDraftId),
+    );
+    expect(approveResponse.status).toBe(200);
+
+    const warningsAfter = await impact.getWarnings(projectId);
+    expect(
+      warningsAfter.find((w) => w.subjectId === confirmedBody.item.itemVersionId),
+    ).toBeUndefined();
+  });
 
   // T25 - Insert a dependency cycle directly (bypassing the app) and call
   // impact().
@@ -2486,8 +3526,51 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // T30 - Re-approve Architecture with every ADR reused but a different
   // stack.
   // Expected: approval refused by the stack guard.
-  // Turns green with E3-T1.
-  it.todo('T30');
+  // E3-T1: real. Same setup convention as T8/T9 above (`architecture.
+  // createOptions` for the two drafts' own options, no route of its own);
+  // both approvals go through the real `POST .../approve` route.
+  it('T30: re-approving Architecture with every decision reused but a different stack is refused by the stack guard', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T30' });
+    mockAuthAsOwner(userId);
+    const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+
+    const v1 = await createArchitectureDraftVersion(architectureArtifactId, 1);
+    const [chosen] = await architecture.createOptions(v1, [
+      architectureOptionInput([{ title: 'one' }], { database: 'postgres', frontend: 'react' }),
+      architectureOptionInput([{ title: 'unused' }]),
+    ]);
+    const approveV1 = await approveRoute(
+      jsonRequest(approveUrl(v1), { selectedArchitectureOptionId: chosen!.id }),
+      versionRouteParams(v1),
+    );
+    expect(approveV1.status).toBe(200);
+
+    const v2 = await createArchitectureDraftVersion(architectureArtifactId, 2, {
+      baseVersionId: v1,
+    });
+    const [changedStack] = await architecture.createOptions(v2, [
+      architectureOptionInput(
+        [{ previousDisplayKey: 'ADR-01', title: 'one' }],
+        { database: 'mysql', frontend: 'react' }, // every decision reused, but the stack differs
+      ),
+      architectureOptionInput([{ title: 'also unused' }]),
+    ]);
+
+    const before = await currentMembership(architectureArtifactId, v2);
+    expect(before).toEqual([]); // nothing materialized yet
+
+    const blockedResponse = await approveRoute(
+      jsonRequest(approveUrl(v2), { selectedArchitectureOptionId: changedStack!.id }),
+      versionRouteParams(v2),
+    );
+    expect(blockedResponse.status).toBe(409);
+    expect((await blockedResponse.json()).error.code).toBe('STACK_UNCHANGED_DECISIONS');
+
+    // Refused, not silently materialized-then-rolled-back-looking: the
+    // whole approval transaction rolled back, so v2 still has no members.
+    const after = await currentMembership(architectureArtifactId, v2);
+    expect(after).toEqual([]);
+  });
 
   // T31 - Architecture regeneration where the model omits previousDisplayKey
   // on an unchanged ADR. Expected: content fallback matches it; the ADR
@@ -2787,9 +3870,140 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // Expected: the draft initially shares every ItemVersion with the
   // approved version and has no context refs; after approval exactly one
   // new ItemVersion exists; only R-07's dependency chain is flagged.
-  // Turns green with E3-T1 (needs the manual-revision path and
-  // approveVersion, which don't exist yet).
-  it.todo('T40');
+  // E3-T1: real, through the real POST .../artifacts/requirements/revise
+  // route, the real item-edit routes, and the real POST .../approve route.
+  it("T40: a manual revision of approved Requirements starts identical, edits only R-07, and approval flags only R-07's dependents", async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T40' });
+    mockAuthAsOwner(userId);
+    const requirementsArtifactId = await fx.createArtifact(sql, projectId, 'requirements');
+    const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
+
+    const r07Payload = {
+      type: 'functional',
+      actor: 'Analyst',
+      behavior: 'View the quarterly report',
+      constraints: [],
+      acceptanceCriteria: ['Report renders within 2s'],
+      dimension: null,
+      value: null,
+    };
+    const rOtherPayload = {
+      type: 'functional',
+      actor: 'Manager',
+      behavior: 'Approve the quarterly report',
+      constraints: [],
+      acceptanceCriteria: ['Approval is logged'],
+      dimension: null,
+      value: null,
+    };
+    const v1 = await generateRequirements(projectId, requirementsArtifactId, userId, [
+      { payload: r07Payload },
+      { payload: rOtherPayload },
+    ]);
+    await fx.approveArtifactVersion(sql, v1.versionId);
+    const v1Members = await membershipWithPayload(requirementsArtifactId, v1.versionId);
+    const r07 = v1Members.find((m) => (m.payload as { actor: string }).actor === 'Analyst');
+    const rOther = v1Members.find((m) => (m.payload as { actor: string }).actor === 'Manager');
+    if (!r07 || !rOther) throw new Error('expected both requirements after v1');
+
+    // Two downstream Stories: one depends on R-07 (should end up flagged),
+    // one depends on the unrelated Requirement (should not).
+    const sDependsOnR07 = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: backlogArtifactId,
+      itemType: 'story',
+    });
+    await fx.createSemanticDependency(sql, {
+      projectId,
+      downstreamItemVersionId: sDependsOnR07.itemVersionId,
+      upstreamItemVersionId: r07.item_version_id,
+    });
+    const sDependsOnOther = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: backlogArtifactId,
+      itemType: 'story',
+    });
+    await fx.createSemanticDependency(sql, {
+      projectId,
+      downstreamItemVersionId: sDependsOnOther.itemVersionId,
+      upstreamItemVersionId: rOther.item_version_id,
+    });
+    await approveItemsVersion(backlogArtifactId, [
+      { logicalItemId: sDependsOnR07.logicalItemId, itemVersionId: sDependsOnR07.itemVersionId },
+      {
+        logicalItemId: sDependsOnOther.logicalItemId,
+        itemVersionId: sDependsOnOther.itemVersionId,
+      },
+    ]);
+
+    const itemVersionCountBefore = await sql<{ count: string }[]>`
+      SELECT count(*)::int AS count FROM item_version WHERE project_id = ${projectId}
+    `;
+
+    // Real revise route: a manual revision draft.
+    const reviseUrl = `http://localhost/api/projects/${projectId}/artifacts/requirements/revise`;
+    const reviseResponse = await reviseRoute(
+      new Request(reviseUrl, { method: 'POST' }),
+      artifactTypeRouteParams(projectId, 'requirements'),
+    );
+    expect(reviseResponse.status).toBe(200);
+    const reviseBody = await reviseResponse.json();
+    const draftVersionId: string = reviseBody.version.id;
+
+    const draftMembers = await currentMembership(requirementsArtifactId, draftVersionId);
+    const approvedMembers = await currentMembership(requirementsArtifactId, v1.versionId);
+    expect(draftMembers).toEqual(approvedMembers); // bit-for-bit identical, no model call
+
+    // generation_context_ref has no `id` column of its own - its primary key
+    // is the composite (target_artifact_version_id, source_artifact_version_id)
+    // (src/db/schema/generation-context-ref.ts).
+    const contextRefs = await sql<{ target_artifact_version_id: string }[]>`
+      SELECT target_artifact_version_id FROM generation_context_ref
+      WHERE target_artifact_version_id = ${draftVersionId}
+    `;
+    expect(contextRefs).toHaveLength(0); // no context refs
+
+    // Edit ONLY R-07.
+    const editedPayload = {
+      ...r07Payload,
+      behavior: 'View the quarterly report, edited in manual revision',
+    };
+    const previewUrl = `http://localhost/api/artifact-versions/${draftVersionId}/items/${r07.logical_item_id}/edit/preview`;
+    const previewResponse = await itemEditPreviewRoute(
+      jsonRequest(previewUrl, { payload: editedPayload }),
+      itemRouteParams(draftVersionId, r07.logical_item_id),
+    );
+    expect(previewResponse.status).toBe(200);
+    const previewBody = await previewResponse.json();
+    expect(previewBody.changedRefs).toEqual([]); // Requirements items have no upstream refs of their own
+
+    const commitUrl = `http://localhost/api/artifact-versions/${draftVersionId}/items/${r07.logical_item_id}`;
+    const commitResponse = await commitItemEditRoute(
+      putJsonRequest(commitUrl, { payload: editedPayload, confirmed: false }),
+      itemRouteParams(draftVersionId, r07.logical_item_id),
+    );
+    expect(commitResponse.status).toBe(200); // no upstream refs changed - no confirmation ever needed
+
+    // Approve.
+    const approveResponse = await approveRoute(
+      jsonRequest(approveUrl(draftVersionId), {}),
+      versionRouteParams(draftVersionId),
+    );
+    expect(approveResponse.status).toBe(200);
+
+    const itemVersionCountAfter = await sql<{ count: string }[]>`
+      SELECT count(*)::int AS count FROM item_version WHERE project_id = ${projectId}
+    `;
+    expect(Number(itemVersionCountAfter[0]!.count)).toBe(
+      Number(itemVersionCountBefore[0]!.count) + 1, // exactly one new ItemVersion (R-07's edit)
+    );
+
+    const warnings = await impact.getWarnings(projectId);
+    expect(warnings.find((w) => w.subjectId === sDependsOnR07.itemVersionId)).toMatchObject({
+      rootItemVersionId: r07.item_version_id,
+    });
+    expect(warnings.find((w) => w.subjectId === sDependsOnOther.itemVersionId)).toBeUndefined();
+  });
 
   // T41 - Edit Epic E-01's title, re-approve the Backlog, re-export to
   // Jira; choose Skip for E-01.
