@@ -53,3 +53,18 @@ Assumptions: one clinic, three clinicians, authenticated staff, patient access t
 | R-08 | S-08 |
 
 Architecture references are in the architecture table. The change-impact worksheet will be completed only after the preregistered change is supplied to this condition, with time recorded separately.
+
+## Controlled-change worksheet (appended after first output)
+
+**Stimulus:** patients may cancel or reschedule only until 24 hours before the appointment start; reception staff may do so at any time. **Review began:** 2026-09-28 10:32:34 UTC. The author/reviewer already knew this preregistered stimulus and answer key before drafting the baseline; this is a material bias.
+
+| Item | Affected? | Path/reason |
+|---|---|---|
+| R-03 | Yes | The requirement's unrestricted patient cancellation/rescheduling must gain the cutoff and staff exception. |
+| AD-03 | Yes | The patient appointment link currently permits change actions. Authorization must additionally check appointment start, current time, and actor role. |
+| S-03 | Yes | The patient cancel/reschedule story needs eligibility and rejection criteria for the 24-hour cutoff. |
+| R-01, R-02, R-04–R-08 | No | Browsing, initial request, availability, exclusivity, email, schedule and audit behaviors remain. |
+| AD-01, AD-02, AD-04 | No | Storage of appointment start and exclusive slot writes already support the new check; email and audit decisions have no modification-window behavior. |
+| S-01, S-02, S-04–S-08 | No | They implement initial booking or unrelated clinic administration. |
+
+The worksheet exposes the conceptual paths `R-03 → AD-03` and `R-03 → S-03`. It is manually reasoned text, with no automatic warning count or graph inspection. Completion timestamp and review duration are recorded in the case result.
