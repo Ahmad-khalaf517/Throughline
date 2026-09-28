@@ -319,7 +319,10 @@ async function withFakeFetch<T>(
 }
 
 /** A project with an approved Architecture (one ADR) - what `previewInit`/`initRepo` start from. */
-async function approvedArchitecture(name: string) {
+async function approvedArchitecture(
+  name: string,
+  optionA?: Parameters<typeof approveArchitectureVersion>[3],
+) {
   const { projectId } = await fx.createProjectWithOwner(sql, { name });
   const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
   const adr = await fx.createLogicalItemWithVersion(sql, {
@@ -327,9 +330,12 @@ async function approvedArchitecture(name: string) {
     artifactId: architectureArtifactId,
     itemType: 'architecture_decision',
   });
-  const architectureVersionId = await approveArchitectureVersion(architectureArtifactId, 1, [
-    { logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId },
-  ]);
+  const architectureVersionId = await approveArchitectureVersion(
+    architectureArtifactId,
+    1,
+    [{ logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId }],
+    optionA,
+  );
   return { projectId, architectureVersionId };
 }
 
@@ -1043,6 +1049,143 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       expect(readme).toContain(
         `[${displayKey}](./docs/adr/${displayKey}.md) - Server-rendered workflow`,
       );
+    });
+  });
+
+  // FR-031/032: a pinned starter matching the selected stack is generated as
+  // real files (scaffold mode); any other stack stays docs-only. The starters
+  // themselves are unit-tested (github-starters.test.ts) and were run for
+  // real (Django virtualenv, Next.js tsc) - this proves the wiring end to end.
+  describe('pinned starter - scaffold mode vs docs-only', () => {
+    const DJANGO_OPTION = {
+      title: 'Django Modular Monolith',
+      summary: 'A server-rendered Django application in one service.',
+      stack: {
+        frontend: 'Django templates with HTMX',
+        backend: 'Django modular monolith',
+        database: 'Amazon RDS for PostgreSQL',
+        hosting: 'AWS ECS Fargate',
+        repositoryLayout: 'Single Django repository organized by domain apps',
+      },
+    };
+    const RAILS_OPTION = {
+      title: 'Rails Monolith',
+      stack: {
+        frontend: 'Rails server-rendered HTML',
+        backend: 'Ruby on Rails modular monolith',
+        database: 'PostgreSQL',
+        hosting: 'Managed Rails platform',
+        repositoryLayout: 'Single application repository',
+      },
+    };
+
+    it('previews the starter and its exact file list for a matching stack', async () => {
+      const { architectureVersionId } = await approvedArchitecture(
+        'starter preview',
+        DJANGO_OPTION,
+      );
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        const preview = await github.previewInit(architectureVersionId, 'ShiftSwap Verify');
+
+        expect(preview.mode).toBe('scaffold');
+        expect(preview.starter).toMatchObject({ id: 'django', label: 'Django' });
+        expect(preview.starter?.files).toEqual(
+          expect.arrayContaining(['manage.py', 'requirements.txt', 'config/settings.py']),
+        );
+        expect(preview.starter?.notScaffolded.join(' ')).toContain('infrastructure');
+      });
+    });
+
+    it('previews no starter and docs-only mode for a stack no starter fits', async () => {
+      const { architectureVersionId } = await approvedArchitecture('starter none', RAILS_OPTION);
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        const preview = await github.previewInit(architectureVersionId, 'Rails Thing');
+
+        expect(preview.mode).toBe('docs-only');
+        expect(preview.starter).toBeNull();
+      });
+    });
+
+    it('writes exactly the previewed files, then the docs, with lineage.json last', async () => {
+      const { architectureVersionId } = await approvedArchitecture('starter write', DJANGO_OPTION);
+      const repoName = `starter-repo-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+      let previewed: string[] = [];
+
+      const ref = await withFakeFetch(fake.fetch, async () => {
+        previewed = (await github.previewInit(architectureVersionId, repoName)).starter!.files;
+        return github.initRepo(architectureVersionId, repoName);
+      });
+
+      const repo = github.normalizeRepoName(repoName);
+      const written = [...fake.files.keys()].map((key) => key.slice(repo.length + 1));
+
+      expect(ref.metadata).toMatchObject({ mode: 'scaffold' });
+      // Every previewed starter file was written - the preview does not lie (FR-030).
+      for (const path of previewed) expect(written, path).toContain(path);
+      expect(written).toContain('README.md');
+      expect(written.some((path) => path.startsWith('docs/adr/ADR-'))).toBe(true);
+      // Provenance last: lineage.json only exists once every file landed.
+      expect(written[written.length - 1]).toBe('docs/architecture/lineage.json');
+      // README first, before any starter file.
+      expect(written[0]).toBe('README.md');
+    });
+
+    it('records the starter in lineage.json and explains it in the README', async () => {
+      const { architectureVersionId } = await approvedArchitecture(
+        'starter lineage',
+        DJANGO_OPTION,
+      );
+      const repoName = `starter-lineage-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        await github.initRepo(architectureVersionId, repoName);
+      });
+
+      const repo = github.normalizeRepoName(repoName);
+      const lineage = JSON.parse(fake.files.get(`${repo}/docs/architecture/lineage.json`)!);
+      expect(lineage.mode).toBe('scaffold');
+      expect(lineage.starter).toMatchObject({ id: 'django', label: 'Django' });
+      expect(lineage.starter.files).toContain('manage.py');
+
+      const readme = fake.files.get(`${repo}/README.md`)!;
+      expect(readme).toContain('A Django starter was generated from the selected stack');
+      expect(readme).toContain('## Getting started');
+      expect(readme).toContain('python manage.py runserver');
+
+      // The generated settings really are the repo's own name/title-safe project.
+      expect(fake.files.get(`${repo}/manage.py`)).toContain('config.settings');
+      expect(fake.files.get(`${repo}/requirements.txt`)).toContain('psycopg');
+    });
+
+    it('writes no starter files and says docs-only for a stack no starter fits', async () => {
+      const { architectureVersionId } = await approvedArchitecture(
+        'starter docs only',
+        RAILS_OPTION,
+      );
+      const repoName = `docsonly-repo-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      const ref = await withFakeFetch(fake.fetch, async () =>
+        github.initRepo(architectureVersionId, repoName),
+      );
+
+      const repo = github.normalizeRepoName(repoName);
+      const written = [...fake.files.keys()].map((key) => key.slice(repo.length + 1));
+      expect(ref.metadata).toMatchObject({ mode: 'docs-only' });
+      expect(written.filter((path) => path !== 'README.md' && !path.startsWith('docs/'))).toEqual(
+        [],
+      );
+
+      const lineage = JSON.parse(fake.files.get(`${repo}/docs/architecture/lineage.json`)!);
+      expect(lineage.mode).toBe('docs-only');
+      expect(lineage.starter).toBeNull();
+      expect(fake.files.get(`${repo}/README.md`)).not.toContain('## Getting started');
     });
   });
 });

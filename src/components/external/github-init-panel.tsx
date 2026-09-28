@@ -25,6 +25,8 @@ interface GithubInitPanelProps {
 interface GithubPreviewData {
   mode: 'scaffold' | 'docs-only';
   repoName: string;
+  /** The pinned starter whose files will be added, or `null` (docs-only). */
+  starter: { id: string; label: string; files: string[]; notScaffolded: string[] } | null;
   impact: ImpactRowDTO[];
 }
 
@@ -283,10 +285,30 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
                 Visibility: <span className="font-mono-code">public</span>
               </p>
               <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
-                {preview.mode === 'scaffold'
-                  ? 'This stack matches the supported starter, but starter files are not generated yet - the repository is created with documentation only: a README with the stack and trade-offs, and one ADR per approved decision.'
-                  : 'Creates a repository with documentation only - a README with the stack and trade-offs, and one ADR per approved decision. This stack has no generated scaffold.'}
+                {preview.starter
+                  ? `Adds a ${preview.starter.label} starter generated from the approved stack (${preview.starter.files.length} files), plus a README with the stack and trade-offs and one ADR per approved decision.`
+                  : 'No pinned starter matches this stack, so the repository is created with documentation only - a README with the stack and trade-offs, and one ADR per approved decision.'}
               </p>
+              {preview.starter && (
+                <>
+                  <details className="text-on-surface-variant mt-2 text-sm">
+                    <summary className="text-on-surface cursor-pointer font-medium">
+                      Starter files ({preview.starter.files.length})
+                    </summary>
+                    <ul className="font-mono-code mt-2 columns-1 gap-6 text-xs leading-relaxed sm:columns-2">
+                      {preview.starter.files.map((path) => (
+                        <li key={path}>{path}</li>
+                      ))}
+                    </ul>
+                  </details>
+                  {preview.starter.notScaffolded.length > 0 && (
+                    <p className="text-on-surface-variant mt-2 text-sm leading-relaxed">
+                      Not generated (documentation only): {preview.starter.notScaffolded.join('; ')}
+                      .
+                    </p>
+                  )}
+                </>
+              )}
               <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
                 The repository is created <strong className="font-medium">public</strong> - anyone
                 on GitHub can read its README and ADRs.
