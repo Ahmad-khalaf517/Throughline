@@ -12,6 +12,7 @@ import { db, schema, withTx } from '@/db';
 import {
   getDisplayKeysByItemVersionId,
   getSourceVersionMembers,
+  getUpstreamDependencies,
   type ItemType,
 } from '@/lineage/identity';
 import { getWarnings, type ImpactRow } from '@/lineage/impact';
@@ -124,6 +125,9 @@ export interface VersionItem {
   // The one warning this item_version is the subject of today (see
   // `pickImpact`), `null` when it is current and clean.
   impact: ImpactRow | null;
+  // Resolved source labels for lineage-aware review surfaces. Dependency
+  // edges live in semantic_dependency, never in the model-authored payload.
+  upstreamDisplayKeys?: string[];
 }
 
 export interface ArtifactVersionDetail {
@@ -211,6 +215,21 @@ export async function getArtifactVersionDetail(
   );
 
   const impactByItemVersionId = new Map<string, ImpactRow>();
+  const upstreamDisplayKeysByItemVersionId = new Map<string, string[]>();
+  if (memberItems.length) {
+    const dependencies = await withTx((tx) =>
+      getUpstreamDependencies(
+        tx,
+        memberItems.map((item) => item.itemVersionId),
+      ),
+    );
+    for (const dependency of dependencies) {
+      if (!dependency.upstreamDisplayKey) continue;
+      const refs = upstreamDisplayKeysByItemVersionId.get(dependency.downstreamItemVersionId) ?? [];
+      refs.push(dependency.upstreamDisplayKey);
+      upstreamDisplayKeysByItemVersionId.set(dependency.downstreamItemVersionId, refs);
+    }
+  }
   if (memberItems.length) {
     const memberIds = new Set(memberItems.map((item) => item.itemVersionId));
     for (const warning of await getWarnings(row.projectId)) {
@@ -226,6 +245,9 @@ export async function getArtifactVersionDetail(
     .map((item): VersionItem => ({
       ...item,
       impact: impactByItemVersionId.get(item.itemVersionId) ?? null,
+      upstreamDisplayKeys: (upstreamDisplayKeysByItemVersionId.get(item.itemVersionId) ?? []).sort(
+        (a, b) => a.localeCompare(b, 'en', { numeric: true }),
+      ),
     }))
     .sort(compareItems);
 

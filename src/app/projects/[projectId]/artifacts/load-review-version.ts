@@ -30,6 +30,7 @@ import {
 export interface ReviewVersionData {
   version: ArtifactVersionDTO;
   qualityIssues: QualityIssueDTO[];
+  upstreamDisplayKeysByItemVersionId: Record<string, string[]>;
 }
 
 /**
@@ -72,5 +73,8 @@ export async function loadReviewVersion(
       options,
     ),
     qualityIssues,
+    upstreamDisplayKeysByItemVersionId: Object.fromEntries(
+      items.map((item) => [item.itemVersionId, item.upstreamDisplayKeys ?? []]),
+    ),
   };
 }

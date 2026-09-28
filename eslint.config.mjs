@@ -278,7 +278,11 @@ const eslintConfig = defineConfig([
   // Prettier's formatting; must stay last so its "off" entries win.
   prettierConfig,
   globalIgnores([
+    // Nested managed worktrees are separate checkouts, not source for this repo.
+    '.claude/worktrees/**',
+    '.codex/worktrees/**',
     '.next/**',
+    '**/.next/**',
     'out/**',
     'build/**',
     'next-env.d.ts',

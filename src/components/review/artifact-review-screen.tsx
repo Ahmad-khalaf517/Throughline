@@ -39,6 +39,7 @@ interface ArtifactReviewScreenProps {
    */
   version: ArtifactVersionDTO | null;
   qualityIssues: QualityIssueDTO[];
+  upstreamDisplayKeysByItemVersionId?: Record<string, string[]>;
 }
 
 // `ItemVersionDTO.payload` is deliberately `unknown` in the shared DTO (API
@@ -61,7 +62,6 @@ interface KnownItemFields {
   title?: string | undefined;
   description?: string | undefined;
   priority?: string | undefined;
-  sourceRefs?: string[] | undefined;
   // UI Requirement item fields (TR FR-040: target users, screens, navigation
   // expectations, responsive/accessibility constraints, UX priorities) -
   // same defensive, generic-across-types reading as the fields above.
@@ -87,9 +87,6 @@ function readKnownFields(payload: unknown): KnownItemFields {
     title: typeof record.title === 'string' ? record.title : undefined,
     description: typeof record.description === 'string' ? record.description : undefined,
     priority: typeof record.priority === 'string' ? record.priority : undefined,
-    sourceRefs: Array.isArray(record.sourceRefs)
-      ? record.sourceRefs.filter((entry): entry is string => typeof entry === 'string')
-      : undefined,
     targetUsers: Array.isArray(record.targetUsers)
       ? record.targetUsers.filter((entry): entry is string => typeof entry === 'string')
       : undefined,
@@ -167,6 +164,7 @@ export function ArtifactReviewScreen({
   artifactTypeName,
   version,
   qualityIssues,
+  upstreamDisplayKeysByItemVersionId = {},
 }: ArtifactReviewScreenProps) {
   const router = useRouter();
   // Local state, seeded from `version` on mount. The page keys this
@@ -314,7 +312,9 @@ export function ArtifactReviewScreen({
   const isRequirements = version.artifactType === 'requirements';
   const isUiRequirements = version.artifactType === 'ui_requirements';
   const uiSourceRefs = new Set(
-    isUiRequirements ? items.flatMap((item) => readKnownFields(item.payload).sourceRefs ?? []) : [],
+    isUiRequirements
+      ? items.flatMap((item) => upstreamDisplayKeysByItemVersionId[item.itemVersionId] ?? [])
+      : [],
   );
 
   // `POST /api/artifact-versions/:versionId/approve` - shared by the plain
@@ -595,12 +595,19 @@ export function ArtifactReviewScreen({
       )}
 
       {isUiRequirements && (
-        <UiRequirementsReviewLayout items={items} status={status} onEdit={setEditingItem} />
+        <UiRequirementsReviewLayout
+          items={items}
+          artifactPayload={version.payload}
+          upstreamDisplayKeysByItemVersionId={upstreamDisplayKeysByItemVersionId}
+          status={status}
+          onEdit={setEditingItem}
+        />
       )}
 
       {version.artifactType === 'backlog' ? (
         <BacklogReviewLayout
           items={items}
+          upstreamDisplayKeysByItemVersionId={upstreamDisplayKeysByItemVersionId}
           qualityIssues={qualityIssues}
           status={status}
           onEdit={setEditingItem}
@@ -777,8 +784,10 @@ export function ArtifactReviewScreen({
                       ? qualityIssues.filter((issue) => issue.logicalItemId === item.logicalItemId)
                       : [];
                     if (fields.priority) metaParts.push(`Priority: ${fields.priority}`);
-                    if (fields.sourceRefs && fields.sourceRefs.length > 0) {
-                      metaParts.push(`Depends on: ${fields.sourceRefs.join(', ')}`);
+                    const upstreamRefs =
+                      upstreamDisplayKeysByItemVersionId[item.itemVersionId] ?? [];
+                    if (upstreamRefs.length > 0) {
+                      metaParts.push(`Depends on: ${upstreamRefs.join(', ')}`);
                     }
                     if (fields.targetUsers && fields.targetUsers.length > 0) {
                       metaParts.push(`Target users: ${fields.targetUsers.join(', ')}`);
@@ -1084,24 +1093,30 @@ export function ArtifactReviewScreen({
 
       {editingItem && (
         <ItemEditDialog
+          versionId={versionId}
           item={editingItem}
           onCancel={() => setEditingItem(null)}
-          onSave={(updatedItem) => {
-            // TODO(SCRUM-86 follow-up): still local-state-only, no network
-            // call, no new id minted here. Wiring this to
-            // `PUT /api/artifact-versions/:versionId/items/:logicalItemId`
-            // properly needs its two-step preview/confirm rebind flow
-            // (`ItemEditError` CONFIRMATION_REQUIRED - a real rebind mints a
-            // new ItemVersion server-side) - a larger, separate piece of
-            // work, deliberately out of scope here. Replaces by
-            // `itemVersionId`, same simplification the Approve flow used to
-            // make before this story wired it to the real API.
+          onSave={async (payload, confirmed) => {
+            const response = await fetch(
+              `/api/artifact-versions/${versionId}/items/${editingItem.logicalItemId}`,
+              {
+                method: 'PUT',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ payload, confirmed }),
+              },
+            );
+            const body = await response.json().catch(() => null);
+            if (!response.ok) {
+              throw new Error(body?.error?.message ?? 'Could not save this edit.');
+            }
+            const updatedItem = body.item as ItemVersionDTO;
             setItems((current) =>
               current.map((existing) =>
-                existing.itemVersionId === updatedItem.itemVersionId ? updatedItem : existing,
+                existing.logicalItemId === updatedItem.logicalItemId ? updatedItem : existing,
               ),
             );
             setEditingItem(null);
+            return updatedItem;
           }}
         />
       )}

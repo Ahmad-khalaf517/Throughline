@@ -4,6 +4,7 @@ import { FlaggedGlyph } from '@/components/status/status-badge';
 
 interface BacklogReviewLayoutProps {
   items: ItemVersionDTO[];
+  upstreamDisplayKeysByItemVersionId?: Record<string, string[]>;
   qualityIssues: QualityIssueDTO[];
   status: ArtifactVersionStatus;
   onEdit: (item: ItemVersionDTO) => void;
@@ -11,24 +12,33 @@ interface BacklogReviewLayoutProps {
 
 interface BacklogFields {
   title?: string | undefined;
+  userValueStatement?: string | undefined;
+  scopeStatement?: string | undefined;
   description?: string | undefined;
+  structuredBehavior?: string | undefined;
   priority?: string | undefined;
   sourceRefs: string[];
   acceptanceCriteria: string[];
 }
 
-function readFields(payload: unknown): BacklogFields {
+function readFields(payload: unknown, upstreamRefs?: string[]): BacklogFields {
   if (typeof payload !== 'object' || payload === null) {
-    return { sourceRefs: [], acceptanceCriteria: [] };
+    return { sourceRefs: upstreamRefs ?? [], acceptanceCriteria: [] };
   }
   const record = payload as Record<string, unknown>;
+  const payloadSourceRefs = Array.isArray(record.sourceRefs)
+    ? record.sourceRefs.filter((value): value is string => typeof value === 'string')
+    : [];
   return {
     title: typeof record.title === 'string' ? record.title : undefined,
+    userValueStatement:
+      typeof record.userValueStatement === 'string' ? record.userValueStatement : undefined,
+    scopeStatement: typeof record.scopeStatement === 'string' ? record.scopeStatement : undefined,
     description: typeof record.description === 'string' ? record.description : undefined,
+    structuredBehavior:
+      typeof record.structuredBehavior === 'string' ? record.structuredBehavior : undefined,
     priority: typeof record.priority === 'string' ? record.priority : undefined,
-    sourceRefs: Array.isArray(record.sourceRefs)
-      ? record.sourceRefs.filter((value): value is string => typeof value === 'string')
-      : [],
+    sourceRefs: upstreamRefs ?? payloadSourceRefs,
     acceptanceCriteria: Array.isArray(record.acceptanceCriteria)
       ? record.acceptanceCriteria.filter((value): value is string => typeof value === 'string')
       : [],
@@ -38,13 +48,15 @@ function readFields(payload: unknown): BacklogFields {
 function BacklogItem({
   item,
   status,
+  upstreamRefs,
   onEdit,
 }: {
   item: ItemVersionDTO;
   status: ArtifactVersionStatus;
+  upstreamRefs: string[];
   onEdit: (item: ItemVersionDTO) => void;
 }) {
-  const fields = readFields(item.payload);
+  const fields = readFields(item.payload, upstreamRefs);
   return (
     <li className="border-surface-dim bg-surface-container-lowest hover:border-outline-variant rounded-lg border p-4 shadow-sm transition-colors">
       <div className="flex flex-wrap items-start gap-2">
@@ -53,11 +65,14 @@ function BacklogItem({
         </span>
         <div className="min-w-0 flex-1">
           <h3 className="text-on-surface text-sm leading-snug font-semibold">
-            {fields.title ?? `${item.itemType === 'epic' ? 'Epic' : 'Story'} ${item.displayKey}`}
+            {fields.title ??
+              fields.userValueStatement ??
+              fields.scopeStatement ??
+              `${item.itemType === 'epic' ? 'Epic' : 'Story'} ${item.displayKey}`}
           </h3>
-          {fields.description && (
+          {(fields.description ?? fields.structuredBehavior) && (
             <p className="text-on-surface-variant mt-2 text-sm leading-relaxed">
-              {fields.description}
+              {fields.description ?? fields.structuredBehavior}
             </p>
           )}
         </div>
@@ -109,10 +124,12 @@ function BacklogItem({
 
 export function BacklogReviewLayout({
   items,
+  upstreamDisplayKeysByItemVersionId,
   qualityIssues,
   status,
   onEdit,
 }: BacklogReviewLayoutProps) {
+  const upstreamRefsByItem = upstreamDisplayKeysByItemVersionId ?? {};
   const epics = items.filter((item) => item.itemType === 'epic');
   const stories = items.filter((item) => item.itemType === 'story');
   const epicIds = new Set(epics.map((item) => item.logicalItemId));
@@ -124,7 +141,11 @@ export function BacklogReviewLayout({
         !epicIds.has(item.parentLogicalItemId)),
   );
   const flaggedItems = items.filter((item) => item.impact !== null);
-  const storiesWithRefs = stories.filter((item) => readFields(item.payload).sourceRefs.length > 0);
+  const sourceRefsFor = (item: ItemVersionDTO) =>
+    upstreamDisplayKeysByItemVersionId
+      ? (upstreamRefsByItem[item.itemVersionId] ?? [])
+      : readFields(item.payload).sourceRefs;
+  const storiesWithRefs = stories.filter((item) => sourceRefsFor(item).length > 0);
 
   return (
     <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
@@ -155,7 +176,12 @@ export function BacklogReviewLayout({
                   className="bg-surface-container-low rounded-lg p-3 sm:p-4"
                 >
                   <ul>
-                    <BacklogItem item={epic} status={status} onEdit={onEdit} />
+                    <BacklogItem
+                      item={epic}
+                      status={status}
+                      upstreamRefs={sourceRefsFor(epic)}
+                      onEdit={onEdit}
+                    />
                   </ul>
                   <div className="border-surface-dim ml-3 border-l pl-3 sm:ml-6 sm:pl-4">
                     {children.length === 0 ? (
@@ -169,6 +195,7 @@ export function BacklogReviewLayout({
                             key={story.itemVersionId}
                             item={story}
                             status={status}
+                            upstreamRefs={sourceRefsFor(story)}
                             onEdit={onEdit}
                           />
                         ))}
@@ -195,6 +222,7 @@ export function BacklogReviewLayout({
                       key={item.itemVersionId}
                       item={item}
                       status={status}
+                      upstreamRefs={sourceRefsFor(item)}
                       onEdit={onEdit}
                     />
                   ))}

@@ -3,20 +3,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import type { ItemVersionDTO } from '@/lib/serialize';
-import { previewItemEdit } from './fixtures';
 
 interface ItemEditDialogProps {
+  versionId: string;
   item: ItemVersionDTO;
   onCancel: () => void;
-  /** Called with a locally-updated copy of `item` - no network call (E5-S8). */
-  onSave: (updatedItem: ItemVersionDTO) => void;
+  onSave: (payload: Record<string, unknown>, confirmed: boolean) => Promise<ItemVersionDTO>;
 }
 
-// `previewItemEdit`'s own return type, referenced by name here for
-// readability - `ItemVersionDTO.payload` (and therefore this dialog's whole
-// diff shape) is generic across artifact types, same reasoning as
-// `fixtures.ts`'s own defensive readers.
-type ChangedRef = ReturnType<typeof previewItemEdit>[number];
+type ChangedRef = { logicalItemId: string; displayKey: string; from: string; to: string };
 
 // The one free-text field this dialog edits: Requirement items call it
 // `behavior`, every other item type (Backlog, UI Requirement) calls it
@@ -83,10 +78,12 @@ function buildUpdatedPayload(
  * `disabled` attribute would give, without a button sitting on screen with
  * no diff yet to show.
  */
-export function ItemEditDialog({ item, onCancel, onSave }: ItemEditDialogProps) {
+export function ItemEditDialog({ versionId, item, onCancel, onSave }: ItemEditDialogProps) {
   const initial = readEditableField(item.payload);
   const [text, setText] = useState(initial.text);
   const [changedRefs, setChangedRefs] = useState<ChangedRef[] | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
@@ -129,15 +126,44 @@ export function ItemEditDialog({ item, onCancel, onSave }: ItemEditDialogProps) 
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [onCancel]);
 
-  function handlePreview() {
-    setChangedRefs(previewItemEdit(item));
+  function buildPayload(): Record<string, unknown> {
+    return buildUpdatedPayload(item.payload, initial.field, text, changedRefs ?? []) as Record<
+      string,
+      unknown
+    >;
   }
 
-  function handleSave() {
-    onSave({
-      ...item,
-      payload: buildUpdatedPayload(item.payload, initial.field, text, changedRefs ?? []),
-    });
+  async function handlePreview() {
+    setPending(true);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/artifact-versions/${versionId}/items/${item.logicalItemId}/edit/preview`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ payload: buildPayload() }),
+        },
+      );
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(body?.error?.message ?? 'Could not preview this edit.');
+      setChangedRefs(body.changedRefs ?? []);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not reach the server.');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function handleSave() {
+    setPending(true);
+    setError(null);
+    try {
+      await onSave(buildPayload(), refs.length > 0);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not save this edit.');
+      setPending(false);
+    }
   }
 
   const hasPreviewed = changedRefs !== null;
@@ -190,12 +216,19 @@ export function ItemEditDialog({ item, onCancel, onSave }: ItemEditDialogProps) 
         <div className="mt-4">
           <button
             type="button"
-            onClick={handlePreview}
+            onClick={() => void handlePreview()}
+            disabled={pending}
             className="border-outline-variant text-on-surface hover:bg-surface-container-low focus-visible:ring-primary rounded-lg border px-4 py-2 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
-            Preview changes
+            {pending ? 'Working…' : 'Preview changes'}
           </button>
         </div>
+
+        {error && (
+          <p role="alert" className="text-error mt-3 text-sm">
+            {error}
+          </p>
+        )}
 
         {hasPreviewed && (
           <div aria-live="polite">
@@ -233,6 +266,7 @@ export function ItemEditDialog({ item, onCancel, onSave }: ItemEditDialogProps) 
           <button
             type="button"
             onClick={onCancel}
+            disabled={pending}
             className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary rounded-lg px-4 py-2 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
           >
             Cancel
@@ -240,10 +274,11 @@ export function ItemEditDialog({ item, onCancel, onSave }: ItemEditDialogProps) 
           {hasPreviewed && (
             <button
               type="button"
-              onClick={handleSave}
+              onClick={() => void handleSave()}
+              disabled={pending}
               className="bg-primary-container text-on-primary-container hover:bg-primary-container-hover focus-visible:ring-primary rounded-lg px-4 py-2 text-sm font-medium shadow-sm transition-colors focus-visible:ring-2 focus-visible:outline-none"
             >
-              {hasChanges ? 'Confirm & Save' : 'Save'}
+              {pending ? 'Saving…' : hasChanges ? 'Confirm & Save' : 'Save'}
             </button>
           )}
         </div>

@@ -5,21 +5,24 @@ import { FlaggedGlyph } from '@/components/status/status-badge';
 
 interface UiRequirementsReviewLayoutProps {
   items: ItemVersionDTO[];
+  artifactPayload: unknown;
+  upstreamDisplayKeysByItemVersionId?: Record<string, string[]>;
   status: ArtifactVersionStatus;
   onEdit: (item: ItemVersionDTO) => void;
 }
 
 interface UiRequirementFields {
-  title?: string | undefined;
-  description?: string | undefined;
-  behavior?: string | undefined;
-  targetUsers?: string[] | undefined;
-  screens?: string[] | undefined;
-  sourceRefs?: string[] | undefined;
+  screenOrFlow?: string | undefined;
+  interactionRequirement?: string | undefined;
+  responsiveConstraints?: string[] | undefined;
+  accessibilityConstraints?: string[] | undefined;
+}
+
+interface UiArtifactNotes {
+  targetUsers: string[];
   navigationExpectations?: string | undefined;
-  responsiveConstraints?: string | undefined;
-  accessibilityConstraints?: string | undefined;
-  uxPriorities?: string[] | undefined;
+  rtlLocalizationRequirements: string[];
+  uxPriorities: string[];
 }
 
 function readFields(payload: unknown): UiRequirementFields {
@@ -33,28 +36,47 @@ function readFields(payload: unknown): UiRequirementFields {
     typeof record[key] === 'string' ? (record[key] as string) : undefined;
 
   return {
-    title: string('title'),
-    description: string('description'),
-    behavior: string('behavior'),
+    screenOrFlow: string('screenOrFlow'),
+    interactionRequirement: string('interactionRequirement'),
+    responsiveConstraints: strings('responsiveConstraints'),
+    accessibilityConstraints: strings('accessibilityConstraints'),
+  };
+}
+
+function readArtifactNotes(payload: unknown): UiArtifactNotes {
+  if (typeof payload !== 'object' || payload === null) {
+    return { targetUsers: [], rtlLocalizationRequirements: [], uxPriorities: [] };
+  }
+  const record = payload as Record<string, unknown>;
+  const strings = (key: string) =>
+    Array.isArray(record[key])
+      ? record[key].filter((entry: unknown): entry is string => typeof entry === 'string')
+      : [];
+  return {
     targetUsers: strings('targetUsers'),
-    screens: strings('screens'),
-    sourceRefs: strings('sourceRefs'),
-    navigationExpectations: string('navigationExpectations'),
-    responsiveConstraints: string('responsiveConstraints'),
-    accessibilityConstraints: string('accessibilityConstraints'),
+    ...(typeof record.navigationExpectations === 'string'
+      ? { navigationExpectations: record.navigationExpectations }
+      : {}),
+    rtlLocalizationRequirements: strings('rtlLocalizationRequirements'),
     uxPriorities: strings('uxPriorities'),
   };
 }
 
 export function UiRequirementsReviewLayout({
   items,
+  artifactPayload,
+  upstreamDisplayKeysByItemVersionId,
   status,
   onEdit,
 }: UiRequirementsReviewLayoutProps) {
+  const upstreamRefsByItem = upstreamDisplayKeysByItemVersionId ?? {};
   const fieldsByItem = items.map((item) => readFields(item.payload));
-  const targetUsers = new Set(fieldsByItem.flatMap((fields) => fields.targetUsers ?? []));
-  const screens = new Set(fieldsByItem.flatMap((fields) => fields.screens ?? []));
-  const sourceRefs = new Set(fieldsByItem.flatMap((fields) => fields.sourceRefs ?? []));
+  const notes = readArtifactNotes(artifactPayload);
+  const targetUsers = new Set(notes.targetUsers);
+  const screens = new Set(
+    fieldsByItem.flatMap((fields) => (fields.screenOrFlow ? [fields.screenOrFlow] : [])),
+  );
+  const sourceRefs = new Set(items.flatMap((item) => upstreamRefsByItem[item.itemVersionId] ?? []));
 
   return (
     <>
@@ -79,6 +101,31 @@ export function UiRequirementsReviewLayout({
           </div>
         ))}
       </section>
+
+      {(notes.navigationExpectations ||
+        notes.rtlLocalizationRequirements.length > 0 ||
+        notes.uxPriorities.length > 0) && (
+        <section
+          aria-label="Cross-cutting UI notes"
+          className="border-surface-dim bg-surface-container-lowest rounded-xl border p-5"
+        >
+          <h2 className="text-on-surface text-sm font-semibold">Cross-cutting UI notes</h2>
+          <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+            {[
+              ['Navigation', notes.navigationExpectations],
+              ['RTL and localization', notes.rtlLocalizationRequirements.join('; ')],
+              ['UX priorities', notes.uxPriorities.join('; ')],
+            ].map(([label, value]) =>
+              value ? (
+                <div key={label}>
+                  <dt className="text-on-surface-variant text-xs font-semibold">{label}</dt>
+                  <dd className="text-on-surface mt-0.5 text-sm leading-relaxed">{value}</dd>
+                </div>
+              ) : null,
+            )}
+          </dl>
+        </section>
+      )}
 
       <section
         aria-labelledby="items-heading"
@@ -111,7 +158,7 @@ export function UiRequirementsReviewLayout({
                     Sourced from
                   </th>
                   <th scope="col" className="w-44 px-4 py-3">
-                    Target surface
+                    Responsive constraints
                   </th>
                   <th scope="col" className="w-20 px-5 py-3 text-right">
                     Edit
@@ -132,7 +179,7 @@ export function UiRequirementsReviewLayout({
                         <td className="px-4 py-4">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-on-surface font-semibold">
-                              {fields.title ?? fields.behavior ?? 'UI requirement'}
+                              {fields.screenOrFlow ?? 'UI requirement'}
                             </span>
                             {item.impact ? (
                               item.impact.acknowledged ? (
@@ -146,16 +193,16 @@ export function UiRequirementsReviewLayout({
                               <span className="text-on-surface-variant text-xs">No impact</span>
                             )}
                           </div>
-                          {fields.description && (
+                          {fields.interactionRequirement && (
                             <p className="text-on-surface-variant mt-1 max-w-2xl leading-relaxed">
-                              {fields.description}
+                              {fields.interactionRequirement}
                             </p>
                           )}
                         </td>
                         <td className="px-4 py-4">
-                          {fields.sourceRefs?.length ? (
+                          {upstreamRefsByItem[item.itemVersionId]?.length ? (
                             <div className="flex flex-wrap gap-1">
-                              {fields.sourceRefs.map((ref) => (
+                              {upstreamRefsByItem[item.itemVersionId]!.map((ref) => (
                                 <span
                                   key={ref}
                                   className="font-mono-code bg-surface-container-high text-on-surface rounded px-1.5 py-0.5 text-xs"
@@ -169,14 +216,11 @@ export function UiRequirementsReviewLayout({
                           )}
                         </td>
                         <td className="px-4 py-4">
-                          {fields.screens?.length ? (
-                            <ul className="flex flex-wrap gap-1">
-                              {fields.screens.map((screen) => (
-                                <li
-                                  key={screen}
-                                  className="bg-surface-container-high text-on-surface rounded px-2 py-1 text-xs"
-                                >
-                                  {screen}
+                          {fields.responsiveConstraints?.length ? (
+                            <ul className="flex flex-col gap-1">
+                              {fields.responsiveConstraints.map((constraint) => (
+                                <li key={constraint} className="text-on-surface-variant text-xs">
+                                  {constraint}
                                 </li>
                               ))}
                             </ul>
@@ -209,12 +253,15 @@ export function UiRequirementsReviewLayout({
                             </summary>
                             <dl className="bg-surface-container-low mt-3 grid gap-3 rounded-lg p-4 sm:grid-cols-2">
                               {[
-                                ['Target users', fields.targetUsers?.join(', ')],
-                                ['Navigation', fields.navigationExpectations],
-                                ['Responsive', fields.responsiveConstraints],
-                                ['Accessibility', fields.accessibilityConstraints],
-                                ['UX priorities', fields.uxPriorities?.join('; ')],
-                                ['Behavior', fields.behavior],
+                                ['Interaction', fields.interactionRequirement],
+                                [
+                                  'Responsive constraints',
+                                  fields.responsiveConstraints?.join('; '),
+                                ],
+                                [
+                                  'Accessibility constraints',
+                                  fields.accessibilityConstraints?.join('; '),
+                                ],
                               ].map(([label, value]) =>
                                 value ? (
                                   <div key={label}>

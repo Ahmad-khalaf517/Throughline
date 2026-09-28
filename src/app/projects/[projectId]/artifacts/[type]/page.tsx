@@ -91,6 +91,7 @@ export default async function ArtifactReviewPage({ params }: ArtifactReviewPageP
           artifactTypeName={artifactTypeName}
           version={reviewData.version}
           qualityIssues={reviewData.qualityIssues}
+          upstreamDisplayKeysByItemVersionId={reviewData.upstreamDisplayKeysByItemVersionId}
         />
       ) : (
         // Not a hard 404: the artifact type is real (it's one of the 4 CHECK
@@ -104,6 +105,7 @@ export default async function ArtifactReviewPage({ params }: ArtifactReviewPageP
           artifactTypeName={artifactTypeName}
           version={null}
           qualityIssues={[]}
+          upstreamDisplayKeysByItemVersionId={{}}
         />
       )}
     </main>
