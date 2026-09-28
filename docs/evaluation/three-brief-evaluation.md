@@ -1,11 +1,11 @@
 # E6-S5: three-brief evaluation preregistration
 
 **Prepared:** 2026-09-28 10:16 UTC, before any E6-S5 sample run or project mutation.  
-**Status:** Preregistration for coordinator review. Results have not been collected.  
+**Status:** Preregistered in commit `329f6d4` and Jira SCRUM-71 comment `11173` before all sample runs. Results below were appended after the runs; the fixed briefs, rubric, and answer keys above were not changed.
 **Source:** BRD §§10.1–10.3; Jira Plan E6-S5 / SCRUM-71.  
 **Evaluation setting:** One developer/evaluator is expected. The user chose an **AI-assisted template proxy** for the manual condition. This is not a human manual baseline. Record the author, model/tool, prompts, and any human edits. Apply the same review checklist to both conditions.
 
-This document fixes the briefs, template, checklist, change stimuli, and answer keys before the hosted runs. Append observations below without altering this section after the first run. If a correction is necessary, date it and retain the original text in the history.
+This document fixed the briefs, template, checklist, change stimuli, and answer keys before the hosted runs. Observations are appended below. If a correction is necessary, date it and retain the original text in the history.
 
 ## Briefs supplied verbatim to both conditions
 
@@ -86,17 +86,30 @@ These are semantic answer keys, written before the generated items exist. Each k
 
 ## Run log and results
 
-Pending coordinator registration. No sample projects have been created or mutated for E6-S5. For each case and condition, append the UTC timeline, output links/exports, item-by-item scoring sheet, pre-change item mapping, change action, impact view evidence, and metric table. Keep failed or incomplete runs in the record.
+The registration gate was acknowledged before Case A. Each case's first outputs and hosted item mapping were committed before its controlled change: A `5775dc5`, B `f5b3445`, C `c301fc6`. The linked case files contain item-level scoring, immutable hosted version links, the change action, and observed warning paths. All times below are 2026-09-28 UTC.
 
-| Case | Condition | Start/end UTC | Active minutes | Outputs/evidence | Score sheet | Controlled-change evidence | Notes |
-|---|---|---|---:|---|---|---|---|
-| A | AI-assisted template proxy | pending | pending | pending | pending | pending | pending |
-| A | Throughline hosted | pending | pending | pending | pending | pending | pending |
-| B | AI-assisted template proxy | pending | pending | pending | pending | pending | pending |
-| B | Throughline hosted | pending | pending | pending | pending | pending | pending |
-| C | AI-assisted template proxy | pending | pending | pending | pending | pending | pending | pending |
-| C | Throughline hosted | pending | pending | pending | pending | pending | pending |
+| Case | Condition | Planning start/end UTC | Elapsed planning time | First outputs and score sheet | Controlled-change evidence | Timing / condition note |
+|---|---|---|---:|---|---|---|
+| A | AI-assisted template proxy | 10:20:41–10:21:52 | 1m 11s | [Proxy first output](case-a-proxy.md); [scoring](case-a-hosted-prechange.md) | [A result](case-a-result.md) | Same AI author/evaluator knew brief and key beforehand. |
+| A | Throughline hosted | 10:22:25–10:30:20 | 7m 55s | [Hosted versions and scoring](case-a-hosted-prechange.md) | [A result](case-a-result.md) | Enforced UI Requirements included; change mutation interrupted by agent usage limit. |
+| B | AI-assisted template proxy | 11:35:57–11:36:47 | 50s | [Proxy first output](case-b-proxy.md); [scoring](case-b-hosted-prechange.md) | [B result](case-b-result.md) | Same AI author/evaluator knew brief and key beforehand. |
+| B | Throughline hosted | 11:37:19–11:42:59 | 5m 40s | [Hosted versions and scoring](case-b-hosted-prechange.md) | [B result](case-b-result.md) | Enforced UI Requirements included. |
+| C | AI-assisted template proxy | 11:49:03–11:49:38 | 35s | [Proxy first output](case-c-proxy.md); [scoring](case-c-hosted-prechange.md) | [C result](case-c-result.md) | Same AI author/evaluator knew brief and key beforehand. |
+| C | Throughline hosted | 11:50:26–11:59:51 | 9m 25s | [Hosted versions and scoring](case-c-hosted-prechange.md) | [C result](case-c-result.md) | Enforced UI Requirements and browser-control timeouts included. |
+
+### Fixed-checklist result summary
+
+| Case | Condition | Requirements concepts | Functional R AC | Story AC | Valid Story→R links | Must concepts implemented | Affected non-root found / total | Missed | Unaffected flagged | Inspectable warning paths |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | AI-assisted template proxy | 8/8 | 8/8 | 8/8 | 8/8 | 8/8 | 2/2 authored | 0 | 0 | no automatic warnings |
+| A | Throughline hosted | 8/8 | 1/4 | 7/8 | 7/8 | 8/8 | 2/2 | 0 | 5 | 7/7 |
+| B | AI-assisted template proxy | 8/8 | 8/8 | 8/8 | 8/8 | 8/8 | 5/5 authored | 0 | 0 | no automatic warnings |
+| B | Throughline hosted | 8/8 | 2/4 | 5/9 | 9/9 | 8/8 | 5/6 | 1 | 7 | 12/12 |
+| C | AI-assisted template proxy | 8/8 | 8/8 | 8/8 | 8/8 | 8/8 | 2/2 authored | 0 | 0 | no automatic warnings |
+| C | Throughline hosted | 8/8 | 1/4 | 4/8 | 8/8 | 8/8 | 4/4 | 0 | 0 | 4/4 |
+
+The proxy's impact sets were authored worksheets, not system-generated warnings. Its short authoring times start after the author already knew the briefs and keys, so they are **not comparable first-exposure completion times**. No cross-condition speed advantage is claimed. The hosted warning count measures review candidates and includes semantic false positives under the frozen answer keys, while each warning's wording correctly says “potentially affected.”
 
 ## Reporting limitations to carry into E6-S6
 
-Exploratory `n = 3`; likely one reviewer and a developer/evaluator; small capstone setting; no product-market-fit claim. Report negative findings and missing data. If AI authors the template, the comparison measures a structured AI-assisted proxy, not human manual work. Any hosted-product gaps or incomplete runs must remain visible in the result table.
+Exploratory `n = 3`, one developer/evaluator who also authored the proxy and answer keys, small capstone setting, no product-market-fit claim. The comparison measures an answer-key-exposed AI-assisted structured-template proxy, **not** human manual work or a blinded benchmark. The hosted workflow required an extra UI Requirements artifact before Backlog. Case A's change mutation crossed an agent usage interruption, so active mutation time is unavailable. Hosted manual edits changed one Requirement behavior per case; the old acceptance criteria were not edited and conflict with the new rule in B and C (and omit the new cutoff in A). The cases report both false positives and the missed sibling Requirement in B. E6-S6 owns the broader evaluation write-up; this file records the E6-S5 measurements and evidence.
