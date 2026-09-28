@@ -63,10 +63,20 @@ export async function POST(request: Request, { params }: RouteParams) {
     // `external_ref` read of its own (Module Boundaries 4.6) - the route
     // checks this directly before ever building a preview.
     const existingRefs = await getAllExternalRefsForProject(projectId);
-    if (existingRefs.some((ref) => ref.provider === 'github')) {
+    const existingRepository = existingRefs.find((ref) => ref.provider === 'github');
+    if (existingRepository) {
       throw new ApiError(
         'GITHUB_ALREADY_INITIALIZED',
         'This project already has a GitHub repository.',
+        // So the screen can link to the repository instead of dead-ending on
+        // the message. Both are null-able: a ref adopted through
+        // reconciliation may have no stored URL.
+        {
+          repository: {
+            url: existingRepository.externalUrl ?? null,
+            name: existingRepository.externalKey ?? null,
+          },
+        },
       );
     }
 
