@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Route-handler wiring test for GET/PATCH /api/projects/:projectId, in the
+// Route-handler wiring test for GET/PATCH/DELETE /api/projects/:projectId, in the
 // same style as projects-route.test.ts: `@/auth` and `@/artifact-lifecycle`
 // are mocked wholesale, so no DB/env is ever touched - this exercises only
 // the route's own logic (auth gate, ownership gate, zod validation, the
@@ -27,12 +27,13 @@ vi.mock('@/auth', () => ({
 vi.mock('@/artifact-lifecycle', () => ({
   getProjectById: vi.fn(),
   updateProject: vi.fn(),
+  deleteProject: vi.fn(),
   BriefFrozenError: FakeBriefFrozenError,
 }));
 
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
-import { getProjectById, updateProject } from '@/artifact-lifecycle';
-import { GET, PATCH } from '@/app/api/projects/[projectId]/route';
+import { deleteProject, getProjectById, updateProject } from '@/artifact-lifecycle';
+import { DELETE, GET, PATCH } from '@/app/api/projects/[projectId]/route';
 import { ApiError } from '@/lib/errors';
 import { emptyArtifactSummaries } from '@/lib/serialize';
 
@@ -40,6 +41,7 @@ const mockedGetVerifiedUser = vi.mocked(getVerifiedUser);
 const mockedRequireProjectOwner = vi.mocked(requireProjectOwner);
 const mockedGetProjectById = vi.mocked(getProjectById);
 const mockedUpdateProject = vi.mocked(updateProject);
+const mockedDeleteProject = vi.mocked(deleteProject);
 
 function paramsFor(projectId: string) {
   return { params: Promise.resolve({ projectId }) };
@@ -177,5 +179,76 @@ describe('PATCH /api/projects/:projectId', () => {
     const body = await response.json();
     expect(body.name).toBe('Renamed');
     expect(mockedUpdateProject).toHaveBeenCalledWith('project-1', { name: 'Renamed' });
+  });
+});
+
+describe('DELETE /api/projects/:projectId', () => {
+  function deleteRequest(): Request {
+    return new Request('http://localhost/api/projects/project-1', { method: 'DELETE' });
+  }
+
+  beforeEach(() => {
+    mockedGetVerifiedUser.mockReset();
+    mockedRequireProjectOwner.mockReset();
+    mockedDeleteProject.mockReset();
+  });
+
+  it('returns 401 UNAUTHENTICATED when there is no verified user', async () => {
+    mockedGetVerifiedUser.mockResolvedValue(null);
+
+    const response = await DELETE(deleteRequest(), paramsFor('project-1'));
+
+    expect(response.status).toBe(401);
+    expect(mockedRequireProjectOwner).not.toHaveBeenCalled();
+    expect(mockedDeleteProject).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 NOT_FOUND and deletes nothing when the caller does not own the project (API Contracts 1.4 - never 403)', async () => {
+    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com', displayName: null });
+    mockedRequireProjectOwner.mockRejectedValue(new ApiError('NOT_FOUND', 'Project not found.'));
+
+    const response = await DELETE(deleteRequest(), paramsFor('project-1'));
+
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error.code).toBe('NOT_FOUND');
+    expect(mockedDeleteProject).not.toHaveBeenCalled();
+  });
+
+  it('returns 204 with no body after deleting the callers own project', async () => {
+    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com', displayName: null });
+    mockedRequireProjectOwner.mockResolvedValue(undefined);
+    mockedDeleteProject.mockResolvedValue(true);
+
+    const response = await DELETE(deleteRequest(), paramsFor('project-1'));
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe('');
+    expect(mockedRequireProjectOwner).toHaveBeenCalledWith('user-1', 'project-1');
+    expect(mockedDeleteProject).toHaveBeenCalledWith('project-1');
+  });
+
+  it('returns 404 NOT_FOUND when a concurrent delete already removed the project', async () => {
+    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com', displayName: null });
+    mockedRequireProjectOwner.mockResolvedValue(undefined);
+    mockedDeleteProject.mockResolvedValue(false);
+
+    const response = await DELETE(deleteRequest(), paramsFor('project-1'));
+
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('surfaces an unexpected database failure as 500 INTERNAL_ERROR, not a partial success', async () => {
+    mockedGetVerifiedUser.mockResolvedValue({ id: 'user-1', email: 'a@b.com', displayName: null });
+    mockedRequireProjectOwner.mockResolvedValue(undefined);
+    mockedDeleteProject.mockRejectedValue(new Error('connection lost'));
+
+    const response = await DELETE(deleteRequest(), paramsFor('project-1'));
+
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body.error.code).toBe('INTERNAL_ERROR');
   });
 });

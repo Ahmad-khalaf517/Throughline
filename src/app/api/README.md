@@ -14,9 +14,10 @@ that shape (Module Boundaries section 4.7) - four route sets that call
 
 1. **`/api/projects` routes (E1-S8)**: `project`/`artifact` are owned by
    `artifact-lifecycle` (layer 2) with no artifact-type module, so `POST/GET
-/api/projects` and `GET/PATCH /api/projects/:projectId` call
+/api/projects` and `GET/PATCH/DELETE /api/projects/:projectId` call
    `artifact-lifecycle.createProject`/`getProjectById`/`listProjectsForOwner`/
-   `updateProject` directly.
+   `updateProject`/`deleteProject` directly (`DELETE` - ERD round 13 - removes
+   the project and all its data in one transaction; API Contracts section 3).
 
 2. **`POST /api/session/bootstrap` (E1-S6)**: Skips `requireProjectOwner` —
    it is not project-scoped (API Contracts section 2).
