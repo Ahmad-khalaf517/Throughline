@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { LogoMark } from '@/components/icons/logo-mark';
+import { friendlyNameFromEmail } from '@/lib/utils';
 
 const NAV_LINKS = [
   { href: '#workflow', label: 'Workflow' },
@@ -10,6 +11,8 @@ const NAV_LINKS = [
 
 interface NavbarProps {
   userEmail: string | null;
+  /** `app_user.displayName` - see user-menu.tsx's own doc comment. */
+  displayName: string | null;
   onSignOut: () => Promise<void>;
 }
 
@@ -17,7 +20,7 @@ interface NavbarProps {
  * Presentational only (Module Boundaries: `components` may import `lib`
  * only). Auth state is resolved in `app` and passed down as props.
  */
-export function Navbar({ userEmail, onSignOut }: NavbarProps) {
+export function Navbar({ userEmail, displayName, onSignOut }: NavbarProps) {
   return (
     <header className="border-surface-dim bg-surface-container-lowest/90 sticky top-0 z-40 w-full border-b backdrop-blur-md">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
@@ -47,7 +50,10 @@ export function Navbar({ userEmail, onSignOut }: NavbarProps) {
                 Projects
               </Link>
               <span className="text-on-surface-variant hidden text-xs sm:inline">
-                Signed in as <span className="text-on-surface font-medium">{userEmail}</span>
+                Signed in as{' '}
+                <span className="text-on-surface font-medium">
+                  {displayName ?? friendlyNameFromEmail(userEmail)}
+                </span>
               </span>
               <form action={onSignOut}>
                 <button

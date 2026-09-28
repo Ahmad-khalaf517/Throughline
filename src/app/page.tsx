@@ -1,4 +1,4 @@
-import { getVerifiedUser } from '@/auth';
+import { getAppUserById, getVerifiedUser } from '@/auth';
 import { ApprovalSection } from '@/components/marketing/approval-section';
 import { FinalCtaSection } from '@/components/marketing/final-cta-section';
 import { Footer } from '@/components/marketing/footer';
@@ -14,10 +14,18 @@ import { signOutAction } from './actions';
 
 export default async function Home() {
   const user = await getVerifiedUser();
+  // Same "app_user row, not Supabase Auth metadata" reasoning as
+  // projects/layout.tsx - the persisted displayName is the one that stays
+  // current after an edit-profile save.
+  const appUser = user ? await getAppUserById(user.id) : null;
 
   return (
     <>
-      <Navbar userEmail={user?.email ?? null} onSignOut={signOutAction} />
+      <Navbar
+        userEmail={user?.email ?? null}
+        displayName={appUser?.displayName ?? null}
+        onSignOut={signOutAction}
+      />
       <main className="flex-1">
         <Hero />
         <ProblemSection />
