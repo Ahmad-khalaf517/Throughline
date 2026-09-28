@@ -9,7 +9,8 @@ interface TextFieldProps {
   required?: boolean;
   placeholder?: string;
   helperText?: string;
-  errorText?: string;
+  errorText?: string | undefined;
+  defaultValue?: string;
 }
 
 export function TextField({
@@ -22,6 +23,7 @@ export function TextField({
   placeholder,
   helperText,
   errorText,
+  defaultValue,
 }: TextFieldProps) {
   return (
     <FieldShell id={id} label={label} helperText={helperText} errorText={errorText}>
@@ -32,6 +34,7 @@ export function TextField({
         autoComplete={autoComplete}
         required={required}
         placeholder={placeholder}
+        defaultValue={defaultValue}
         className="border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus:border-primary focus:bg-surface-container-low focus:ring-primary h-11 w-full rounded-lg border px-3.5 text-sm transition-colors focus:ring-1 focus:outline-none"
       />
     </FieldShell>
