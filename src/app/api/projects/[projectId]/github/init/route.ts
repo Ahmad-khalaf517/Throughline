@@ -89,10 +89,16 @@ export async function POST(request: Request, { params }: RouteParams) {
         );
       }
       if (error instanceof GithubOperationFailedError) {
-        // The only failure reason `github` currently produces
-        // (`name_taken_by_other`, from either an immediate 422 or a marker
-        // mismatch found during reconciliation - src/external/github/index.ts).
-        throw new ApiError('NAME_TAKEN_BY_OTHER', error.message);
+        // `name_taken_by_other` comes from either an immediate 422 or a
+        // marker mismatch found during reconciliation. Any other reason is
+        // GitHub itself refusing the create call (e.g. 401/403 for a
+        // `GITHUB_TOKEN` that can't create repositories) - src/external/
+        // github/index.ts. That one must reach the user with its real cause,
+        // not be reported as a name collision.
+        if (error.reason === 'name_taken_by_other') {
+          throw new ApiError('NAME_TAKEN_BY_OTHER', error.message);
+        }
+        throw new ApiError('GITHUB_REQUEST_REJECTED', error.reason);
       }
       if (error instanceof GithubOperationConflictError) {
         throw new ApiError(

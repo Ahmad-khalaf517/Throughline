@@ -76,9 +76,18 @@ export class ArchitectureVersionNotApprovedError extends Error {
 }
 
 export class GithubOperationFailedError extends Error {
+  /**
+   * `name_taken_by_other` for a name collision (ERD 7.3); otherwise the
+   * human-readable description of GitHub's own rejection (see
+   * `describeRejection`). The init route branches on this to pick between
+   * `NAME_TAKEN_BY_OTHER` and `GITHUB_REQUEST_REJECTED`.
+   */
+  readonly reason: string;
+
   constructor(reason: string) {
     super(`GitHub operation failed: ${reason}`);
     this.name = 'GithubOperationFailedError';
+    this.reason = reason;
   }
 }
 
@@ -352,6 +361,49 @@ interface CreatedRepo {
   ownerLogin: string;
 }
 
+/**
+ * ERD 7.2: "`failed` is reserved for definitive provider rejections
+ * (validation/4xx). Timeouts, 5xx and lost responses are never `failed`." A
+ * 4xx response means GitHub read the request and refused it, so nothing was
+ * created and a later retry cannot duplicate anything. 408 (request timeout)
+ * is the one 4xx that says nothing about whether the request was processed.
+ */
+function isDefinitiveRejection(error: unknown): error is RequestError {
+  return (
+    error instanceof RequestError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 408
+  );
+}
+
+/**
+ * Stored as `external_operation.error_message` and shown to the user, so it
+ * names the actual cause. Without this, an unusable `GITHUB_TOKEN` (401/403)
+ * was treated as an ambiguous failure: the operation sat `pending`, then
+ * `reconciliation_required` forever (reconcile finds no repo and never
+ * resends), and the user only ever saw "Something went wrong."
+ */
+function describeRejection(error: RequestError): string {
+  const data: unknown = error.response?.data;
+  const githubMessage =
+    typeof data === 'object' && data !== null && 'message' in data
+      ? String(data.message)
+      : error.message;
+  const detail = `${error.status}: ${githubMessage}`;
+  if (error.status === 401) {
+    return `GitHub rejected the configured GITHUB_TOKEN (${detail}) - it is invalid or expired.`;
+  }
+  if (error.status === 403) {
+    return (
+      `GitHub refused to create the repository (${detail}) - the configured GITHUB_TOKEN ` +
+      'is not allowed to create repositories for this account. Use a token with ' +
+      'repository-creation access (e.g. a classic token with the `repo` scope).'
+    );
+  }
+  return `GitHub rejected the request to create the repository (${detail}).`;
+}
+
 async function sendCreateRepo(args: {
   octokit: Octokit;
   repoName: string;
@@ -391,6 +443,9 @@ async function sendCreateRepo(args: {
       // marker check is needed to know this, unlike the genuinely ambiguous
       // lost-response case below, which propagates unchanged instead.
       throw new DefinitiveProviderError('name_taken_by_other');
+    }
+    if (isDefinitiveRejection(error)) {
+      throw new DefinitiveProviderError(describeRejection(error));
     }
     throw error;
   }

@@ -14,7 +14,13 @@ const {
   class FakeArchitectureOptionNotSelectedError extends Error {}
   class FakeArchitectureVersionNotApprovedError extends Error {}
   class FakeGithubOperationRefusedError extends Error {}
-  class FakeGithubOperationFailedError extends Error {}
+  class FakeGithubOperationFailedError extends Error {
+    readonly reason: string;
+    constructor(reason: string) {
+      super(reason);
+      this.reason = reason;
+    }
+  }
   class FakeGithubOperationConflictError extends Error {}
   class FakeGithubReconciliationRequiredError extends Error {}
   class FakeGithubOperationInFlightError extends Error {}
@@ -275,6 +281,22 @@ describe('POST /api/projects/:projectId/github/init', () => {
     expect(response.status).toBe(409);
     const body = await response.json();
     expect(body.error.code).toBe('NAME_TAKEN_BY_OTHER');
+  });
+
+  it("returns 502 GITHUB_REQUEST_REJECTED with GitHub's own reason when GitHub refuses the create call (e.g. token lacks permission)", async () => {
+    const reason =
+      'GitHub refused to create the repository (403: Resource not accessible by personal access token)';
+    mockedInitRepo.mockRejectedValue(new FakeGithubOperationFailedError(reason));
+
+    const response = await POST(
+      postRequest({ repoName: 'x', impactAcknowledged: true }),
+      paramsFor('project-1'),
+    );
+
+    expect(response.status).toBe(502);
+    const body = await response.json();
+    expect(body.error.code).toBe('GITHUB_REQUEST_REJECTED');
+    expect(body.error.message).toBe(reason);
   });
 
   it('returns 409 REQUEST_CONFLICT when the request hash no longer matches', async () => {

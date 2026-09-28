@@ -682,4 +682,102 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       });
     });
   });
+
+  // ERD 7.2: `failed` is reserved for definitive provider rejections (4xx);
+  // 5xx/timeouts/lost responses are never `failed`. A GITHUB_TOKEN that
+  // can't create repositories answers 403 - before this was classified,
+  // that 403 was treated as ambiguous: the operation sat `pending` then
+  // `reconciliation_required` forever and no repository was ever created.
+  describe('create call rejected by GitHub (ERD 7.2 definitive 4xx vs ambiguous 5xx)', () => {
+    function respondingToCreateWith(
+      fake: ReturnType<typeof createFakeGitHub>,
+      rejection: () => { status: number; body: unknown } | null,
+    ) {
+      return async (url: string | URL, init?: RequestInit): Promise<Response> => {
+        const method = (init?.method ?? 'GET').toUpperCase();
+        const { pathname } = new URL(url);
+        const rejected = method === 'POST' && pathname === '/user/repos' ? rejection() : null;
+        if (rejected) {
+          return new Response(JSON.stringify(rejected.body), {
+            status: rejected.status,
+            headers: { 'content-type': 'application/json; charset=utf-8' },
+          });
+        }
+        return fake.fetch(url, init);
+      };
+    }
+
+    async function approvedArchitecture(name: string) {
+      const { projectId } = await fx.createProjectWithOwner(sql, { name });
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const adr = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: architectureArtifactId,
+        itemType: 'architecture_decision',
+      });
+      const architectureVersionId = await approveArchitectureVersion(architectureArtifactId, 1, [
+        { logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId },
+      ]);
+      return { projectId, architectureVersionId };
+    }
+
+    it("a 403 ends failed with GitHub's own reason (never left pending), and a retry once the token can create repositories resends and completes", async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('github 403');
+      const repoName = `forbidden-repo-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+      let tokenCanCreateRepos = false;
+      const fetchImpl = respondingToCreateWith(fake, () =>
+        tokenCanCreateRepos
+          ? null
+          : {
+              status: 403,
+              body: { message: 'Resource not accessible by personal access token', status: '403' },
+            },
+      );
+
+      await withFakeFetch(fetchImpl, async () => {
+        await expect(github.initRepo(architectureVersionId, repoName)).rejects.toThrow(
+          /Resource not accessible by personal access token/,
+        );
+
+        const afterRejection = await githubOperationRows(projectId);
+        expect(afterRejection).toHaveLength(1);
+        expect(afterRejection[0]!.status).toBe('failed');
+        expect(afterRejection[0]!.error_message).toMatch(/403/);
+        expect(fake.repos.size).toBe(0);
+        expect(await githubRefRows(projectId)).toHaveLength(0);
+
+        // Same name, same inputs: the failed row is retried in place (ERD
+        // 7.2 step 3.b "failed -> user may retry; set pending, resend") -
+        // no second operation row, no name_taken_by_other.
+        tokenCanCreateRepos = true;
+        const ref = await github.initRepo(architectureVersionId, repoName);
+        expect(ref.provider).toBe('github');
+
+        const afterRetry = await githubOperationRows(projectId);
+        expect(afterRetry).toHaveLength(1);
+        expect(afterRetry[0]!.status).toBe('completed');
+        expect(fake.repos.size).toBe(1);
+      });
+    });
+
+    it('a 5xx on create is ambiguous, never failed - the row stays pending for reconciliation', async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('github 503');
+      const repoName = `unavailable-repo-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+      const fetchImpl = respondingToCreateWith(fake, () => ({
+        status: 503,
+        body: { message: 'Service Unavailable' },
+      }));
+
+      await withFakeFetch(fetchImpl, async () => {
+        await expect(github.initRepo(architectureVersionId, repoName)).rejects.toThrow();
+
+        const rows = await githubOperationRows(projectId);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.status).toBe('pending');
+        expect(rows[0]!.error_message).toBeNull();
+      });
+    });
+  });
 });
