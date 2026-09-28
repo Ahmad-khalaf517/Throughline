@@ -24,7 +24,7 @@
 // proves its credential guard stops cleanly; this module re-implements the
 // spike's raw-fetch Jira REST v3 client SHAPE for real (Basic auth, base64
 // `email:api_token`, `/rest/api/3/issue` POST, `/rest/api/3/search/jql`
-// POST, the `adfDoc` helper) rather than importing it (that script is
+// POST, the ADF description shape) rather than importing it (that script is
 // spike-local, per its own header comment).
 //
 // Reads Epic/Story LogicalItem/ItemVersion membership rows through
@@ -43,6 +43,7 @@ import {
 } from '@/external/operations';
 import { getWarnings, getExternalDrift, type ImpactRow } from '@/lineage/impact';
 import { getBacklogVersionMembers, type BacklogVersionMember } from '@/artifact-types/backlog';
+import { buildIssueDescription, buildIssueSummary } from './issue-content';
 
 // ---------------------------------------------------------------------------
 // Module Boundaries 4.6 documents `previewExport`'s `skipped: PreviewItem[]`
@@ -173,15 +174,6 @@ async function jiraFetch<T>(config: JiraConfig, path: string, init: RequestInit)
     );
   }
   return bodyText ? (JSON.parse(bodyText) as T) : ({} as T);
-}
-
-/** Minimal Atlassian Document Format doc - same shape as the spike's own `adfDoc`. */
-function adfDoc(paragraphs: string[]) {
-  return {
-    type: 'doc',
-    version: 1,
-    content: paragraphs.map((text) => ({ type: 'paragraph', content: [{ type: 'text', text }] })),
-  };
 }
 
 interface JiraCreateIssueResponse {
@@ -405,6 +397,8 @@ async function sendCreateIssue(args: {
   config: JiraConfig;
   member: BacklogVersionMember;
   itemType: 'epic' | 'story';
+  // `exportOneItem` has already rejected a member with no display key.
+  displayKey: string;
   marker: string;
   parentKey: string | null;
 }): Promise<{
@@ -413,27 +407,34 @@ async function sendCreateIssue(args: {
   externalUrl: string;
   metadata: { jiraProjectKey: string };
 }> {
-  const { config, member, itemType, marker, parentKey } = args;
+  const { config, member, itemType, displayKey, marker, parentKey } = args;
   // FR-071: no other issue-type naming scheme is named anywhere in the
   // frozen ERD/TR, and this project's own capstone scope has no Jira-schema-
   // discovery step to read the configured project's REAL issue-type names -
   // a judgment call, same spirit as `github`'s `PINNED_REFERENCE_STACK`:
   // Jira Software's own default issue-type names for "Epic"/"Story".
   const issueType = itemType === 'epic' ? 'Epic' : 'Story';
-  const description = adfDoc([
-    `Created by Throughline from ${itemType} ${member.displayKey} ` +
-      `(item_version ${member.itemVersionId}).`,
-    `Throughline marker (do not remove): ${marker}`,
-  ]);
+  // The item's own content (title / user story / behavior / acceptance
+  // criteria) leads; the provenance footer - carrying the backup marker - is
+  // always last. See issue-content.ts.
+  const description = buildIssueDescription({
+    itemType,
+    payload: member.payload,
+    footer: [
+      `Created by Throughline from ${itemType} ${displayKey} ` +
+        `(item_version ${member.itemVersionId}).`,
+      `Throughline marker (do not remove): ${marker}`,
+    ],
+  });
   const fields: Record<string, unknown> = {
     project: { key: config.projectKey },
     issuetype: { name: issueType },
-    summary: member.displayKey,
+    summary: buildIssueSummary({ itemType, displayKey, payload: member.payload }),
     // Primary marker (ERD 7.4): a label, JQL-queryable without any
     // custom-field setup.
     labels: [marker],
     // Backup marker: the same complete string repeated in the description
-    // footer (see adfDoc call above).
+    // footer (see buildIssueDescription's `footer` above).
     description,
   };
   if (parentKey) fields.parent = { key: parentKey };
@@ -537,6 +538,7 @@ async function exportOneItem(args: {
   }
 
   const itemType = member.itemType === 'epic' ? 'epic' : 'story';
+  const displayKey = member.displayKey; // narrowed by the guard above; a closure would lose it
   const marker = markerFor(member.itemVersionId);
   // ERD 7.4's own literal key format.
   const operationKey = `jira:create_issue:${config.projectKey}:${member.itemVersionId}`;
@@ -559,7 +561,7 @@ async function exportOneItem(args: {
       targetDescriptor,
       sourceArtifactVersionId: member.sourceVersionId,
       sourceItemVersionId: member.itemVersionId,
-      send: () => sendCreateIssue({ config, member, itemType, marker, parentKey }),
+      send: () => sendCreateIssue({ config, member, itemType, displayKey, marker, parentKey }),
       reconcile: () => reconcileIssue({ config, marker }),
     });
   } catch {

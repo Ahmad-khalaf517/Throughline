@@ -125,6 +125,7 @@ interface FakeJiraIssue {
   id: string;
   key: string;
   projectKey: string;
+  summary: string;
   labels: string[];
   descriptionText: string;
   parentKey: string | null;
@@ -181,6 +182,7 @@ function createFakeJira() {
         id,
         key,
         projectKey,
+        summary: body.fields.summary,
         labels: body.fields.labels ?? [],
         descriptionText: extractDescriptionText(body.fields.description),
         parentKey: body.fields.parent?.key ?? null,
@@ -515,6 +517,73 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       expect(storyRef).toBeDefined();
       const fakeStoryIssue = fake.issuesByKey.get(storyRef!.externalKey!);
       expect(fakeStoryIssue?.parentKey).toBe(originalEpicKey);
+    });
+  });
+
+  describe('issue content (FR-071) - regression: issues were created with only the display key', () => {
+    it('sends the Epic title / Story user story, behavior and acceptance criteria, and keeps the marker in the description', async () => {
+      const { projectId } = await fx.createProjectWithOwner(sql, { name: 'jira issue content' });
+      const artifactId = await fx.createArtifact(sql, projectId, 'backlog');
+
+      const epicItem = await fx.createLogicalItem(sql, { projectId, artifactId, itemType: 'epic' });
+      const epicItemVersionId = await fx.createItemVersion(sql, {
+        projectId,
+        logicalItemId: epicItem.id,
+        payload: {
+          title: 'Project intake',
+          scopeStatement: 'Capturing the brief and the project setup.',
+          explanation: 'model prose',
+        },
+      });
+      const storyItem = await fx.createLogicalItem(sql, {
+        projectId,
+        artifactId,
+        itemType: 'story',
+      });
+      const storyItemVersionId = await fx.createItemVersion(sql, {
+        projectId,
+        logicalItemId: storyItem.id,
+        payload: {
+          userValueStatement: 'As a PM, I want to paste a brief, so that a project is created.',
+          structuredBehavior: 'Saves the brief and opens the new project.',
+          acceptanceCriteria: ['Brief is saved', 'Project page opens'],
+          priority: 'high',
+          explanation: 'model prose',
+        },
+      });
+
+      const v1 = await approveBacklogVersion(sql, artifactId, 1, [
+        { logicalItemId: epicItem.id, itemVersionId: epicItemVersionId },
+        {
+          logicalItemId: storyItem.id,
+          itemVersionId: storyItemVersionId,
+          parentLogicalItemId: epicItem.id,
+        },
+      ]);
+
+      const fake = createFakeJira();
+      const refs = await withFakeFetch(fake.fetch, () => jira.exportBacklog(v1, new Map()));
+      expect(refs).toHaveLength(2);
+
+      const issues = [...fake.issuesByKey.values()];
+      const epicIssue = issues.find((issue) => issue.labels.includes(`tl-${epicItemVersionId}`));
+      const storyIssue = issues.find((issue) => issue.labels.includes(`tl-${storyItemVersionId}`));
+      expect(epicIssue).toBeDefined();
+      expect(storyIssue).toBeDefined();
+
+      expect(epicIssue!.summary).toBe(`${epicItem.displayKey}: Project intake`);
+      expect(epicIssue!.descriptionText).toContain('Capturing the brief and the project setup.');
+
+      expect(storyIssue!.summary).toBe(
+        `${storyItem.displayKey}: As a PM, I want to paste a brief, so that a project is created.`,
+      );
+      expect(storyIssue!.descriptionText).toContain('Saves the brief and opens the new project.');
+      expect(storyIssue!.descriptionText).toContain('Priority: high');
+      expect(storyIssue!.descriptionText).not.toContain('model prose');
+
+      // The backup marker (TR 30.2) must survive the richer description.
+      expect(epicIssue!.descriptionText).toContain(`tl-${epicItemVersionId}`);
+      expect(storyIssue!.descriptionText).toContain(`tl-${storyItemVersionId}`);
     });
   });
 
