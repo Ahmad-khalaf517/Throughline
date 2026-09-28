@@ -3,60 +3,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import type { ItemVersionDTO } from '@/lib/serialize';
+import {
+  buildUpdatedPayload,
+  ItemEditConfirmationRequired,
+  readEditableField,
+  type ChangedRef,
+} from './item-edit-model';
 
 interface ItemEditDialogProps {
   versionId: string;
   item: ItemVersionDTO;
   onCancel: () => void;
   onSave: (payload: Record<string, unknown>, confirmed: boolean) => Promise<ItemVersionDTO>;
-}
-
-type ChangedRef = { logicalItemId: string; displayKey: string; from: string; to: string };
-
-// The one free-text field this dialog edits: Requirement items call it
-// `behavior`, every other item type (Backlog, UI Requirement) calls it
-// `description` (TR section 22's field table). Read defensively, same
-// pattern as `artifact-review-screen.tsx`'s `readKnownFields` - this dialog
-// only needs the one field, not the whole payload shape.
-function readEditableField(payload: unknown): { field: 'behavior' | 'description'; text: string } {
-  if (typeof payload === 'object' && payload !== null) {
-    const record = payload as Record<string, unknown>;
-    if (typeof record.behavior === 'string') return { field: 'behavior', text: record.behavior };
-    if (typeof record.description === 'string') {
-      return { field: 'description', text: record.description };
-    }
-  }
-  return { field: 'description', text: '' };
-}
-
-// Builds the saved payload: the edited text goes into whichever field it was
-// read from, and - only when a rebind was confirmed - `sourceRefVersions`
-// bumps to each change's `to` value, so re-opening this dialog on the same
-// item afterward shows no further diff (consistent with what a real rebind,
-// which mints a new ItemVersion bound to the current upstream versions,
-// would leave behind).
-function buildUpdatedPayload(
-  payload: unknown,
-  field: 'behavior' | 'description',
-  text: string,
-  changedRefs: ChangedRef[],
-): unknown {
-  const record: Record<string, unknown> =
-    typeof payload === 'object' && payload !== null
-      ? { ...(payload as Record<string, unknown>) }
-      : {};
-  record[field] = text;
-  if (changedRefs.length > 0) {
-    const existingVersions =
-      typeof record.sourceRefVersions === 'object' && record.sourceRefVersions !== null
-        ? { ...(record.sourceRefVersions as Record<string, unknown>) }
-        : {};
-    for (const ref of changedRefs) {
-      existingVersions[ref.displayKey] = ref.to;
-    }
-    record.sourceRefVersions = existingVersions;
-  }
-  return record;
 }
 
 /**
@@ -79,7 +37,7 @@ function buildUpdatedPayload(
  * no diff yet to show.
  */
 export function ItemEditDialog({ versionId, item, onCancel, onSave }: ItemEditDialogProps) {
-  const initial = readEditableField(item.payload);
+  const initial = readEditableField(item);
   const [text, setText] = useState(initial.text);
   const [changedRefs, setChangedRefs] = useState<ChangedRef[] | null>(null);
   const [pending, setPending] = useState(false);
@@ -127,10 +85,7 @@ export function ItemEditDialog({ versionId, item, onCancel, onSave }: ItemEditDi
   }, [onCancel]);
 
   function buildPayload(): Record<string, unknown> {
-    return buildUpdatedPayload(item.payload, initial.field, text, changedRefs ?? []) as Record<
-      string,
-      unknown
-    >;
+    return buildUpdatedPayload(item.payload, initial.field, text);
   }
 
   async function handlePreview() {
@@ -161,6 +116,17 @@ export function ItemEditDialog({ versionId, item, onCancel, onSave }: ItemEditDi
     try {
       await onSave(buildPayload(), refs.length > 0);
     } catch (cause) {
+      if (cause instanceof ItemEditConfirmationRequired) {
+        // The server's recomputed rebind changed references the preview had
+        // not shown (or was never run against) - surface its diff so
+        // "Confirm & Save" becomes available and re-sends with confirmed=true.
+        setChangedRefs(cause.changedRefs);
+        setError(
+          'Upstream references changed since the preview - review the change below and confirm.',
+        );
+        setPending(false);
+        return;
+      }
       setError(cause instanceof Error ? cause.message : 'Could not save this edit.');
       setPending(false);
     }
@@ -202,7 +168,7 @@ export function ItemEditDialog({ versionId, item, onCancel, onSave }: ItemEditDi
           htmlFor="item-edit-text"
           className="text-on-surface mt-5 flex flex-col gap-1.5 text-sm font-medium"
         >
-          {initial.field === 'behavior' ? 'Behavior' : 'Description'}
+          {initial.label}
           <textarea
             id="item-edit-text"
             ref={textRef}
@@ -244,12 +210,11 @@ export function ItemEditDialog({ versionId, item, onCancel, onSave }: ItemEditDi
                       aria-hidden="true"
                     />
                     <p className="text-on-surface text-sm leading-relaxed">
-                      <span className="font-mono-code font-semibold">{item.displayKey}</span> will
-                      now depend on{' '}
-                      <span className="font-mono-code font-semibold">
-                        {ref.displayKey} {ref.to}
-                      </span>{' '}
-                      instead of <span className="font-mono-code font-semibold">{ref.from}</span>.
+                      <span className="font-mono-code font-semibold">{item.displayKey}</span>{' '}
+                      depends on{' '}
+                      <span className="font-mono-code font-semibold">{ref.displayKey}</span>, which
+                      now has a newer approved version - saving will rebind it to the current
+                      version.
                     </p>
                   </li>
                 ))}

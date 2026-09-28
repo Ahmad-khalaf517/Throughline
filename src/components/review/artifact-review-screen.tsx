@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils';
 import { ApprovalDialog } from './approval-dialog';
 import { ArchitectureOptions } from './architecture-options';
 import { ItemEditDialog } from './item-edit-dialog';
+import { ItemEditConfirmationRequired } from './item-edit-model';
 import { BacklogReviewLayout } from './backlog-review-layout';
 import { UiRequirementsReviewLayout } from './ui-requirements-review-layout';
 import { GenerationSkeleton } from './generation-skeleton';
@@ -193,6 +194,13 @@ export function ArtifactReviewScreen({
   // - `null` means closed. Separate from `dialogOpen` above (the approval
   // dialog), since both can exist independently.
   const [editingItem, setEditingItem] = useState<ItemVersionDTO | null>(null);
+  // A save mints a new item_version id, which the server-rendered
+  // `upstreamDisplayKeysByItemVersionId` prop has no entry for until the
+  // post-save `router.refresh()` lands. These local entries carry the old
+  // item's refs over to the new id in the meantime (an edit keeps the same
+  // upstream logical items), so the "Sourced from" / "Depends on" cells do not
+  // flash "None recorded"; the refreshed prop then supersedes them.
+  const [upstreamOverrides, setUpstreamOverrides] = useState<Record<string, string[]>>({});
   // Architecture-only (FR-022): `selectedOptionId` is the in-progress radio
   // choice; `selectedArchitectureOptionId` only gets set once approval
   // actually happens, mirroring the real DTO field of the same name (set
@@ -208,6 +216,10 @@ export function ArtifactReviewScreen({
     [items],
   );
   const flaggedItems = useMemo(() => items.filter((item) => item.impact !== null), [items]);
+  const effectiveUpstream = useMemo(
+    () => ({ ...upstreamDisplayKeysByItemVersionId, ...upstreamOverrides }),
+    [upstreamDisplayKeysByItemVersionId, upstreamOverrides],
+  );
 
   /**
    * `POST /api/projects/:projectId/artifacts/:type/generate` with no body -
@@ -312,9 +324,7 @@ export function ArtifactReviewScreen({
   const isRequirements = version.artifactType === 'requirements';
   const isUiRequirements = version.artifactType === 'ui_requirements';
   const uiSourceRefs = new Set(
-    isUiRequirements
-      ? items.flatMap((item) => upstreamDisplayKeysByItemVersionId[item.itemVersionId] ?? [])
-      : [],
+    isUiRequirements ? items.flatMap((item) => effectiveUpstream[item.itemVersionId] ?? []) : [],
   );
 
   // `POST /api/artifact-versions/:versionId/approve` - shared by the plain
@@ -598,7 +608,7 @@ export function ArtifactReviewScreen({
         <UiRequirementsReviewLayout
           items={items}
           artifactPayload={version.payload}
-          upstreamDisplayKeysByItemVersionId={upstreamDisplayKeysByItemVersionId}
+          upstreamDisplayKeysByItemVersionId={effectiveUpstream}
           status={status}
           onEdit={setEditingItem}
         />
@@ -607,7 +617,7 @@ export function ArtifactReviewScreen({
       {version.artifactType === 'backlog' ? (
         <BacklogReviewLayout
           items={items}
-          upstreamDisplayKeysByItemVersionId={upstreamDisplayKeysByItemVersionId}
+          upstreamDisplayKeysByItemVersionId={effectiveUpstream}
           qualityIssues={qualityIssues}
           status={status}
           onEdit={setEditingItem}
@@ -784,8 +794,7 @@ export function ArtifactReviewScreen({
                       ? qualityIssues.filter((issue) => issue.logicalItemId === item.logicalItemId)
                       : [];
                     if (fields.priority) metaParts.push(`Priority: ${fields.priority}`);
-                    const upstreamRefs =
-                      upstreamDisplayKeysByItemVersionId[item.itemVersionId] ?? [];
+                    const upstreamRefs = effectiveUpstream[item.itemVersionId] ?? [];
                     if (upstreamRefs.length > 0) {
                       metaParts.push(`Depends on: ${upstreamRefs.join(', ')}`);
                     }
@@ -1107,15 +1116,36 @@ export function ArtifactReviewScreen({
             );
             const body = await response.json().catch(() => null);
             if (!response.ok) {
-              throw new Error(body?.error?.message ?? 'Could not save this edit.');
+              const message = body?.error?.message ?? 'Could not save this edit.';
+              // 409: the server's own rebind changed references the client had
+              // not confirmed - hand the diff back so the dialog can show it.
+              if (body?.error?.code === 'CONFIRMATION_REQUIRED') {
+                throw new ItemEditConfirmationRequired(
+                  message,
+                  body.error.details?.changedRefs ?? [],
+                );
+              }
+              throw new Error(message);
             }
             const updatedItem = body.item as ItemVersionDTO;
+            // The edit keeps the same upstream logical items (the server
+            // rebinds to their current versions, same display keys), so the
+            // old item's keys are correct for the new id until the refresh
+            // below brings the server-truth map.
+            setUpstreamOverrides((current) => ({
+              ...current,
+              [updatedItem.itemVersionId]: effectiveUpstream[editingItem.itemVersionId] ?? [],
+            }));
             setItems((current) =>
               current.map((existing) =>
                 existing.logicalItemId === updatedItem.logicalItemId ? updatedItem : existing,
               ),
             );
             setEditingItem(null);
+            // A save mints a new item_version id; the server-rendered
+            // "Depends on / Sourced from" data is keyed by item_version id, so
+            // refetch it for the new id.
+            router.refresh();
             return updatedItem;
           }}
         />

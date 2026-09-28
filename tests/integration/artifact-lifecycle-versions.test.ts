@@ -276,9 +276,58 @@ describe('getArtifactVersionDetail', () => {
       payload: { behavior: 'second wording' },
       parentLogicalItemId: null,
       impact: null,
+      upstreamDisplayKeys: [],
     });
     expect(detail!.items[0]!.revisionNumber).toBe(1);
     expect(detail!.items[2]!.itemVersionId).toBe(r100.itemVersionId);
+  });
+
+  it('resolves upstreamDisplayKeys from semantic_dependency rows, ordered numerically (R-11 before R-100), and [] for an item with no dependencies', async () => {
+    const { projectId } = await fx.createProjectWithOwner(sql);
+    const reqArtifactId = await fx.createArtifact(sql, projectId, 'requirements');
+    const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
+
+    // A plain string compare puts R-100 before R-11; the numeric-aware order
+    // the response promises is the opposite.
+    const r100 = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: reqArtifactId,
+      itemType: 'requirement',
+      displayKey: 'R-100',
+    });
+    const r11 = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: reqArtifactId,
+      itemType: 'requirement',
+      displayKey: 'R-11',
+    });
+    await approveVersionWithItems(reqArtifactId, [r100, r11]);
+
+    const dependent = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: backlogArtifactId,
+      itemType: 'story',
+    });
+    const standalone = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: backlogArtifactId,
+      itemType: 'story',
+    });
+    // Edges inserted R-100 first on purpose: the response order is not insertion order.
+    for (const upstream of [r100, r11]) {
+      await fx.createSemanticDependency(sql, {
+        projectId,
+        downstreamItemVersionId: dependent.itemVersionId,
+        upstreamItemVersionId: upstream.itemVersionId,
+      });
+    }
+    const backlogV1 = await approveVersionWithItems(backlogArtifactId, [dependent, standalone]);
+
+    const detail = await lifecycle.getArtifactVersionDetail(backlogV1);
+
+    const byKey = Object.fromEntries(detail!.items.map((row) => [row.displayKey, row]));
+    expect(byKey[dependent.displayKey]!.upstreamDisplayKeys).toEqual(['R-11', 'R-100']);
+    expect(byKey[standalone.displayKey]!.upstreamDisplayKeys).toEqual([]);
   });
 
   it("orders Epics before Stories and carries each Story's parent from this version's membership", async () => {
