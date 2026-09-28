@@ -77,6 +77,10 @@ async function approveArchitectureVersion(
   artifactId: string,
   versionNumber: number,
   adrs: { logicalItemId: string; itemVersionId: string }[],
+  optionA: Omit<
+    Parameters<typeof fx.createArchitectureOption>[1],
+    'artifactVersionId' | 'optionKey'
+  > = {},
 ): Promise<string> {
   const versionId = await fx.createDraftArtifactVersion(sql, artifactId, { versionNumber });
   for (const adr of adrs) {
@@ -88,6 +92,7 @@ async function approveArchitectureVersion(
     });
   }
   const optionAId = await fx.createArchitectureOption(sql, {
+    ...optionA,
     artifactVersionId: versionId,
     optionKey: 'A',
   });
@@ -144,6 +149,8 @@ let nextFakeGitHubId = 9000;
 
 function createFakeGitHub(owner: string) {
   const repos = new Map<string, FakeRepo>();
+  // `<repo>/<path>` -> decoded file text, for every contents-API write.
+  const files = new Map<string, string>();
 
   function repoKey(name: string): string {
     return `${owner}/${name}`;
@@ -227,6 +234,12 @@ function createFakeGitHub(owner: string) {
       // exact file content isn't asserted on by these tests (that's
       // covered by inspecting the description marker instead), so a
       // minimal, valid response shape is enough.
+      const { content } = JSON.parse(String(init?.body ?? '{}')) as { content?: string };
+      files.set(
+        // Octokit percent-encodes the whole path (`docs%2Fadr%2FADR-01.md`).
+        `${contentsMatch[2]}/${decodeURIComponent(contentsMatch[3] ?? '')}`,
+        Buffer.from(content ?? '', 'base64').toString('utf8'),
+      );
       return jsonResponse(201, {
         content: { path: contentsMatch[3] },
         commit: { sha: `fake-${nextFakeGitHubId++}` },
@@ -236,7 +249,7 @@ function createFakeGitHub(owner: string) {
     throw new Error(`fake GitHub fetch: unhandled ${method} ${pathname}`);
   }
 
-  return { fetch: fetchImpl, seedForeignRepo, repos };
+  return { fetch: fetchImpl, seedForeignRepo, repos, files };
 }
 
 // Thin wrapper implementing "simulate a lost response" (ERD 7.2) on top of
@@ -946,6 +959,63 @@ describe('github (E4-S2 / SCRUM-51)', () => {
         const preview = await github.previewInit(architectureVersionId, 'ShiftSwap Verify');
         expect(preview.repoName).toBe('shiftswap-verify');
       });
+    });
+  });
+
+  // The files `initRepo` commits carry the real architecture, read from the
+  // selected option and each ADR's item-version payload (see repo-docs.ts,
+  // whose builders are unit-tested on their own) - not just ids.
+  describe('initRepo - repository documentation content', () => {
+    it("commits the ADR's decision text and the option's stack table, not just provenance ids", async () => {
+      const { projectId } = await fx.createProjectWithOwner(sql, { name: 'github docs content' });
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const { id: logicalItemId, displayKey } = await fx.createLogicalItem(sql, {
+        projectId,
+        artifactId: architectureArtifactId,
+        itemType: 'architecture_decision',
+      });
+      const itemVersionId = await fx.createItemVersion(sql, {
+        projectId,
+        logicalItemId,
+        payload: {
+          title: 'Server-rendered workflow',
+          decision: 'Use Django templates with HTMX for the workflow screens.',
+          technologyOrApproach: 'Django templates with HTMX',
+          constraints: ['Provide submission, manager review, and employee status views.'],
+          significantTradeoffs: ['Keeps the UI and workflow in one application.'],
+        },
+      });
+      const architectureVersionId = await approveArchitectureVersion(
+        architectureArtifactId,
+        1,
+        [{ logicalItemId, itemVersionId }],
+        {
+          title: 'Django Modular Monolith',
+          summary: 'A server-rendered Django application in one service.',
+          stack: { frontend: 'Django templates with HTMX', backend: 'Django' },
+          tradeoffs: [{ factor: 'cost', assessment: 'One service to pay for.' }],
+        },
+      );
+
+      const repoName = `docs-content-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+      await withFakeFetch(fake.fetch, async () => {
+        await github.initRepo(architectureVersionId, repoName);
+      });
+
+      const repo = github.normalizeRepoName(repoName);
+      const adr = fake.files.get(`${repo}/docs/adr/${displayKey}.md`);
+      expect(adr).toContain('# ' + displayKey + ': Server-rendered workflow');
+      expect(adr).toContain('Use Django templates with HTMX for the workflow screens.');
+      expect(adr).toContain('- Provide submission, manager review, and employee status views.');
+      expect(adr).toContain(`adr_item_version_id: ${itemVersionId}`);
+
+      const readme = fake.files.get(`${repo}/README.md`);
+      expect(readme).toContain('| Frontend | Django templates with HTMX |');
+      expect(readme).toContain('- **Cost:** One service to pay for.');
+      expect(readme).toContain(
+        `[${displayKey}](./docs/adr/${displayKey}.md) - Server-rendered workflow`,
+      );
     });
   });
 });
