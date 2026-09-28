@@ -789,6 +789,8 @@ describe('github (E4-S2 / SCRUM-51)', () => {
         const afterRetry = await githubOperationRows(projectId);
         expect(afterRetry).toHaveLength(1);
         expect(afterRetry[0]!.status).toBe('completed');
+        // The earlier attempt's failure text must not outlive its own failure.
+        expect(afterRetry[0]!.error_message).toBeNull();
         expect(fake.repos.size).toBe(1);
       });
     });
