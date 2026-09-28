@@ -53,3 +53,19 @@ Assumptions: one shop/location and one currency. Exclusions: POS integration, su
 | Negative-stock guard/quantity audit | S-03, S-08 |
 
 Architecture source references appear in its table. The controlled-change worksheet is appended after the fixed stimulus is applied to this condition.
+
+## Controlled-change worksheet (appended after first output)
+
+**Stimulus:** replace each title's reorder threshold with one manager-editable shop-wide threshold of 5. **Review began:** 2026-09-28 11:45:01 UTC. The author/evaluator knew the key before initial output.
+
+| Item | Affected? | Reason/path |
+|---|---|---|
+| R-06 | Yes | Per-title setting and at/below comparisons must become a single shop setting and comparison to 5. |
+| R-07 | Yes | Bundles PO draft candidate selection from the low-stock list; candidate set changes. Its review/send rule remains. |
+| AD-01 | Yes | Its per-title threshold column must become one shop-level value. |
+| AD-03 | Yes | Its `on_hand <= title.threshold` query and draft selection must use shop threshold 5. |
+| S-06 | Yes | Setting and displaying title thresholds becomes setting/displaying one shop threshold; low-stock list changes. |
+| S-07 | Yes | Drafting from the low-stock list must use the list recalculated under the new rule. |
+| R-01–R-05, R-08; AD-02, AD-04; S-01–S-05, S-08 | No | Catalog, movements, on-hand arithmetic, corrections, negative-stock guard, auditing and order review/send remain unchanged. |
+
+Inspectible conceptual paths are `R-06 → AD-01 / AD-03 → S-06` and `R-06 → AD-03 → S-07`, with `R-07 → S-07` for draft candidate selection. This worksheet is authored reasoning, not an automated impact warning.
