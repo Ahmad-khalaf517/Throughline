@@ -1,10 +1,10 @@
 # Throughline - Business Requirements Document (BRD)
 
-**Document version:** 2.3  
+**Document version:** 2.4  
 **Project:** Throughline  
 **Project type:** AI-assisted software project initialization and traceability platform  
 **Delivery context:** Solo capstone project, 8 full-time development days  
-**Status:** Business baseline for Technical Requirements -> ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v2.3: added BR-011 - the Stitch design reference includes a persistent navigation shell and per-project dashboard overview that had no business requirement behind them; added so the Jira Plan stories building that UI cite something real instead of nothing.  
+**Status:** Business baseline for Technical Requirements -> ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v2.3: added BR-011 - the Stitch design reference includes a persistent navigation shell and per-project dashboard overview that had no business requirement behind them; added so the Jira Plan stories building that UI cite something real instead of nothing. v2.4: the pinned GitHub starter becomes a small pinned set (Django and Next.js) instead of one - real AI-proposed stacks are mostly Django, so a single starter shaped like Throughline's own Next.js stack almost never matched and scaffold mode wrote no code at all. Docs-only mode still applies to every stack no starter fits, and BR-005 (never pretend to scaffold an unsupported architecture) is unchanged.  
 **Primary audience:** Instructor/mentor, project reviewer, developer, and future product stakeholders
 
 ---
@@ -154,7 +154,7 @@ The capstone MVP must demonstrate the following end-to-end capabilities:
 - generate Requirements + Project Context with AI
 - review, revise, and approve Requirements
 - generate exactly two architecture options and approve one selected option
-- create a GitHub output using one pinned starter when compatible, with a docs-only mode when it is not
+- create a GitHub output using a pinned starter (a small set: Django, Next.js) when one is compatible, with a docs-only mode when none is
 - add README/ADR/lineage documentation to the GitHub output
 - generate and approve structured UI Requirements
 - generate one Stitch UI prototype or degrade gracefully to a saved Stitch-ready prompt
@@ -271,7 +271,7 @@ Negative findings shall be reported honestly.
 | **Third-party dependency** | GitHub, Stitch, Jira, or LLM APIs can fail or change | Preview actions, persist first-party state, use fallbacks/reconciliation, and keep integration boundaries narrow |
 | **Scope overrun** | Three integrations can consume the 8-day build | Build lineage first, one GitHub template, one Stitch flow, one Jira project; cut P1 before P0 |
 | **Security / credential misuse** | Hosted app holds API credentials capable of external writes | Server-side secrets, protected hosted access, explicit external-write confirmation, no credentials in generated repos |
-| **Architecture/template mismatch** | A single starter cannot represent every AI-proposed architecture | Support scaffold mode only when compatible; otherwise use docs-only GitHub output |
+| **Architecture/template mismatch** | A small set of starters cannot represent every AI-proposed architecture | Support scaffold mode only when compatible; otherwise use docs-only GitHub output |
 
 ---
 
@@ -300,7 +300,7 @@ The capstone does not require a final SaaS price. A future business case should 
 |---|---|
 | One Project Creator is enough for the capstone | Multi-user identity, permissions, and concurrent approvals would increase scope and require a different access model |
 | One AI provider is enough for the MVP | A provider fallback or broader abstraction may be required, increasing integration and testing work |
-| One pinned GitHub starter/template is enough to prove repository initialization | More architectures would require additional templates or more projects to fall back to docs-only mode |
+| A small pinned set of GitHub starters (Django, Next.js) is enough to prove repository initialization | Stacks outside that set fall back to docs-only mode; covering more would require additional starters |
 | One configured Jira project is enough to prove one-way backlog creation | Multi-project configuration and project-specific field mapping would need to move into scope |
 | One Stitch generation per approved UI Requirements version is enough to prove design handoff | Variants, iterative editing, and comparison workflows would require additional UI and API work |
 | The hosted Throughline instance can be access-restricted for the demo | Exposed credentials and external-write capabilities would create an unacceptable security risk; deployment approach would need to change |
