@@ -6,9 +6,9 @@
 // Nothing outside this folder may import a file that is not re-exported here
 // (Module Boundaries section 7).
 import { alias } from 'drizzle-orm/pg-core';
-import { and, desc, eq, type SQL } from 'drizzle-orm';
+import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
 import postgres from 'postgres';
-import { db, schema, withTx } from '@/db';
+import { db, schema, withProjectLock, withTx } from '@/db';
 import { ARTIFACT_TYPES, type ArtifactSummaryDTO, type ArtifactType } from '@/lib/serialize';
 
 export {
@@ -248,6 +248,34 @@ export async function updateProject(
     throw new Error(`project ${projectId} not found immediately after update`);
   }
   return project;
+}
+
+/**
+ * Permanently deletes a project and everything that hangs off it (ERD 4.2
+ * "Deletion", Appendix B round 13): artifacts, versions, items, edges,
+ * approvals, acknowledgements, AI runs, external operations/refs and Stitch
+ * output. Returns `false` when there is no such project. The `app_user` row
+ * stays.
+ *
+ * The whole purge is one `delete_project()` call (migration 0008) inside one
+ * transaction. It is a database function, not a sequence of `DELETE`s written
+ * here, because the rows belong to five different modules' tables (Module
+ * Boundaries section 5) and the append-only triggers on them refuse a delete
+ * unless `delete_project()` itself has switched its bypass on for the length of
+ * the call. It runs under the project lock so it is serialized against an
+ * in-flight approval or generation persist rather than racing one.
+ *
+ * Nothing outside Throughline is touched: a GitHub repository, Jira issues or
+ * Stitch screens the project created stay where they are (their `external_ref`
+ * rows go with the project, so Throughline stops knowing about them).
+ */
+export async function deleteProject(projectId: string): Promise<boolean> {
+  return withProjectLock(projectId, async (tx) => {
+    const rows = await tx.execute<{ deleted: boolean }>(
+      sql`select delete_project(${projectId}::uuid) as deleted`,
+    );
+    return rows[0]?.deleted === true;
+  });
 }
 
 // Matches on the trigger's own message, not just SQLSTATE P0001, because

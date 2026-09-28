@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
-import { BriefFrozenError, getProjectById, updateProject } from '@/artifact-lifecycle';
+import {
+  BriefFrozenError,
+  deleteProject,
+  getProjectById,
+  updateProject,
+} from '@/artifact-lifecycle';
 import { ApiError, errorResponse } from '@/lib/errors';
 import { toProjectDTO } from '@/lib/serialize';
 import { updateProjectSchema } from '../schemas';
@@ -64,6 +69,32 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     }
 
     return NextResponse.json(toProjectDTO(project));
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
+/**
+ * `DELETE /api/projects/:projectId` -> artifact-lifecycle.deleteProject
+ *
+ * Permanently removes the project and all of its Throughline data (API
+ * Contracts section 3). `204` with no body. Nothing on GitHub, Jira or Stitch
+ * is deleted. `requireProjectOwner` has already proved the project exists and
+ * is the caller's, so a `false` from `deleteProject` can only mean a concurrent
+ * delete won the race - answered the same `404` a second call would get.
+ */
+export async function DELETE(request: Request, { params }: RouteParams) {
+  try {
+    const user = await getVerifiedUser(request);
+    if (!user) throw new ApiError('UNAUTHENTICATED', 'Sign in required.');
+
+    const { projectId } = await params;
+    await requireProjectOwner(user.id, projectId);
+
+    const deleted = await deleteProject(projectId);
+    if (!deleted) throw new ApiError('NOT_FOUND', 'Project not found.');
+
+    return new NextResponse(null, { status: 204 });
   } catch (error) {
     return errorResponse(error);
   }

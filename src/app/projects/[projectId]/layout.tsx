@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { getProjectById } from '@/artifact-lifecycle';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
+import { DeleteProjectButton } from '@/components/projects/delete-project-dialog';
 import { ProjectNavigation } from '@/components/projects/project-navigation';
 import { ApiError } from '@/lib/errors';
 
@@ -38,6 +39,9 @@ export default async function ProjectLayout({
             <div className="min-w-0">
               <p className="text-on-surface-variant text-xs font-medium">Project</p>
               <p className="text-on-surface truncate text-xl font-semibold">{project.name}</p>
+            </div>
+            <div className="ml-auto shrink-0">
+              <DeleteProjectButton projectId={project.id} projectName={project.name} />
             </div>
           </div>
           <ProjectNavigation projectId={project.id} />
