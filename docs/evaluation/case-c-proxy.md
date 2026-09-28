@@ -53,3 +53,16 @@ Assumptions: one-day events, organizer and volunteer accounts, email only. Exclu
 | Email confirmation/audit | S-08 |
 
 Architecture references appear in the Architecture table. The controlled-change worksheet is appended after the stimulus is applied to this condition.
+
+## Controlled-change worksheet (appended after first output)
+
+**Stimulus:** volunteers have 12 hours, instead of 24, to accept a waitlist offer. **Review began:** 2026-09-28 12:01:48 UTC. The author/evaluator already knew this answer key before first output.
+
+| Item | Affected? | Reason/path |
+|---|---|---|
+| R-07 | Yes | Its offer acceptance and expiry period changes to 12 hours. |
+| AD-03 | Yes | The scheduled expiry timestamp and acceptance guard must use +12h; FIFO ordering is unchanged. |
+| S-07 | Yes | Its offer expiry and in-time acceptance criteria must use 12h. |
+| R-01–R-06, R-08; AD-01, AD-02, AD-04; S-01–S-06, S-08 | No | Event setup, direct signup/capacity, roster, order, initial confirmation and audit behavior remain. S-08 does not state an offer-window email text or timing. |
+
+The authored paths are `R-07 → AD-03 → S-07` and `R-07 → S-07`. This is a manually reasoned worksheet without automatic warnings or a graph.
