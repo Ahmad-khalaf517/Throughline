@@ -38,6 +38,8 @@ import {
   type ArchitectureDecisionItem,
   type SelectedArchitectureOption,
 } from '@/artifact-types/architecture';
+import { buildReadme, buildAdrDoc } from './repo-docs';
+import { pickStarter, readStack, type Starter, type StarterFile } from './starters';
 
 // ---------------------------------------------------------------------------
 // Errors - initRepo's signature (Module Boundaries 4.6) is `Promise<ExternalRef>`,
@@ -76,9 +78,31 @@ export class ArchitectureVersionNotApprovedError extends Error {
 }
 
 export class GithubOperationFailedError extends Error {
+  /**
+   * `name_taken_by_other` for a name collision (ERD 7.3); otherwise the
+   * human-readable description of GitHub's own rejection (see
+   * `describeRejection`). The init route branches on this to pick between
+   * `NAME_TAKEN_BY_OTHER` and `GITHUB_REQUEST_REJECTED`.
+   */
+  readonly reason: string;
+
   constructor(reason: string) {
     super(`GitHub operation failed: ${reason}`);
     this.name = 'GithubOperationFailedError';
+    this.reason = reason;
+  }
+}
+
+/**
+ * `checkRepoName` only: GitHub answered the name lookup with a definitive 4xx
+ * other than "not found" (e.g. 401/403 for an unusable `GITHUB_TOKEN`). Not a
+ * `GithubOperationFailedError` - a lookup is not an `external_operation`, so
+ * there is no row to fail. `message` already names GitHub's own reason.
+ */
+export class GithubLookupRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GithubLookupRejectedError';
   }
 }
 
@@ -226,74 +250,49 @@ function createOctokitClient(): Octokit {
 // ---------------------------------------------------------------------------
 
 /**
- * FR-032: "Throughline shall use one approved, pinned repository
- * starter/template for scaffold mode." No real starter/template repository
- * is named anywhere in the frozen ERD/TR/BRD, and this project's own
- * capstone scope explicitly excludes "any real template-repository cloning/
- * scaffolding mechanism" (this story's own instructions) - so there is
- * nothing to point a real license check (FR-032's second sentence) at
- * either. This constant is THIS story's own placeholder decision, recorded
- * the same way E4-S1 recorded `RECONCILIATION_THRESHOLD_MS`: it stands in
- * for "the one pinned starter" with this project's OWN stack shape (the
- * only concrete, unambiguous stack this codebase can point to), so
- * `previewInit`/`initRepo` have a real, testable "close enough" comparison
- * instead of an unimplemented decision. A real starter-repo choice plus its
- * license check is future work, not built here.
+ * FR-031: scaffold mode when a pinned starter fits the selected stack, docs-only
+ * otherwise - never a mismatched codebase. Which starters exist and how each
+ * decides it fits lives in ./starters (Django, Next.js). FR-032 as first
+ * written asked for ONE pinned starter, matched loosely against this project's
+ * own stack; real AI-proposed stacks are mostly Django, so that starter almost
+ * never matched and "scaffold" wrote nothing. It is now a small pinned SET,
+ * each generating real, runnable files (recorded in TR FR-032).
  */
-const PINNED_REFERENCE_STACK = {
-  frontend: 'next.js + typescript',
-  backend: 'next.js route handlers (same app)',
-  database: 'postgresql via drizzle orm',
-  hosting: 'vercel + supabase',
-  repositoryLayout: 'single repo, layered src/ modules',
-} as const;
-
-function normalizeForCompare(value: unknown): string {
-  return String(value ?? '')
-    .toLowerCase()
-    .trim();
+interface StarterPlan {
+  id: Starter['id'];
+  label: string;
+  files: StarterFile[];
+  gettingStarted: string;
+  notScaffolded: string[];
 }
 
-/**
- * FR-031: "matches the supported pinned starter/template closely enough for
- * safe initialization." Neither ERD nor TR defines "closely enough" - this
- * is this story's own judgment call: deliberately loose substring
- * containment per field (an AI-authored stack descriptor's free text will
- * never match the reference byte-for-byte), but ALL FIVE fields must match
- * for `scaffold` - any mismatch or missing field falls back to `docs-only`,
- * per FR-031's own "must not silently create a mismatched codebase."
- */
-function stackMatchesPinnedReference(stack: unknown): boolean {
-  if (typeof stack !== 'object' || stack === null) return false;
-  const candidate = stack as Record<string, unknown>;
-  return (Object.keys(PINNED_REFERENCE_STACK) as (keyof typeof PINNED_REFERENCE_STACK)[]).every(
-    (field) => {
-      const expectedTokens = PINNED_REFERENCE_STACK[field].split(/[\s+]+/).filter(Boolean);
-      const actual = normalizeForCompare(candidate[field]);
-      return expectedTokens.every((token) => actual.includes(token));
-    },
-  );
+function planStarter(
+  starter: Starter | null,
+  repoName: string,
+  selected: SelectedArchitectureOption,
+): StarterPlan | null {
+  if (!starter) return null;
+  const context = {
+    repoName,
+    title: selected.option.title,
+    stack: readStack(selected.option.stack),
+  };
+  return {
+    id: starter.id,
+    label: starter.label,
+    files: starter.files(context),
+    gettingStarted: starter.gettingStarted(context),
+    notScaffolded: starter.notScaffolded(context.stack),
+  };
 }
 
-function decideMode(stack: unknown): 'scaffold' | 'docs-only' {
-  return stackMatchesPinnedReference(stack) ? 'scaffold' : 'docs-only';
-}
-
-/**
- * A safe, always-available SUGGESTED repository name for the preview.
- * Judgment call: derived from `projectId` alone, not `project.name` -
- * `project` is owned by artifact-lifecycle (layer 2), unreachable from this
- * layer-5 module (eslint.config.mjs's layer5-external-provider allow-list
- * only permits layer 0-4 plus this module's paired layer-3 module).
- * `initRepo` never recomputes this - it takes `repoName` as an explicit
- * parameter (Module Boundaries 4.6's own signature) - so the future API
- * route (E4-S6, layer 6, which CAN read `project.name` via
- * artifact-lifecycle) is free to show the user a prettier suggestion before
- * calling `initRepo`; this is only a safe fallback, not the only name ever
- * used.
- */
-function suggestRepoName(projectId: string): string {
-  return normalizeRepoName(`throughline-project-${projectId}`);
+/** What the preview tells the user will be added (FR-030): the starter and its exact file list. */
+export interface StarterPreview {
+  id: Starter['id'];
+  label: string;
+  files: string[];
+  /** Layers the stack names that no starter file covers - documentation only. */
+  notScaffolded: string[];
 }
 
 async function resolveApprovedSelection(
@@ -310,15 +309,99 @@ async function resolveApprovedSelection(
 }
 
 // ---------------------------------------------------------------------------
+// Repository-name availability - lets the user try names before `initRepo`.
+// ---------------------------------------------------------------------------
+
+export interface RepoNameCheck {
+  /** What `initRepo` would actually create: the input run through `normalizeRepoName`. Empty when `invalid`. */
+  repoName: string;
+  /** `invalid` = nothing usable is left after normalization (no GitHub call is made). */
+  status: 'available' | 'taken' | 'invalid';
+}
+
+/**
+ * Read-only: one `GET /repos/{owner}/{name}` under the configured owner, no
+ * DB and no operation row. Advisory only - `initRepo` stays the authority
+ * (its create call still answers 422 `name_taken_by_other` if the name is
+ * gone by then, or if the token cannot see a private repo that already uses
+ * it, which reads as 404 here).
+ */
+export async function checkRepoName(repoName: string): Promise<RepoNameCheck> {
+  const normalized = normalizeRepoName(repoName);
+  if (!normalized) return { repoName: normalized, status: 'invalid' };
+
+  try {
+    await createOctokitClient().rest.repos.get({ owner: requireOwner(), repo: normalized });
+    return { repoName: normalized, status: 'taken' };
+  } catch (error) {
+    if (error instanceof RequestError && error.status === 404) {
+      return { repoName: normalized, status: 'available' };
+    }
+    if (isDefinitiveRejection(error)) {
+      throw new GithubLookupRejectedError(describeRejection(error, 'check the repository name'));
+    }
+    throw error;
+  }
+}
+
+// Each attempt is one GitHub lookup, so this bounds the preview's added latency.
+const MAX_SUGGESTION_ATTEMPTS = 10;
+
+/**
+ * The repository name the preview SUGGESTS, in order of preference:
+ *  1. the project's own name, normalized (`ShiftSwap Verify` ->
+ *     `shiftswap-verify`) - a name the user already chose and will recognize;
+ *  2. that name with a numeric suffix (`-2`, `-3`, ...) when GitHub says it is
+ *     already taken, for up to MAX_SUGGESTION_ATTEMPTS lookups;
+ *  3. `throughline-project-<projectId>`, which cannot collide, when there is
+ *     no usable project name or every attempt was taken.
+ *
+ * `project` is owned by artifact-lifecycle (layer 2), unreachable from this
+ * layer-5 module (eslint.config.mjs's layer5-external-provider allow-list only
+ * permits layer 0-4 plus this module's paired layer-3 module), so the caller -
+ * the preview route, layer 6 - hands the name in. Without one, nothing here
+ * touches the network. `initRepo` never recomputes this; it takes `repoName`
+ * as an explicit parameter.
+ *
+ * A lookup that cannot be made (unusable token, GitHub down) must not break
+ * the preview: a suggestion is advisory and `checkRepoName` reports the real
+ * problem separately, so the unverified project-name slug is returned.
+ */
+async function suggestRepoName(projectId: string, projectName?: string): Promise<string> {
+  const projectIdName = normalizeRepoName(`throughline-project-${projectId}`);
+  const base = projectName ? normalizeRepoName(projectName) : '';
+  if (!base) return projectIdName;
+
+  try {
+    for (let attempt = 1; attempt <= MAX_SUGGESTION_ATTEMPTS; attempt++) {
+      const candidate = attempt === 1 ? base : `${base}-${attempt}`;
+      const { status } = await checkRepoName(candidate);
+      if (status === 'available') return candidate;
+    }
+    return projectIdName;
+  } catch {
+    return base;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // FR-030 - preview.
 // ---------------------------------------------------------------------------
 
 export async function previewInit(
   architectureVersionId: string,
-): Promise<{ mode: 'scaffold' | 'docs-only'; repoName: string; impact: ImpactRow[] }> {
+  projectName?: string,
+): Promise<{
+  mode: 'scaffold' | 'docs-only';
+  repoName: string;
+  starter: StarterPreview | null;
+  impact: ImpactRow[];
+}> {
   const selected = await resolveApprovedSelection(architectureVersionId);
-  const mode = decideMode(selected.option.stack);
-  const repoName = suggestRepoName(selected.projectId);
+  const starter = pickStarter(selected.option.stack);
+  const mode = starter ? 'scaffold' : 'docs-only';
+  const repoName = await suggestRepoName(selected.projectId, projectName);
+  const plan = planStarter(starter, repoName, selected);
 
   // TR FR-085: "Every external-write preview... shows current impact for
   // the items it would create from." There is no `external_ref` yet at
@@ -338,7 +421,17 @@ export async function previewInit(
     (row) => row.subjectKind === 'item_version' && adrItemVersionIds.has(row.subjectId),
   );
 
-  return { mode, repoName, impact };
+  return {
+    mode,
+    repoName,
+    starter: plan && {
+      id: plan.id,
+      label: plan.label,
+      files: plan.files.map((file) => file.path),
+      notScaffolded: plan.notScaffolded,
+    },
+    impact,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -352,11 +445,55 @@ interface CreatedRepo {
   ownerLogin: string;
 }
 
+/**
+ * ERD 7.2: "`failed` is reserved for definitive provider rejections
+ * (validation/4xx). Timeouts, 5xx and lost responses are never `failed`." A
+ * 4xx response means GitHub read the request and refused it, so nothing was
+ * created and a later retry cannot duplicate anything. 408 (request timeout)
+ * is the one 4xx that says nothing about whether the request was processed.
+ */
+function isDefinitiveRejection(error: unknown): error is RequestError {
+  return (
+    error instanceof RequestError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 408
+  );
+}
+
+/**
+ * Stored as `external_operation.error_message` and shown to the user, so it
+ * names the actual cause. Without this, an unusable `GITHUB_TOKEN` (401/403)
+ * was treated as an ambiguous failure: the operation sat `pending`, then
+ * `reconciliation_required` forever (reconcile finds no repo and never
+ * resends), and the user only ever saw "Something went wrong."
+ */
+function describeRejection(error: RequestError, action: string): string {
+  const data: unknown = error.response?.data;
+  const githubMessage =
+    typeof data === 'object' && data !== null && 'message' in data
+      ? String(data.message)
+      : error.message;
+  const detail = `${error.status}: ${githubMessage}`;
+  if (error.status === 401) {
+    return `GitHub rejected the configured GITHUB_TOKEN (${detail}) - it is invalid or expired.`;
+  }
+  if (error.status === 403) {
+    return (
+      `GitHub refused to ${action} (${detail}) - the configured GITHUB_TOKEN does not have ` +
+      'the access this needs. Use a token with repository access (e.g. a classic token with ' +
+      'the `repo` scope).'
+    );
+  }
+  return `GitHub rejected the request to ${action} (${detail}).`;
+}
+
 async function sendCreateRepo(args: {
   octokit: Octokit;
   repoName: string;
   marker: string;
   mode: 'scaffold' | 'docs-only';
+  starter: StarterPlan | null;
   selected: SelectedArchitectureOption;
   architectureVersionId: string;
   adrItems: ArchitectureDecisionItem[];
@@ -371,7 +508,13 @@ async function sendCreateRepo(args: {
     const response = await args.octokit.rest.repos.createForAuthenticatedUser({
       name: args.repoName,
       description: `${MARKER_PREFIX}${args.marker}`,
-      private: true,
+      // Always public: the repository exists to be shown (demoed, linked,
+      // read by people without access to Throughline), and everything
+      // written to it - README, ADRs, lineage.json - is architecture
+      // documentation and ids, never a secret. There is deliberately no
+      // visibility option (FR-030 only asks for one "if configurable"); the
+      // GitHub screen tells the user up front that the repository is public.
+      private: false,
     });
     created = {
       id: response.data.id,
@@ -392,6 +535,9 @@ async function sendCreateRepo(args: {
       // lost-response case below, which propagates unchanged instead.
       throw new DefinitiveProviderError('name_taken_by_other');
     }
+    if (isDefinitiveRejection(error)) {
+      throw new DefinitiveProviderError(describeRejection(error, 'create the repository'));
+    }
     throw error;
   }
 
@@ -404,6 +550,7 @@ async function sendCreateRepo(args: {
   await writeProvenanceFiles(args.octokit, created.ownerLogin, args.repoName, {
     marker: args.marker,
     mode: args.mode,
+    starter: args.starter,
     selected: args.selected,
     architectureVersionId: args.architectureVersionId,
     adrItems: args.adrItems,
@@ -464,75 +611,10 @@ async function reconcileRepo(args: {
   };
 }
 
-function buildReadme(args: {
-  selected: SelectedArchitectureOption;
-  mode: 'scaffold' | 'docs-only';
-  architectureVersionId: string;
-  adrItems: ArchitectureDecisionItem[];
-}): string {
-  const { option } = args.selected;
-  const adrLines = args.adrItems
-    .map((item) => `- [${item.displayKey}](./docs/adr/${item.displayKey}.md)`)
-    .join('\n');
-  return `# ${option.title}
-
-_Generated by Throughline (FR-033) - initialization mode: **${args.mode}**._
-
-${option.summary}
-
-## Architecture decisions
-
-${adrLines || '_No architecture decisions were materialized for this version._'}
-
-## Provenance
-
-This repository was initialized from Throughline architecture_version
-\`${args.architectureVersionId}\` (v${args.selected.versionNumber}), option
-\`${option.optionKey}\`. See \`docs/architecture/lineage.json\` for the
-machine-readable lineage record and ownership marker (ERD 7.3).
-
-Throughline does not import this repository's metadata back into its own
-database (FR-035 - self-describing, not round-trippable): editing these
-files never changes Throughline's own lineage.
-`;
-}
-
-function buildAdrDoc(
-  item: ArchitectureDecisionItem,
-  args: { selected: SelectedArchitectureOption; architectureVersionId: string },
-): string {
-  // TR FR-034's YAML example also shows a `depends_on` (exact upstream
-  // Requirement item versions) and `requirements_version` field. Both would
-  // require reading `semantic_dependency` (owned by `identity`), which is
-  // not among the two narrow read exports this story's own instructions
-  // authorize (architecture-materialization.getSelectedOption,
-  // external-operations.getRefById) - deliberately NOT added here to avoid
-  // a third, unauthorized cross-module read. What FR-034 actually requires
-  // ("cite the exact Throughline item versions... plus the artifact
-  // versions for context") is satisfied by the fields below: the ADR's own
-  // exact LogicalItem/ItemVersion ids and the Architecture artifact version
-  // - this is a deliberate, documented scope narrowing, not an oversight.
-  return `# ${item.displayKey}
-
-\`\`\`yaml
-adr: ${item.displayKey}
-adr_logical_item_id: ${item.logicalItemId}
-adr_item_version_id: ${item.itemVersionId}
-architecture_version_id: ${args.architectureVersionId}
-architecture_version_number: ${args.selected.versionNumber}
-selected_option: ${args.selected.option.optionKey}
-\`\`\`
-
-This decision is part of "${args.selected.option.title}". See the parent
-project's Throughline workspace for the full decision text - this file
-exists to give the repository durable, inspectable provenance (FR-034), not
-to duplicate Throughline's own database.
-`;
-}
-
 function buildLineageJson(args: {
   marker: string;
   mode: 'scaffold' | 'docs-only';
+  starter: StarterPlan | null;
   selected: SelectedArchitectureOption;
   architectureVersionId: string;
   adrItems: ArchitectureDecisionItem[];
@@ -552,6 +634,12 @@ function buildLineageJson(args: {
       title: args.selected.option.title,
       stack: args.selected.option.stack,
     },
+    // The pinned starter that generated the code files, if any (docs-only: null).
+    starter: args.starter && {
+      id: args.starter.id,
+      label: args.starter.label,
+      files: args.starter.files.map((file) => file.path),
+    },
     architectureDecisions: args.adrItems.map((item) => ({
       displayKey: item.displayKey,
       logicalItemId: item.logicalItemId,
@@ -568,6 +656,7 @@ async function writeProvenanceFiles(
   args: {
     marker: string;
     mode: 'scaffold' | 'docs-only';
+    starter: StarterPlan | null;
     selected: SelectedArchitectureOption;
     architectureVersionId: string;
     adrItems: ArchitectureDecisionItem[];
@@ -582,6 +671,20 @@ async function writeProvenanceFiles(
     message: 'Throughline: add architecture rationale (FR-033)',
     content: encode(buildReadme(args)),
   });
+
+  // The generated code, one commit per file. Sequential on purpose (the
+  // contents API rejects concurrent writes to one branch), and lineage.json
+  // stays LAST so it is only ever present in a repository whose files all
+  // landed.
+  for (const file of args.starter?.files ?? []) {
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner,
+      repo,
+      path: file.path,
+      message: `Throughline: add ${args.starter?.label} starter - ${file.path}`,
+      content: encode(file.content),
+    });
+  }
 
   for (const item of args.adrItems) {
     await octokit.rest.repos.createOrUpdateFileContents({
@@ -607,8 +710,9 @@ export async function initRepo(
   repoName: string,
 ): Promise<ExternalRef> {
   const selected = await resolveApprovedSelection(architectureVersionId);
-  const mode = decideMode(selected.option.stack);
   const normalizedRepoName = normalizeRepoName(repoName);
+  const starter = planStarter(pickStarter(selected.option.stack), normalizedRepoName, selected);
+  const mode = starter ? 'scaffold' : 'docs-only';
   const operationKey = `github:create_repo:${selected.projectId}:${normalizedRepoName}`;
   // Request fingerprint (ERD 7.2/29): same repoName + mode must round-trip
   // to the same hash so a genuine resend (same inputs) is never flagged as
@@ -638,6 +742,7 @@ export async function initRepo(
         repoName: normalizedRepoName,
         marker,
         mode,
+        starter,
         selected,
         architectureVersionId,
         adrItems,

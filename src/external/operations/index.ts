@@ -373,9 +373,15 @@ async function decideExisting(opts: RunOperationOptions): Promise<ExistingDecisi
     // scenarios (a NEW operation while one is active; unblocked once the
     // active one fails) don't cover a retry racing a since-completed
     // sibling, so this is left to that DB backstop rather than added scope.
+    //
+    // The previous failure's `error_message` goes with the `failed` status: it
+    // described an attempt that is over. Left in place it survived a
+    // successful retry, so a `completed` operation kept reading "GitHub
+    // refused to create the repository (403...)". A retry that fails again
+    // (or definitively) writes its own message.
     await tx
       .update(schema.externalOperation)
-      .set({ status: 'pending' })
+      .set({ status: 'pending', errorMessage: null })
       .where(eq(schema.externalOperation.id, row.id));
     return { kind: 'retry', operationId: row.id };
   });

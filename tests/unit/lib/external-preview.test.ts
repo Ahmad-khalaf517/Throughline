@@ -3,13 +3,16 @@ import type { ImpactRowDTO } from '@/lib/serialize';
 import {
   describeExternalError,
   describeOperationStatus,
+  describeRepoNameAvailability,
   describeSkipReason,
   EXTERNAL_ERROR_COPY,
   isExternalWriteBlocked,
+  isRepoNameBlocked,
   missingJiraDecisions,
   readImpactFromError,
   splitImpact,
   stitchProjectUrl,
+  type RepoNameAvailability,
 } from '@/lib/external-preview';
 
 function impactRow(overrides: Partial<ImpactRowDTO> = {}): ImpactRowDTO {
@@ -234,5 +237,78 @@ describe('stitchProjectUrl', () => {
   it('returns null for a non-numeric project id', () => {
     expect(stitchProjectUrl('proj-abc/abcdef')).toBeNull();
     expect(stitchProjectUrl('/abcdef')).toBeNull();
+  });
+});
+
+describe('describeRepoNameAvailability / isRepoNameBlocked', () => {
+  const available: RepoNameAvailability = {
+    kind: 'available',
+    typed: 'my-repo',
+    repoName: 'my-repo',
+  };
+  const taken: RepoNameAvailability = { kind: 'taken', typed: 'my-repo', repoName: 'my-repo' };
+  const invalid: RepoNameAvailability = { kind: 'invalid', typed: '!!!', repoName: '' };
+  const failed: RepoNameAvailability = {
+    kind: 'error',
+    typed: 'my-repo',
+    message: 'Could not reach the server.',
+  };
+
+  it('shows nothing for an empty field', () => {
+    expect(describeRepoNameAvailability(null, '')).toBeNull();
+    expect(describeRepoNameAvailability(available, '')).toBeNull();
+  });
+
+  it('reads as checking until an answer exists for the text currently in the field', () => {
+    const checking = { tone: 'neutral', text: 'Checking availability…' };
+    expect(describeRepoNameAvailability(null, 'my-repo')).toEqual(checking);
+    // A slow answer for an earlier name must never be shown against a newer one.
+    expect(describeRepoNameAvailability(taken, 'my-repo-2')).toEqual(checking);
+  });
+
+  it('reports an available name as a success', () => {
+    expect(describeRepoNameAvailability(available, 'my-repo')).toEqual({
+      tone: 'success',
+      text: '"my-repo" is available.',
+    });
+  });
+
+  it('says what the name will become when normalization changed it', () => {
+    const copy = describeRepoNameAvailability(
+      { kind: 'available', typed: 'My Repo!', repoName: 'my-repo' },
+      'My Repo!',
+    );
+    expect(copy?.tone).toBe('success');
+    expect(copy?.text).toContain('"my-repo" is available');
+    expect(copy?.text).toContain('will be created with that name');
+  });
+
+  it('reports a taken name as an error naming the normalized name', () => {
+    const copy = describeRepoNameAvailability(taken, 'my-repo');
+    expect(copy?.tone).toBe('error');
+    expect(copy?.text).toContain('"my-repo" is already taken');
+  });
+
+  it('reports a name with nothing usable left as an error', () => {
+    expect(describeRepoNameAvailability(invalid, '!!!')?.tone).toBe('error');
+  });
+
+  it('reports a failed check as an error carrying the reason', () => {
+    const copy = describeRepoNameAvailability(failed, 'my-repo');
+    expect(copy?.tone).toBe('error');
+    expect(copy?.text).toContain("Couldn't check availability.");
+    expect(copy?.text).toContain('Could not reach the server.');
+  });
+
+  it('blocks submit only for a known taken/invalid answer about the current text', () => {
+    expect(isRepoNameBlocked(taken, 'my-repo')).toBe(true);
+    expect(isRepoNameBlocked(invalid, '!!!')).toBe(true);
+  });
+
+  it('never blocks submit on an available, failed, stale or missing check - the server still decides', () => {
+    expect(isRepoNameBlocked(available, 'my-repo')).toBe(false);
+    expect(isRepoNameBlocked(failed, 'my-repo')).toBe(false);
+    expect(isRepoNameBlocked(taken, 'my-repo-2')).toBe(false); // stale: about other text
+    expect(isRepoNameBlocked(null, 'my-repo')).toBe(false);
   });
 });

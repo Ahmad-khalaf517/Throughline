@@ -14,7 +14,13 @@ const {
   class FakeArchitectureOptionNotSelectedError extends Error {}
   class FakeArchitectureVersionNotApprovedError extends Error {}
   class FakeGithubOperationRefusedError extends Error {}
-  class FakeGithubOperationFailedError extends Error {}
+  class FakeGithubOperationFailedError extends Error {
+    readonly reason: string;
+    constructor(reason: string) {
+      super(reason);
+      this.reason = reason;
+    }
+  }
   class FakeGithubOperationConflictError extends Error {}
   class FakeGithubReconciliationRequiredError extends Error {}
   class FakeGithubOperationInFlightError extends Error {}
@@ -143,7 +149,12 @@ describe('POST /api/projects/:projectId/github/init', () => {
     mockedGetVerifiedUser.mockResolvedValue(user);
     mockedRequireProjectOwner.mockResolvedValue(undefined);
     mockedGetProjectById.mockResolvedValue(baseProject());
-    mockedPreviewInit.mockResolvedValue({ mode: 'docs-only', repoName: 'suggested', impact: [] });
+    mockedPreviewInit.mockResolvedValue({
+      mode: 'docs-only',
+      repoName: 'suggested',
+      starter: null,
+      impact: [],
+    });
   });
 
   it('returns 401 UNAUTHENTICATED when there is no verified user', async () => {
@@ -210,6 +221,7 @@ describe('POST /api/projects/:projectId/github/init', () => {
     mockedPreviewInit.mockResolvedValue({
       mode: 'docs-only',
       repoName: 'suggested',
+      starter: null,
       impact: [
         {
           subjectKind: 'item_version',
@@ -247,6 +259,9 @@ describe('POST /api/projects/:projectId/github/init', () => {
     const body = await response.json();
     expect(body).toMatchObject({ status: 'completed', ref: { id: 'ref-1', provider: 'github' } });
     expect(mockedInitRepo).toHaveBeenCalledWith('arch-v1', 'my-repo');
+    // init only wants the impact re-check from the preview - it must not pass
+    // a project name, which would make previewInit look names up on GitHub.
+    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1');
   });
 
   it('returns 409 GITHUB_ALREADY_INITIALIZED when the operation was refused', async () => {
@@ -275,6 +290,22 @@ describe('POST /api/projects/:projectId/github/init', () => {
     expect(response.status).toBe(409);
     const body = await response.json();
     expect(body.error.code).toBe('NAME_TAKEN_BY_OTHER');
+  });
+
+  it("returns 502 GITHUB_REQUEST_REJECTED with GitHub's own reason when GitHub refuses the create call (e.g. token lacks permission)", async () => {
+    const reason =
+      'GitHub refused to create the repository (403: Resource not accessible by personal access token)';
+    mockedInitRepo.mockRejectedValue(new FakeGithubOperationFailedError(reason));
+
+    const response = await POST(
+      postRequest({ repoName: 'x', impactAcknowledged: true }),
+      paramsFor('project-1'),
+    );
+
+    expect(response.status).toBe(502);
+    const body = await response.json();
+    expect(body.error.code).toBe('GITHUB_REQUEST_REJECTED');
+    expect(body.error.message).toBe(reason);
   });
 
   it('returns 409 REQUEST_CONFLICT when the request hash no longer matches', async () => {

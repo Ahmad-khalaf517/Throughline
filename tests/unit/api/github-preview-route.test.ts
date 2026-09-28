@@ -158,6 +158,7 @@ describe('POST /api/projects/:projectId/github/preview', () => {
     mockedPreviewInit.mockResolvedValue({
       mode: 'docs-only',
       repoName: 'throughline-project-project-1',
+      starter: null,
       impact: [],
     });
 
@@ -171,8 +172,46 @@ describe('POST /api/projects/:projectId/github/preview', () => {
     expect(body).toEqual({
       mode: 'docs-only',
       repoName: 'throughline-project-project-1',
+      starter: null,
       impact: [],
     });
-    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1');
+    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1', 'x');
+  });
+
+  it('returns the starter and its exact file list when a pinned starter matches (FR-030)', async () => {
+    mockedGetProjectById.mockResolvedValue(baseProject());
+    const starter = {
+      id: 'django' as const,
+      label: 'Django',
+      files: ['manage.py', 'config/settings.py'],
+      notScaffolded: ['the front-end application'],
+    };
+    mockedPreviewInit.mockResolvedValue({
+      mode: 'scaffold',
+      repoName: 'x',
+      starter,
+      impact: [],
+    });
+
+    const response = await POST(postRequest({ repoName: 'x' }), paramsFor('project-1'));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ mode: 'scaffold', starter });
+  });
+
+  it("hands previewInit the project's own name so the suggestion can be based on it", async () => {
+    mockedGetProjectById.mockResolvedValue({ ...baseProject(), name: 'ShiftSwap Verify' });
+    mockedPreviewInit.mockResolvedValue({
+      mode: 'docs-only',
+      repoName: 'shiftswap-verify',
+      starter: null,
+      impact: [],
+    });
+
+    const response = await POST(postRequest({ repoName: 'ignored' }), paramsFor('project-1'));
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).repoName).toBe('shiftswap-verify');
+    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1', 'ShiftSwap Verify');
   });
 });

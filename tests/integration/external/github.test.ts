@@ -77,6 +77,10 @@ async function approveArchitectureVersion(
   artifactId: string,
   versionNumber: number,
   adrs: { logicalItemId: string; itemVersionId: string }[],
+  optionA: Omit<
+    Parameters<typeof fx.createArchitectureOption>[1],
+    'artifactVersionId' | 'optionKey'
+  > = {},
 ): Promise<string> {
   const versionId = await fx.createDraftArtifactVersion(sql, artifactId, { versionNumber });
   for (const adr of adrs) {
@@ -88,6 +92,7 @@ async function approveArchitectureVersion(
     });
   }
   const optionAId = await fx.createArchitectureOption(sql, {
+    ...optionA,
     artifactVersionId: versionId,
     optionKey: 'A',
   });
@@ -144,6 +149,10 @@ let nextFakeGitHubId = 9000;
 
 function createFakeGitHub(owner: string) {
   const repos = new Map<string, FakeRepo>();
+  // `<repo>/<path>` -> decoded file text, for every contents-API write.
+  const files = new Map<string, string>();
+  // Every `POST /user/repos` body received, in order.
+  const createRequests: { name: string; description?: string; private?: boolean }[] = [];
 
   function repoKey(name: string): string {
     return `${owner}/${name}`;
@@ -186,8 +195,13 @@ function createFakeGitHub(owner: string) {
 
     if (method === 'POST' && pathname === '/user/repos') {
       const body = init?.body
-        ? (JSON.parse(String(init.body)) as { name: string; description?: string })
+        ? (JSON.parse(String(init.body)) as {
+            name: string;
+            description?: string;
+            private?: boolean;
+          })
         : { name: '' };
+      createRequests.push(body);
       const fullName = repoKey(body.name);
       if (repos.has(fullName)) {
         return jsonResponse(422, {
@@ -227,6 +241,12 @@ function createFakeGitHub(owner: string) {
       // exact file content isn't asserted on by these tests (that's
       // covered by inspecting the description marker instead), so a
       // minimal, valid response shape is enough.
+      const { content } = JSON.parse(String(init?.body ?? '{}')) as { content?: string };
+      files.set(
+        // Octokit percent-encodes the whole path (`docs%2Fadr%2FADR-01.md`).
+        `${contentsMatch[2]}/${decodeURIComponent(contentsMatch[3] ?? '')}`,
+        Buffer.from(content ?? '', 'base64').toString('utf8'),
+      );
       return jsonResponse(201, {
         content: { path: contentsMatch[3] },
         commit: { sha: `fake-${nextFakeGitHubId++}` },
@@ -236,7 +256,7 @@ function createFakeGitHub(owner: string) {
     throw new Error(`fake GitHub fetch: unhandled ${method} ${pathname}`);
   }
 
-  return { fetch: fetchImpl, seedForeignRepo, repos };
+  return { fetch: fetchImpl, seedForeignRepo, repos, files, createRequests };
 }
 
 // Thin wrapper implementing "simulate a lost response" (ERD 7.2) on top of
@@ -296,6 +316,45 @@ async function withFakeFetch<T>(
   } finally {
     globalThis.fetch = original;
   }
+}
+
+/** A project with an approved Architecture (one ADR) - what `previewInit`/`initRepo` start from. */
+async function approvedArchitecture(
+  name: string,
+  optionA?: Parameters<typeof approveArchitectureVersion>[3],
+) {
+  const { projectId } = await fx.createProjectWithOwner(sql, { name });
+  const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+  const adr = await fx.createLogicalItemWithVersion(sql, {
+    projectId,
+    artifactId: architectureArtifactId,
+    itemType: 'architecture_decision',
+  });
+  const architectureVersionId = await approveArchitectureVersion(
+    architectureArtifactId,
+    1,
+    [{ logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId }],
+    optionA,
+  );
+  return { projectId, architectureVersionId };
+}
+
+/** The fake GitHub, except every `GET /repos/{owner}/{name}` lookup answers `status`/`body`. */
+function respondingToLookupWith(
+  fake: ReturnType<typeof createFakeGitHub>,
+  status: number,
+  body: unknown,
+) {
+  return async (url: string | URL, init?: RequestInit): Promise<Response> => {
+    const method = (init?.method ?? 'GET').toUpperCase();
+    if (method === 'GET' && /^\/repos\/[^/]+\/[^/]+$/.test(new URL(url).pathname)) {
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      });
+    }
+    return fake.fetch(url, init);
+  };
 }
 
 describe('github (E4-S2 / SCRUM-51)', () => {
@@ -680,6 +739,453 @@ describe('github (E4-S2 / SCRUM-51)', () => {
         const rowsAfterRefusal = await githubOperationRows(projectId);
         expect(rowsAfterRefusal).toHaveLength(2); // the refused attempt never inserted a row
       });
+    });
+  });
+
+  // ERD 7.2: `failed` is reserved for definitive provider rejections (4xx);
+  // 5xx/timeouts/lost responses are never `failed`. A GITHUB_TOKEN that
+  // can't create repositories answers 403 - before this was classified,
+  // that 403 was treated as ambiguous: the operation sat `pending` then
+  // `reconciliation_required` forever and no repository was ever created.
+  describe('create call rejected by GitHub (ERD 7.2 definitive 4xx vs ambiguous 5xx)', () => {
+    function respondingToCreateWith(
+      fake: ReturnType<typeof createFakeGitHub>,
+      rejection: () => { status: number; body: unknown } | null,
+    ) {
+      return async (url: string | URL, init?: RequestInit): Promise<Response> => {
+        const method = (init?.method ?? 'GET').toUpperCase();
+        const { pathname } = new URL(url);
+        const rejected = method === 'POST' && pathname === '/user/repos' ? rejection() : null;
+        if (rejected) {
+          return new Response(JSON.stringify(rejected.body), {
+            status: rejected.status,
+            headers: { 'content-type': 'application/json; charset=utf-8' },
+          });
+        }
+        return fake.fetch(url, init);
+      };
+    }
+
+    it("a 403 ends failed with GitHub's own reason (never left pending), and a retry once the token can create repositories resends and completes", async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('github 403');
+      const repoName = `forbidden-repo-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+      let tokenCanCreateRepos = false;
+      const fetchImpl = respondingToCreateWith(fake, () =>
+        tokenCanCreateRepos
+          ? null
+          : {
+              status: 403,
+              body: { message: 'Resource not accessible by personal access token', status: '403' },
+            },
+      );
+
+      await withFakeFetch(fetchImpl, async () => {
+        await expect(github.initRepo(architectureVersionId, repoName)).rejects.toThrow(
+          /Resource not accessible by personal access token/,
+        );
+
+        const afterRejection = await githubOperationRows(projectId);
+        expect(afterRejection).toHaveLength(1);
+        expect(afterRejection[0]!.status).toBe('failed');
+        expect(afterRejection[0]!.error_message).toMatch(/403/);
+        expect(fake.repos.size).toBe(0);
+        expect(await githubRefRows(projectId)).toHaveLength(0);
+
+        // Same name, same inputs: the failed row is retried in place (ERD
+        // 7.2 step 3.b "failed -> user may retry; set pending, resend") -
+        // no second operation row, no name_taken_by_other.
+        tokenCanCreateRepos = true;
+        const ref = await github.initRepo(architectureVersionId, repoName);
+        expect(ref.provider).toBe('github');
+
+        const afterRetry = await githubOperationRows(projectId);
+        expect(afterRetry).toHaveLength(1);
+        expect(afterRetry[0]!.status).toBe('completed');
+        // The earlier attempt's failure text must not outlive its own failure.
+        expect(afterRetry[0]!.error_message).toBeNull();
+        expect(fake.repos.size).toBe(1);
+      });
+    });
+
+    it('a 5xx on create is ambiguous, never failed - the row stays pending for reconciliation', async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('github 503');
+      const repoName = `unavailable-repo-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+      const fetchImpl = respondingToCreateWith(fake, () => ({
+        status: 503,
+        body: { message: 'Service Unavailable' },
+      }));
+
+      await withFakeFetch(fetchImpl, async () => {
+        await expect(github.initRepo(architectureVersionId, repoName)).rejects.toThrow();
+
+        const rows = await githubOperationRows(projectId);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.status).toBe('pending');
+        expect(rows[0]!.error_message).toBeNull();
+      });
+    });
+  });
+
+  // `checkRepoName` backs POST .../github/check-name - the advisory "is this
+  // name free?" answer shown while the user types. Read-only: no operation
+  // row, and no repository is ever created by asking.
+  describe('checkRepoName - repository-name availability', () => {
+    it('reports a free name as available, returns the normalized name, and creates nothing', async () => {
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        await expect(github.checkRepoName('My New Repo!')).resolves.toEqual({
+          repoName: 'my-new-repo',
+          status: 'available',
+        });
+      });
+
+      expect(fake.repos.size).toBe(0);
+    });
+
+    it('reports an existing repository at that name as taken, whoever owns it', async () => {
+      const fake = createFakeGitHub(FAKE_OWNER);
+      fake.seedForeignRepo('already-here', 'some unrelated description');
+
+      await withFakeFetch(fake.fetch, async () => {
+        await expect(github.checkRepoName('Already Here')).resolves.toEqual({
+          repoName: 'already-here',
+          status: 'taken',
+        });
+      });
+    });
+
+    it('reports a name with nothing usable left as invalid without calling GitHub at all', async () => {
+      const neverCalled = vi.fn(async () => {
+        throw new Error('GitHub must not be called for an invalid name');
+      });
+
+      await withFakeFetch(neverCalled, async () => {
+        await expect(github.checkRepoName('!!! ???')).resolves.toEqual({
+          repoName: '',
+          status: 'invalid',
+        });
+      });
+
+      expect(neverCalled).not.toHaveBeenCalled();
+    });
+
+    it("turns a definitive 4xx other than not-found into GithubLookupRejectedError carrying GitHub's reason", async () => {
+      const fetchImpl = respondingToLookupWith(createFakeGitHub(FAKE_OWNER), 403, {
+        message: 'Resource not accessible by personal access token',
+      });
+
+      await withFakeFetch(fetchImpl, async () => {
+        const failure = await github.checkRepoName('some-name').catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(github.GithubLookupRejectedError);
+        expect((failure as Error).message).toMatch(/403: Resource not accessible/);
+      });
+    });
+
+    it('lets a 5xx propagate unchanged - it says nothing about the name, so it is not a rejection', async () => {
+      const fetchImpl = respondingToLookupWith(createFakeGitHub(FAKE_OWNER), 503, {
+        message: 'Service Unavailable',
+      });
+
+      await withFakeFetch(fetchImpl, async () => {
+        const failure = await github.checkRepoName('some-name').catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).not.toBeInstanceOf(github.GithubLookupRejectedError);
+      });
+    });
+  });
+
+  // The preview's suggested name: the project's own name (handed in by the
+  // preview route), not the old opaque `throughline-project-<uuid>`.
+  describe('previewInit - repository-name suggestion', () => {
+    function projectIdName(projectId: string): string {
+      return github.normalizeRepoName(`throughline-project-${projectId}`);
+    }
+
+    it("suggests the project's name, normalized, when it is free on GitHub", async () => {
+      const { architectureVersionId } = await approvedArchitecture('suggest free');
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        const preview = await github.previewInit(architectureVersionId, 'ShiftSwap Verify');
+        expect(preview.repoName).toBe('shiftswap-verify');
+        expect(preview.mode).toBe('docs-only');
+      });
+      expect(fake.repos.size).toBe(0); // suggesting never creates anything
+    });
+
+    it('adds the first free numeric suffix when the name is already taken', async () => {
+      const { architectureVersionId } = await approvedArchitecture('suggest taken');
+      const fake = createFakeGitHub(FAKE_OWNER);
+      fake.seedForeignRepo('shiftswap-verify', 'unrelated');
+
+      await withFakeFetch(fake.fetch, async () => {
+        expect((await github.previewInit(architectureVersionId, 'ShiftSwap Verify')).repoName).toBe(
+          'shiftswap-verify-2',
+        );
+
+        fake.seedForeignRepo('shiftswap-verify-2', 'unrelated');
+        expect((await github.previewInit(architectureVersionId, 'ShiftSwap Verify')).repoName).toBe(
+          'shiftswap-verify-3',
+        );
+      });
+    });
+
+    it('falls back to the project-id name (which cannot collide) when every attempt is taken', async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('suggest exhausted');
+      const fake = createFakeGitHub(FAKE_OWNER);
+      fake.seedForeignRepo('busy', 'unrelated');
+      for (let n = 2; n <= 10; n++) fake.seedForeignRepo(`busy-${n}`, 'unrelated');
+
+      await withFakeFetch(fake.fetch, async () => {
+        const preview = await github.previewInit(architectureVersionId, 'busy');
+        expect(preview.repoName).toBe(projectIdName(projectId));
+      });
+    });
+
+    it('uses the project-id name, without calling GitHub, when there is no project name to use', async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('suggest none');
+      const neverCalled = vi.fn(async () => {
+        throw new Error('GitHub must not be called without a usable project name');
+      });
+
+      await withFakeFetch(neverCalled, async () => {
+        // No name at all (what `github/init` passes), and a name that normalizes to nothing.
+        expect((await github.previewInit(architectureVersionId)).repoName).toBe(
+          projectIdName(projectId),
+        );
+        expect((await github.previewInit(architectureVersionId, '!!! ???')).repoName).toBe(
+          projectIdName(projectId),
+        );
+      });
+
+      expect(neverCalled).not.toHaveBeenCalled();
+    });
+
+    it('still previews, with the unverified project-name slug, when GitHub refuses the lookup', async () => {
+      const { architectureVersionId } = await approvedArchitecture('suggest refused');
+      const fetchImpl = respondingToLookupWith(createFakeGitHub(FAKE_OWNER), 403, {
+        message: 'Resource not accessible by personal access token',
+      });
+
+      await withFakeFetch(fetchImpl, async () => {
+        const preview = await github.previewInit(architectureVersionId, 'ShiftSwap Verify');
+        expect(preview.repoName).toBe('shiftswap-verify');
+      });
+    });
+  });
+
+  // The files `initRepo` commits carry the real architecture, read from the
+  // selected option and each ADR's item-version payload (see repo-docs.ts,
+  // whose builders are unit-tested on their own) - not just ids.
+  describe('initRepo - repository visibility', () => {
+    it('always asks GitHub for a public repository, never a private one', async () => {
+      const { architectureVersionId } = await approvedArchitecture('github visibility');
+      const repoName = `public-repo-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        await github.initRepo(architectureVersionId, repoName);
+      });
+
+      expect(fake.createRequests).toHaveLength(1);
+      expect(fake.createRequests[0]).toMatchObject({
+        name: github.normalizeRepoName(repoName),
+        private: false,
+      });
+    });
+  });
+
+  describe('initRepo - repository documentation content', () => {
+    it("commits the ADR's decision text and the option's stack table, not just provenance ids", async () => {
+      const { projectId } = await fx.createProjectWithOwner(sql, { name: 'github docs content' });
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const { id: logicalItemId, displayKey } = await fx.createLogicalItem(sql, {
+        projectId,
+        artifactId: architectureArtifactId,
+        itemType: 'architecture_decision',
+      });
+      const itemVersionId = await fx.createItemVersion(sql, {
+        projectId,
+        logicalItemId,
+        payload: {
+          title: 'Server-rendered workflow',
+          decision: 'Use Django templates with HTMX for the workflow screens.',
+          technologyOrApproach: 'Django templates with HTMX',
+          constraints: ['Provide submission, manager review, and employee status views.'],
+          significantTradeoffs: ['Keeps the UI and workflow in one application.'],
+        },
+      });
+      const architectureVersionId = await approveArchitectureVersion(
+        architectureArtifactId,
+        1,
+        [{ logicalItemId, itemVersionId }],
+        {
+          title: 'Django Modular Monolith',
+          summary: 'A server-rendered Django application in one service.',
+          stack: { frontend: 'Django templates with HTMX', backend: 'Django' },
+          tradeoffs: [{ factor: 'cost', assessment: 'One service to pay for.' }],
+        },
+      );
+
+      const repoName = `docs-content-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+      await withFakeFetch(fake.fetch, async () => {
+        await github.initRepo(architectureVersionId, repoName);
+      });
+
+      const repo = github.normalizeRepoName(repoName);
+      const adr = fake.files.get(`${repo}/docs/adr/${displayKey}.md`);
+      expect(adr).toContain('# ' + displayKey + ': Server-rendered workflow');
+      expect(adr).toContain('Use Django templates with HTMX for the workflow screens.');
+      expect(adr).toContain('- Provide submission, manager review, and employee status views.');
+      expect(adr).toContain(`adr_item_version_id: ${itemVersionId}`);
+
+      const readme = fake.files.get(`${repo}/README.md`);
+      expect(readme).toContain('| Frontend | Django templates with HTMX |');
+      expect(readme).toContain('- **Cost:** One service to pay for.');
+      expect(readme).toContain(
+        `[${displayKey}](./docs/adr/${displayKey}.md) - Server-rendered workflow`,
+      );
+    });
+  });
+
+  // FR-031/032: a pinned starter matching the selected stack is generated as
+  // real files (scaffold mode); any other stack stays docs-only. The starters
+  // themselves are unit-tested (github-starters.test.ts) and were run for
+  // real (Django virtualenv, Next.js tsc) - this proves the wiring end to end.
+  describe('pinned starter - scaffold mode vs docs-only', () => {
+    const DJANGO_OPTION = {
+      title: 'Django Modular Monolith',
+      summary: 'A server-rendered Django application in one service.',
+      stack: {
+        frontend: 'Django templates with HTMX',
+        backend: 'Django modular monolith',
+        database: 'Amazon RDS for PostgreSQL',
+        hosting: 'AWS ECS Fargate',
+        repositoryLayout: 'Single Django repository organized by domain apps',
+      },
+    };
+    const RAILS_OPTION = {
+      title: 'Rails Monolith',
+      stack: {
+        frontend: 'Rails server-rendered HTML',
+        backend: 'Ruby on Rails modular monolith',
+        database: 'PostgreSQL',
+        hosting: 'Managed Rails platform',
+        repositoryLayout: 'Single application repository',
+      },
+    };
+
+    it('previews the starter and its exact file list for a matching stack', async () => {
+      const { architectureVersionId } = await approvedArchitecture(
+        'starter preview',
+        DJANGO_OPTION,
+      );
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        const preview = await github.previewInit(architectureVersionId, 'ShiftSwap Verify');
+
+        expect(preview.mode).toBe('scaffold');
+        expect(preview.starter).toMatchObject({ id: 'django', label: 'Django' });
+        expect(preview.starter?.files).toEqual(
+          expect.arrayContaining(['manage.py', 'requirements.txt', 'config/settings.py']),
+        );
+        expect(preview.starter?.notScaffolded.join(' ')).toContain('infrastructure');
+      });
+    });
+
+    it('previews no starter and docs-only mode for a stack no starter fits', async () => {
+      const { architectureVersionId } = await approvedArchitecture('starter none', RAILS_OPTION);
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        const preview = await github.previewInit(architectureVersionId, 'Rails Thing');
+
+        expect(preview.mode).toBe('docs-only');
+        expect(preview.starter).toBeNull();
+      });
+    });
+
+    it('writes exactly the previewed files, then the docs, with lineage.json last', async () => {
+      const { architectureVersionId } = await approvedArchitecture('starter write', DJANGO_OPTION);
+      const repoName = `starter-repo-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+      let previewed: string[] = [];
+
+      const ref = await withFakeFetch(fake.fetch, async () => {
+        previewed = (await github.previewInit(architectureVersionId, repoName)).starter!.files;
+        return github.initRepo(architectureVersionId, repoName);
+      });
+
+      const repo = github.normalizeRepoName(repoName);
+      const written = [...fake.files.keys()].map((key) => key.slice(repo.length + 1));
+
+      expect(ref.metadata).toMatchObject({ mode: 'scaffold' });
+      // Every previewed starter file was written - the preview does not lie (FR-030).
+      for (const path of previewed) expect(written, path).toContain(path);
+      expect(written).toContain('README.md');
+      expect(written.some((path) => path.startsWith('docs/adr/ADR-'))).toBe(true);
+      // Provenance last: lineage.json only exists once every file landed.
+      expect(written[written.length - 1]).toBe('docs/architecture/lineage.json');
+      // README first, before any starter file.
+      expect(written[0]).toBe('README.md');
+    });
+
+    it('records the starter in lineage.json and explains it in the README', async () => {
+      const { architectureVersionId } = await approvedArchitecture(
+        'starter lineage',
+        DJANGO_OPTION,
+      );
+      const repoName = `starter-lineage-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        await github.initRepo(architectureVersionId, repoName);
+      });
+
+      const repo = github.normalizeRepoName(repoName);
+      const lineage = JSON.parse(fake.files.get(`${repo}/docs/architecture/lineage.json`)!);
+      expect(lineage.mode).toBe('scaffold');
+      expect(lineage.starter).toMatchObject({ id: 'django', label: 'Django' });
+      expect(lineage.starter.files).toContain('manage.py');
+
+      const readme = fake.files.get(`${repo}/README.md`)!;
+      expect(readme).toContain('A Django starter was generated from the selected stack');
+      expect(readme).toContain('## Getting started');
+      expect(readme).toContain('python manage.py runserver');
+
+      // The generated settings really are the repo's own name/title-safe project.
+      expect(fake.files.get(`${repo}/manage.py`)).toContain('config.settings');
+      expect(fake.files.get(`${repo}/requirements.txt`)).toContain('psycopg');
+    });
+
+    it('writes no starter files and says docs-only for a stack no starter fits', async () => {
+      const { architectureVersionId } = await approvedArchitecture(
+        'starter docs only',
+        RAILS_OPTION,
+      );
+      const repoName = `docsonly-repo-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      const ref = await withFakeFetch(fake.fetch, async () =>
+        github.initRepo(architectureVersionId, repoName),
+      );
+
+      const repo = github.normalizeRepoName(repoName);
+      const written = [...fake.files.keys()].map((key) => key.slice(repo.length + 1));
+      expect(ref.metadata).toMatchObject({ mode: 'docs-only' });
+      expect(written.filter((path) => path !== 'README.md' && !path.startsWith('docs/'))).toEqual(
+        [],
+      );
+
+      const lineage = JSON.parse(fake.files.get(`${repo}/docs/architecture/lineage.json`)!);
+      expect(lineage.mode).toBe('docs-only');
+      expect(lineage.starter).toBeNull();
+      expect(fake.files.get(`${repo}/README.md`)).not.toContain('## Getting started');
     });
   });
 });

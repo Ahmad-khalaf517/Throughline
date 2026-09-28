@@ -2,13 +2,17 @@
 
 import { useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import { CircleAlert, CircleCheck } from 'lucide-react';
 import { FieldShell } from '@/components/auth/field-shell';
 import { FormMessage } from '@/components/auth/form-message';
 import type { ExternalRefDTO, ImpactRowDTO } from '@/lib/serialize';
 import {
   describeExternalError,
+  describeRepoNameAvailability,
   isExternalWriteBlocked,
+  isRepoNameBlocked,
   readImpactFromError,
+  type RepoNameAvailability,
 } from '@/lib/external-preview';
 import { PreviewShell, type PreviewState } from './preview-shell';
 import { ImpactGate } from './impact-gate';
@@ -21,6 +25,8 @@ interface GithubInitPanelProps {
 interface GithubPreviewData {
   mode: 'scaffold' | 'docs-only';
   repoName: string;
+  /** The pinned starter whose files will be added, or `null` (docs-only). */
+  starter: { id: string; label: string; files: string[]; notScaffolded: string[] } | null;
   impact: ImpactRowDTO[];
 }
 
@@ -31,6 +37,17 @@ interface ErrorBody {
   error?: { code?: string; message?: string; details?: { impact?: ImpactRowDTO[] } };
 }
 
+// How long the field must sit unchanged before it is checked against GitHub -
+// one request per pause in typing, not one per keystroke.
+const AVAILABILITY_DEBOUNCE_MS = 500;
+
+// Color is never the only cue: success and error also carry an icon.
+const AVAILABILITY_TONE = {
+  neutral: { className: 'text-secondary', Icon: null },
+  success: { className: 'text-success', Icon: CircleCheck },
+  error: { className: 'text-error', Icon: CircleAlert },
+} as const;
+
 const INPUT_CLASSNAME =
   'border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus:border-primary focus:bg-surface-container-low focus:ring-primary h-11 w-full rounded-lg border px-3.5 text-sm transition-colors focus:ring-1 focus:outline-none';
 
@@ -39,12 +56,14 @@ const SUBMIT_CLASSNAME =
 
 /**
  * `POST /api/projects/:projectId/github/preview` + `.../github/init`
- * (API Contracts section 8; E5-S9). Client-`fetch` mutation pattern copied
+ * (API Contracts section 8; E5-S9), plus `.../github/check-name` so the user
+ * can see whether a name is free before submitting. Client-`fetch` mutation pattern copied
  * from `new-project-form.tsx`: `pending`/`error` state, `401 -> /sign-in`,
  * `body?.error?.message`, a `catch` -> "Could not reach the server" branch.
  *
  * `github/preview` **ignores the request's `repoName`** and always returns
- * its own deterministic suggestion (that route's own header comment) - a
+ * its own suggestion (the project's name, normalized - that route's own
+ * header comment) - a
  * placeholder is sent on first load purely to satisfy the schema's
  * `min(1)`, then the field is populated from the response's `repoName`, not
  * the other way around. This is surprising, hence spelled out here.
@@ -58,6 +77,8 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [result, setResult] = useState<GithubWriteResult | null>(null);
+  const [availability, setAvailability] = useState<RepoNameAvailability | null>(null);
+  const typedName = repoName.trim();
 
   useEffect(() => {
     let cancelled = false;
@@ -119,6 +140,63 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
       cancelled = true;
     };
   }, [projectId, router]);
+
+  // `POST .../github/check-name` (API Contracts section 8), advisory only:
+  // `github/init` still decides for real. Waits for the preview (which
+  // supplies the first name to check), then re-checks a moment after every
+  // edit. No state is set synchronously here - "checking" is derived from
+  // `availability` being for different text than the field holds now.
+  useEffect(() => {
+    if (state.status !== 'ready' || result || typedName === '') return;
+
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/projects/${projectId}/github/check-name`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoName: typedName }),
+          signal: controller.signal,
+        });
+
+        if (response.status === 401) {
+          router.push('/sign-in');
+          return;
+        }
+
+        const body = await response.json();
+        if (controller.signal.aborted) return;
+
+        if (!response.ok) {
+          setAvailability({
+            kind: 'error',
+            typed: typedName,
+            message: (body as ErrorBody).error?.message ?? 'Something went wrong.',
+          });
+          return;
+        }
+
+        const check = body as { repoName: string; status: 'available' | 'taken' | 'invalid' };
+        setAvailability({ kind: check.status, typed: typedName, repoName: check.repoName });
+      } catch {
+        if (controller.signal.aborted) return;
+        setAvailability({
+          kind: 'error',
+          typed: typedName,
+          message: 'Could not reach the server.',
+        });
+      }
+    }, AVAILABILITY_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [projectId, router, state.status, result, typedName]);
+
+  const availabilityCopy = describeRepoNameAvailability(availability, typedName);
+  const availabilityTone = availabilityCopy ? AVAILABILITY_TONE[availabilityCopy.tone] : null;
+  const AvailabilityIcon = availabilityTone?.Icon;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -201,11 +279,39 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
             <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
               <p className="text-on-surface text-sm font-medium">
                 Mode: <span className="font-mono-code">{preview.mode}</span>
+                <span className="text-outline mx-2" aria-hidden="true">
+                  ·
+                </span>
+                Visibility: <span className="font-mono-code">public</span>
               </p>
               <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
-                {preview.mode === 'scaffold'
-                  ? 'Creates a repository with a generated project scaffold matching the approved Architecture stack.'
-                  : 'Creates a repository with documentation only - this stack has no generated scaffold.'}
+                {preview.starter
+                  ? `Adds a ${preview.starter.label} starter generated from the approved stack (${preview.starter.files.length} files), plus a README with the stack and trade-offs and one ADR per approved decision.`
+                  : 'No pinned starter matches this stack, so the repository is created with documentation only - a README with the stack and trade-offs, and one ADR per approved decision.'}
+              </p>
+              {preview.starter && (
+                <>
+                  <details className="text-on-surface-variant mt-2 text-sm">
+                    <summary className="text-on-surface cursor-pointer font-medium">
+                      Starter files ({preview.starter.files.length})
+                    </summary>
+                    <ul className="font-mono-code mt-2 columns-1 gap-6 text-xs leading-relaxed sm:columns-2">
+                      {preview.starter.files.map((path) => (
+                        <li key={path}>{path}</li>
+                      ))}
+                    </ul>
+                  </details>
+                  {preview.starter.notScaffolded.length > 0 && (
+                    <p className="text-on-surface-variant mt-2 text-sm leading-relaxed">
+                      Not generated (documentation only): {preview.starter.notScaffolded.join('; ')}
+                      .
+                    </p>
+                  )}
+                </>
+              )}
+              <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
+                The repository is created <strong className="font-medium">public</strong> - anyone
+                on GitHub can read its README and ADRs.
               </p>
             </div>
 
@@ -214,8 +320,23 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
                 id="github-repo-name"
                 value={repoName}
                 onChange={(event) => setRepoName(event.target.value)}
+                aria-describedby="github-repo-name-availability"
+                aria-invalid={isRepoNameBlocked(availability, typedName) || undefined}
+                autoComplete="off"
+                spellCheck={false}
                 className={INPUT_CLASSNAME}
               />
+              <p
+                id="github-repo-name-availability"
+                role="status"
+                aria-live="polite"
+                className={`flex min-h-4 items-start gap-1.5 text-xs ${availabilityTone?.className ?? ''}`}
+              >
+                {AvailabilityIcon && (
+                  <AvailabilityIcon className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+                )}
+                <span>{availabilityCopy?.text}</span>
+              </p>
             </FieldShell>
 
             <ImpactGate
@@ -231,7 +352,8 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
               type="submit"
               disabled={
                 submitting ||
-                repoName.trim().length === 0 ||
+                typedName.length === 0 ||
+                isRepoNameBlocked(availability, typedName) ||
                 isExternalWriteBlocked(preview.impact, acknowledged)
               }
               className={SUBMIT_CLASSNAME}
