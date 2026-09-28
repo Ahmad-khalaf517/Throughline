@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CircleAlert } from 'lucide-react';
+import { computePreviewScale } from '@/lib/preview-scale';
 
 interface SandboxedHtmlPreviewProps {
   htmlUrl: string;
@@ -24,7 +25,129 @@ const DOWNLOAD_FILENAME = 'stitch-prototype.html';
 // to hand to an iframe.
 const MAX_HTML_BYTES = 5 * 1024 * 1024;
 
+// Stitch is asked for a DESKTOP screen, so the iframe is laid out at a real
+// desktop viewport and scaled down to fit, rather than squeezed into the panel
+// (which would make the generated page's own media queries collapse it).
+const DESKTOP_DESIGN_WIDTH = 1280;
+// A 4:3-ish desktop viewport: at the typical ~0.5 scale in the panel this is
+// ~500px on screen, a bit taller than the old fixed 480px; Expand shows more.
+const DESKTOP_DESIGN_HEIGHT = 960;
+
+type PreviewSize = 'fit' | 'actual';
+
 type HtmlLoad = { status: 'loading' } | { status: 'ready'; html: string } | { status: 'failed' };
+
+/**
+ * The sandboxed iframe at its true design size, scaled to the wrapper width.
+ * Only mounted after the HTML has been fetched (never server-rendered), so the
+ * synchronous first measurement in a layout effect cannot flash or mismatch.
+ */
+function ScaledFrame({ html, size }: { html: string; size: PreviewSize }) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    setContainerWidth(el.clientWidth);
+    const observer = new ResizeObserver(() => setContainerWidth(el.clientWidth));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const scale = size === 'actual' ? 1 : computePreviewScale(containerWidth, DESKTOP_DESIGN_WIDTH);
+
+  return (
+    <div
+      ref={wrapperRef}
+      className={size === 'actual' ? 'max-h-[70vh] w-full overflow-auto' : 'w-full overflow-hidden'}
+    >
+      <div
+        style={{ width: DESKTOP_DESIGN_WIDTH * scale, height: DESKTOP_DESIGN_HEIGHT * scale }}
+        className="overflow-hidden"
+      >
+        {/* FR-053 / ERD 4.16: no `allow-same-origin`, ever (srcdoc + no
+            same-origin => opaque origin). `allow-scripts` is the only sandbox
+            token; the CSS transform does not affect the sandbox. */}
+        <iframe
+          srcDoc={html}
+          title="Generated UI prototype preview (sandboxed)"
+          sandbox="allow-scripts"
+          style={{
+            width: DESKTOP_DESIGN_WIDTH,
+            height: DESKTOP_DESIGN_HEIGHT,
+            transform: `scale(${scale})`,
+            transformOrigin: 'top left',
+          }}
+          className="max-w-none rounded-lg border-0 bg-white"
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Full-viewport modal (native `<dialog>`: focus trap, Escape and backdrop come
+ * with `showModal()`). Its iframe is mounted only while open so two copies of
+ * the generated script never run at once.
+ */
+function ExpandedPreviewDialog({
+  html,
+  open,
+  onClose,
+}: {
+  html: string;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      aria-labelledby="stitch-preview-expanded-title"
+      // Fires for Escape, the Close button and programmatic close() alike.
+      onClose={onClose}
+      onClick={(event) => {
+        // Only a click on the backdrop targets the <dialog> itself.
+        if (event.target === event.currentTarget) onClose();
+      }}
+      className="bg-surface-container-lowest m-0 h-dvh max-h-none w-dvw max-w-none p-0 backdrop:bg-black/50"
+    >
+      {open ? (
+        <div className="flex h-full flex-col gap-2 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <h2
+              id="stitch-preview-expanded-title"
+              className="text-on-surface text-sm font-semibold"
+            >
+              Generated UI prototype
+            </h2>
+            <button
+              type="button"
+              autoFocus
+              aria-label="Close expanded preview"
+              onClick={onClose}
+              className={`${TAB_BUTTON_BASE} ${TAB_BUTTON_INACTIVE} border-outline-variant border`}
+            >
+              Close
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto">
+            <ScaledFrame html={html} size="fit" />
+          </div>
+        </div>
+      ) : null}
+    </dialog>
+  );
+}
 
 /**
  * The embedded, sandboxed preview of a Stitch-generated UI prototype
@@ -43,12 +166,23 @@ type HtmlLoad = { status: 'loading' } | { status: 'ready'; html: string } | { st
  * that is what preserves FR-053 / NFR-005's UI-side twin. `allow-scripts`
  * alone lets the prototype run its own script.
  *
+ * The prototype is a desktop screen, so the iframe is laid out at its true
+ * 1280px design width and shrunk with a CSS `transform: scale()` to the panel
+ * width (`computePreviewScale`, measured by ResizeObserver) instead of being
+ * squeezed into a narrow viewport. "Fit" (default) / "Actual size" toggles
+ * that; "Expand" shows the same already-fetched HTML in a native modal
+ * `<dialog>`, mounted only while open. The transform and the dialog do not
+ * change the sandbox.
+ *
  * "Download HTML" saves the fetched text via a Blob object URL and
  * `a[download]`. It must never become a new-tab/blob: navigation - that would
  * run generated scripts in the app's origin.
  */
 export function SandboxedHtmlPreview({ htmlUrl, screenshotUrl }: SandboxedHtmlPreviewProps) {
   const [tab, setTab] = useState<PreviewTab>('html');
+  const [size, setSize] = useState<PreviewSize>('fit');
+  const [expanded, setExpanded] = useState(false);
+  const expandButtonRef = useRef<HTMLButtonElement>(null);
   const [load, setLoad] = useState<{ url: string; result: HtmlLoad } | null>(null);
 
   useEffect(() => {
@@ -137,25 +271,53 @@ export function SandboxedHtmlPreview({ htmlUrl, screenshotUrl }: SandboxedHtmlPr
               Loading preview...
             </p>
           ) : (
-            // FR-053 / ERD 4.16: no `allow-same-origin`, ever (srcdoc + no
-            // same-origin => opaque origin). `allow-scripts` is the only
-            // sandbox token.
-            <iframe
-              key={htmlUrl}
-              srcDoc={html.html}
-              title="Generated UI prototype preview (sandboxed)"
-              sandbox="allow-scripts"
-              className="h-[480px] w-full rounded-lg border-0 bg-white"
-            />
+            <ScaledFrame key={htmlUrl} html={html.html} size={size} />
           )}
           {html.status === 'ready' ? (
-            <button
-              type="button"
-              onClick={downloadHtml}
-              className="text-primary-container hover:text-primary-container-hover focus-visible:ring-primary self-start rounded-md text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
-            >
-              Download HTML
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <div
+                role="group"
+                aria-label="Preview size"
+                className="border-outline-variant bg-surface-container-low inline-flex gap-1 rounded-lg border p-1"
+              >
+                {(['fit', 'actual'] as const).map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    aria-pressed={size === option}
+                    onClick={() => setSize(option)}
+                    className={`${TAB_BUTTON_BASE} ${size === option ? TAB_BUTTON_ACTIVE : TAB_BUTTON_INACTIVE}`}
+                  >
+                    {option === 'fit' ? 'Fit' : 'Actual size'}
+                  </button>
+                ))}
+              </div>
+              <button
+                ref={expandButtonRef}
+                type="button"
+                aria-label="Expand preview to full screen"
+                onClick={() => setExpanded(true)}
+                className={`${TAB_BUTTON_BASE} ${TAB_BUTTON_INACTIVE} border-outline-variant border`}
+              >
+                Expand
+              </button>
+              <button
+                type="button"
+                onClick={downloadHtml}
+                className="text-primary-container hover:text-primary-container-hover focus-visible:ring-primary rounded-md text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
+              >
+                Download HTML
+              </button>
+              <ExpandedPreviewDialog
+                key={htmlUrl}
+                html={html.html}
+                open={expanded}
+                onClose={() => {
+                  setExpanded(false);
+                  expandButtonRef.current?.focus();
+                }}
+              />
+            </div>
           ) : null}
         </div>
       ) : (
