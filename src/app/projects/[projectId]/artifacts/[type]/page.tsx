@@ -3,13 +3,9 @@ import { notFound, redirect } from 'next/navigation';
 import { getProjectById } from '@/artifact-lifecycle';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
 import { ApiError } from '@/lib/errors';
-import { ARTIFACT_TYPES, type ArtifactType, type QualityIssueDTO } from '@/lib/serialize';
-import { ArtifactGenerationPanel } from '@/components/review/artifact-generation-panel';
-import {
-  ARTIFACT_TYPE_DISPATCH,
-  loadVersionDTO,
-  missingPrerequisites,
-} from '@/app/api/_shared/artifacts';
+import { ARTIFACT_TYPES, type ArtifactType } from '@/lib/serialize';
+import { ArtifactReviewScreen } from '@/components/review/artifact-review-screen';
+import { loadReviewVersion } from '../load-review-version';
 
 interface ArtifactReviewPageProps {
   params: Promise<{ projectId: string; type: string }>;
@@ -27,23 +23,6 @@ function isArtifactType(value: string): value is ArtifactType {
 }
 
 /**
- * Loads this artifact type's quality issues the same way
- * `GET /api/artifact-versions/:versionId/quality-gate` does (Architecture and
- * UI Requirements have no gate in P0 - Module Boundaries 4.4 - so they always
- * get `[]`), narrowed to the wire shape rather than whatever extra fields the
- * domain type happens to carry.
- */
-async function loadQualityIssues(
-  type: ArtifactType,
-  versionId: string,
-): Promise<QualityIssueDTO[]> {
-  const { qualityGate } = ARTIFACT_TYPE_DISPATCH[type];
-  if (!qualityGate) return [];
-  const issues = await qualityGate(versionId);
-  return issues.map(({ code, message, logicalItemId }) => ({ code, message, logicalItemId }));
-}
-
-/**
  * Generic, type-parameterized artifact review screen (E5-S2; Jira Plan 1.6
  * option 2 - one screen for all four artifact types rather than four bespoke
  * ones). Auth guard and `notFound()` mapping copied from
@@ -51,13 +30,14 @@ async function loadQualityIssues(
  * why `requireProjectOwner`'s `ApiError('NOT_FOUND')` is caught explicitly
  * rather than left to bubble up).
  *
- * Reads the real current version (draft over approved - the more relevant
- * one to review) via `@/app/api/_shared/artifacts`' route-handler glue
- * directly, the same "artifact/version-route exception" the routes
- * themselves document (Module Boundaries 4.7) - this page is now `app`
- * calling `layer6-api`'s shared DTO builder rather than a fixture. `null`
- * means this artifact type has never been generated; `ArtifactGenerationPanel`
- * owns the real `POST .../generate` call and its own loading state from there.
+ * Reads real data via `loadReviewVersion` (SCRUM-86) - the newest version of
+ * this artifact type, whatever its status, plus its quality issues - a
+ * "read directly, write through api" page read (Module Boundaries 4.8), same
+ * convention `getProjectById` below already uses. `null` means the artifact
+ * has no versions yet - `ArtifactReviewScreen` renders a real "Generate"
+ * trigger for that case (SCRUM-86 follow-up: `POST .../artifacts/:type/
+ * generate`), not just a dead-end message, since a brand-new project would
+ * otherwise have no way to ever get a first draft to review.
  */
 export default async function ArtifactReviewPage({ params }: ArtifactReviewPageProps) {
   const user = await getVerifiedUser();
@@ -84,13 +64,7 @@ export default async function ArtifactReviewPage({ params }: ArtifactReviewPageP
   const project = await getProjectById(projectId);
   if (!project) notFound();
 
-  const summary = project.artifacts[type];
-  const versionId = summary.draftVersionId ?? summary.approvedVersionId;
-  const version = versionId ? await loadVersionDTO(versionId) : null;
-  const qualityIssues = versionId ? await loadQualityIssues(type, versionId) : [];
-  const missingPrerequisiteNames = missingPrerequisites(project, type).map(
-    (candidate) => ARTIFACT_TYPE_LABELS[candidate],
-  );
+  const reviewData = await loadReviewVersion(projectId, type);
   const artifactTypeName = ARTIFACT_TYPE_LABELS[type];
 
   return (
@@ -104,14 +78,34 @@ export default async function ArtifactReviewPage({ params }: ArtifactReviewPageP
         ← {project.name}
       </Link>
 
-      <ArtifactGenerationPanel
-        projectId={projectId}
-        type={type}
-        artifactTypeName={artifactTypeName}
-        initialVersion={version}
-        initialQualityIssues={qualityIssues}
-        missingPrerequisiteNames={missingPrerequisiteNames}
-      />
+      {reviewData ? (
+        // Keyed by version id: a manual/AI revision mints a brand-new
+        // `artifact_version` after this page's next read, and this key
+        // forces `ArtifactReviewScreen` to remount (fresh local state) for
+        // that new version rather than keeping stale state from the old one
+        // (see that component's own comment on this).
+        <ArtifactReviewScreen
+          key={reviewData.version.id}
+          projectId={projectId}
+          artifactType={type}
+          artifactTypeName={artifactTypeName}
+          version={reviewData.version}
+          qualityIssues={reviewData.qualityIssues}
+        />
+      ) : (
+        // Not a hard 404: the artifact type is real (it's one of the 4 CHECK
+        // values), it just has no version yet (nothing has been generated
+        // into it). `artifactType` is passed through explicitly (not derived
+        // from a version, since there isn't one) so the screen's own
+        // "Generate" trigger knows which `:type` to POST to.
+        <ArtifactReviewScreen
+          projectId={projectId}
+          artifactType={type}
+          artifactTypeName={artifactTypeName}
+          version={null}
+          qualityIssues={[]}
+        />
+      )}
     </main>
   );
 }

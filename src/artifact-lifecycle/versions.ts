@@ -9,9 +9,18 @@
 // is re-exported through ./index.ts (Module Boundaries section 7).
 import { and, desc, eq } from 'drizzle-orm';
 import { db, schema, withTx } from '@/db';
-import { getSourceVersionMembers, type ItemType } from '@/lineage/identity';
+import {
+  getDisplayKeysByItemVersionId,
+  getSourceVersionMembers,
+  type ItemType,
+} from '@/lineage/identity';
 import { getWarnings, type ImpactRow } from '@/lineage/impact';
-import type { ArtifactType, ArtifactVersionStatus } from '@/lib/serialize';
+import {
+  toImpactRowDTO,
+  type ArtifactType,
+  type ArtifactVersionStatus,
+  type ImpactRowDTO,
+} from '@/lib/serialize';
 import type { ArtifactVersion } from './generation';
 import { UUID_RE } from './shared';
 
@@ -223,5 +232,48 @@ export async function getArtifactVersionDetail(
   return {
     version: { ...toRecord(row.version, row.artifactType), projectId: row.projectId },
     items,
+  };
+}
+
+export interface ResolvedVersionItem extends Omit<VersionItem, 'impact'> {
+  impact: ImpactRowDTO | null;
+}
+
+export interface ResolvedArtifactVersionDetail {
+  version: ArtifactVersionRecord & { projectId: string };
+  items: ResolvedVersionItem[];
+}
+
+/**
+ * `getArtifactVersionDetail` with each item's impact promoted from the raw
+ * id-based `ImpactRow` to the display-key-based `ImpactRowDTO` - the shape a
+ * page needs to render directly (a page may read layer 2/3 exports per
+ * Module Boundaries 4.8, but may not reach layer 1 `identity` itself to do
+ * this resolution, so it happens here instead).
+ */
+export async function getArtifactVersionDetailResolved(
+  versionId: string,
+): Promise<ResolvedArtifactVersionDetail | null> {
+  const detail = await getArtifactVersionDetail(versionId);
+  if (!detail) return null;
+  const withImpact = detail.items.filter(
+    (item): item is typeof item & { impact: NonNullable<typeof item.impact> } =>
+      item.impact !== null,
+  );
+  let labels = new Map<string, string>();
+  if (withImpact.length) {
+    const ids = [
+      ...new Set(
+        withImpact.flatMap((item) => [item.impact.rootItemVersionId, ...item.impact.path]),
+      ),
+    ];
+    labels = await withTx((tx) => getDisplayKeysByItemVersionId(tx, ids));
+  }
+  return {
+    version: detail.version,
+    items: detail.items.map((item) => ({
+      ...item,
+      impact: item.impact ? toImpactRowDTO(item.impact, labels) : null,
+    })),
   };
 }

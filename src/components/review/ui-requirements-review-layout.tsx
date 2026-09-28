@@ -123,7 +123,7 @@ export function UiRequirementsReviewLayout({
                   const fields = readFields(item.payload);
                   return (
                     <Fragment key={item.itemVersionId}>
-                      <tr className="border-surface-dim border-b align-top">
+                      <tr className="border-surface-dim hover:bg-surface-container-low/50 border-b align-top transition-colors">
                         <th scope="row" className="px-5 py-4 font-normal">
                           <span className="font-mono-code bg-surface-container-low text-on-surface rounded px-2 py-1 text-xs font-semibold">
                             {item.displayKey}

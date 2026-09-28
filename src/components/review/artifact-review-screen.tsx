@@ -1,10 +1,13 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { CircleAlert, CircleCheck, Loader2, SquarePen } from 'lucide-react';
 import type {
+  ArtifactType,
   ArtifactVersionDTO,
   ArtifactVersionStatus,
+  ImpactRowDTO,
   ItemVersionDTO,
   QualityIssueDTO,
 } from '@/lib/serialize';
@@ -15,16 +18,24 @@ import { ArchitectureOptions } from './architecture-options';
 import { ItemEditDialog } from './item-edit-dialog';
 import { BacklogReviewLayout } from './backlog-review-layout';
 import { UiRequirementsReviewLayout } from './ui-requirements-review-layout';
+import { GenerationSkeleton } from './generation-skeleton';
 
 interface ArtifactReviewScreenProps {
+  /** The project this version belongs to - needed for the manual-revise call (`POST /api/projects/:projectId/artifacts/:type/revise`). */
+  projectId: string;
+  /**
+   * The `:type` path segment, already validated by the page (SCRUM-86 follow-
+   * up). Needed independently of `version.artifactType` because `version` can
+   * be `null` (nothing generated yet) - the one case where this screen still
+   * needs to know which artifact type to generate.
+   */
+  artifactType: ArtifactType;
   /** Human-readable artifact name for the header (e.g. "Requirements"). */
   artifactTypeName: string;
   /**
-   * `null` means "not yet available for this artifact type" - as of E5-S4
-   * every real artifact type has fixture data (fixtures.ts), so this is now
-   * purely defensive: surfaced by the page as a graceful section rather than
-   * a 404 if it ever happens. Checked here too, independently of the
-   * page-level check, per this story's spec.
+   * `null` means "no version has been generated into this artifact yet" -
+   * surfaced by the page as a graceful section rather than a 404. Checked
+   * here too, independently of the page-level check, per this story's spec.
    */
   version: ArtifactVersionDTO | null;
   qualityIssues: QualityIssueDTO[];
@@ -109,26 +120,75 @@ function formatItemType(itemType: string): string {
     .join(' ');
 }
 
-const REVISION_DISABLED_TITLE =
-  "Wired up once E3-S10's generation/revision routes exist - visually complete, honestly inert until then (FR-013).";
+// "Request AI revision" is now wired to the real generate contract
+// (`POST /api/projects/:projectId/artifacts/:type/generate`, `feedback`
+// present): "an AI revision of an existing approved version" per that route's
+// own doc comment. Gated the same way Approve is (`status !== 'draft'`) -
+// there is nothing to request a revision of once nothing is under review.
+const AI_REVISION_STATUS_TITLE =
+  'Request an AI revision only while a draft is under review (ERD 3.6).';
+const AI_REVISION_TITLE =
+  'Ask the model to regenerate this artifact, optionally guided by feedback (ERD 3.6).';
 
 // Manual edit is legal only while a version is `draft` (ERD 5.3) - the Edit
 // button stays visible but disabled otherwise, same convention as the
 // revision buttons above.
 const EDIT_DISABLED_TITLE = 'Editing is only available while this version is a draft (ERD 5.3).';
 
+const MANUAL_REVISION_ARCHITECTURE_TITLE =
+  'Architecture has no manual revision - it is revised only by regenerating (ERD 3.6).';
+const MANUAL_REVISION_TITLE =
+  'Create a new draft from the current approved version, with every item unchanged, to edit by hand (FR-081).';
+
+/**
+ * Merges the display-key-resolved impact rows a 409 `APPROVAL_BLOCKED`
+ * response carries (`error.details.blocking`, `ImpactRowDTO[]`) into the
+ * local item list by `itemVersionId`. This is the "the client's own gate
+ * check was stale" path this story's spec calls for: the server recomputed
+ * warnings inside the approval transaction (INV-025, one engine, evaluated
+ * fresh), and that recomputed state - not whatever this screen last
+ * rendered - is what `ApprovalDialog` must show.
+ */
+function withUpdatedImpact(items: ItemVersionDTO[], blocking: ImpactRowDTO[]): ItemVersionDTO[] {
+  const byItemVersionId = new Map(
+    blocking
+      .filter((row) => row.subjectKind === 'item_version')
+      .map((row) => [row.subjectId, row] as const),
+  );
+  return items.map((item) => {
+    const fresh = byItemVersionId.get(item.itemVersionId);
+    return fresh ? { ...item, impact: fresh } : item;
+  });
+}
+
 export function ArtifactReviewScreen({
+  projectId,
+  artifactType,
   artifactTypeName,
   version,
   qualityIssues,
 }: ArtifactReviewScreenProps) {
-  // Local-only state for this fixture-backed demo path (see fixtures.ts) -
-  // no network call happens anywhere in this component. Approve mutates
-  // `status`/`items` directly rather than refetching, which is exactly what
-  // E3-S10's routes will replace once they exist.
+  const router = useRouter();
+  // Local state, seeded from `version` on mount. The page keys this
+  // component by `version.id` (`artifacts/[type]/page.tsx`) so a genuinely
+  // new version (e.g. a fresh manual-revision draft) remounts this component
+  // with fresh initial state instead of leaving it stuck on stale props -
+  // React does not re-run `useState`'s initializer on a prop change alone.
+  // Approve/override-approve instead replace this state directly from the
+  // mutation's own response body, since they never change `version.id`.
   const [status, setStatus] = useState<ArtifactVersionStatus>(version?.status ?? 'draft');
   const [items, setItems] = useState<ItemVersionDTO[]>(version?.items ?? []);
   const [pending, setPending] = useState(false);
+  const [revisePending, setRevisePending] = useState(false);
+  // "Request AI revision" (feedback-driven `generate` call) - separate
+  // pending/expand state from Approve's `pending` and manual revise's
+  // `revisePending`, same pattern as those two staying independent of each
+  // other.
+  const [aiRevisePending, setAiRevisePending] = useState(false);
+  const [aiRevisionOpen, setAiRevisionOpen] = useState(false);
+  const [aiRevisionFeedback, setAiRevisionFeedback] = useState('');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [staleReason, setStaleReason] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [overrideNote, setOverrideNote] = useState<string | null>(null);
   // E5-S8: which item (if any) the manual-edit dialog is currently open for
@@ -151,22 +211,100 @@ export function ArtifactReviewScreen({
   );
   const flaggedItems = useMemo(() => items.filter((item) => item.impact !== null), [items]);
 
-  // Component-level defense for "not yet available" (page.tsx already checks
-  // this via fixtures.ts before rendering, but this screen doesn't trust its
-  // caller to always do that correctly).
+  /**
+   * `POST /api/projects/:projectId/artifacts/:type/generate` with no body -
+   * the first-generation path (SCRUM-86 follow-up: a brand-new project's
+   * version-less artifacts had no UI trigger anywhere). `status: 'stale'` is
+   * a recorded rejected version, so keep the current review on screen and
+   * invite a retry with the new context.
+   */
+  async function handleGenerate() {
+    if (pending) return;
+    setPending(true);
+    setErrorMessage(null);
+    setStaleReason(null);
+    try {
+      const response = await fetch(
+        `/api/projects/${projectId}/artifacts/${artifactType}/generate`,
+        {
+          method: 'POST',
+        },
+      );
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        // 409 PREREQUISITE_NOT_APPROVED's message is already a complete
+        // sentence ("Approve requirements before generating architecture.") -
+        // surfaced verbatim, same as every other mutation on this screen.
+        setErrorMessage(body?.error?.message ?? 'Something went wrong. Please try again.');
+        return;
+      }
+      if (body?.status === 'stale') {
+        setStaleReason(body.reason ?? 'base_changed');
+        return;
+      }
+      router.refresh();
+    } catch {
+      setErrorMessage('Could not reach the server. Check your connection and try again.');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  if (pending || aiRevisePending) {
+    return <GenerationSkeleton artifactTypeName={artifactTypeName} />;
+  }
+
+  // A version-less artifact still needs a first-generation action.
   if (!version) {
     return (
       <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-8 text-center">
         <p className="text-on-surface text-sm font-medium">
-          {artifactTypeName} review isn&apos;t available yet.
+          {artifactTypeName} hasn&apos;t been generated yet.
         </p>
         <p className="text-on-surface-variant mt-1 text-sm">
-          This artifact type&apos;s review screen lands in a later story - it&apos;s coming soon,
-          not broken.
+          Generate a first draft to start the review.
         </p>
+        {errorMessage && (
+          <p
+            role="alert"
+            className="bg-error-container text-on-error-container mt-4 flex items-start gap-2 rounded-lg p-3 text-left text-sm leading-relaxed"
+          >
+            <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <span>{errorMessage}</span>
+          </p>
+        )}
+        {staleReason && (
+          <p role="status" className="text-status-draft-text mt-4 text-sm">
+            {staleReason === 'dependency_superseded'
+              ? 'A prerequisite changed during generation.'
+              : 'The current draft changed during generation.'}{' '}
+            Generate again to use the latest state.
+          </p>
+        )}
+        <button
+          type="button"
+          onClick={() => void handleGenerate()}
+          disabled={pending}
+          className="bg-primary-container text-on-primary-container hover:bg-primary-container-hover focus-visible:ring-primary mt-4 inline-flex h-11 items-center gap-2 rounded-lg px-5 text-sm font-medium shadow-sm transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {pending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+          {pending ? 'Generating…' : `Generate ${artifactTypeName}`}
+        </button>
       </div>
     );
   }
+
+  // Narrowed copy of the one field the async handlers below need from
+  // `version` itself: a function declared after this point still closes over
+  // the (unnarrowed) `version` parameter as far as TypeScript's control-flow
+  // analysis is concerned, since a parameter is a mutable binding - this
+  // `const` carries the null check's result into
+  // `submitApprove`/`handleReviseManually` instead. `artifactType` itself
+  // comes from the prop, not `version.artifactType` - the page guarantees
+  // they're the same value (`loadReviewVersion` reads by `type`), and the
+  // prop is also what the `!version` branch above needs before this point is
+  // ever reached.
+  const versionId = version.id;
 
   // FR-022: an Architecture version cannot become authoritative unless
   // exactly one option is selected. `version.options` is `null` for every
@@ -179,8 +317,70 @@ export function ArtifactReviewScreen({
     isUiRequirements ? items.flatMap((item) => readKnownFields(item.payload).sourceRefs ?? []) : [],
   );
 
+  // `POST /api/artifact-versions/:versionId/approve` - shared by the plain
+  // Approve click and the override-approve dialog confirm (`note` present
+  // only for the latter). FR-084: the override doesn't bypass the gate, it
+  // satisfies it - the server acknowledges every currently-blocking item
+  // itself, inside the approval transaction; this call never does that
+  // locally.
+  async function submitApprove(note?: string) {
+    setPending(true);
+    setErrorMessage(null);
+    try {
+      const response = await fetch(`/api/artifact-versions/${versionId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(requiresOptionSelection && selectedOptionId
+            ? { selectedArchitectureOptionId: selectedOptionId }
+            : {}),
+          ...(note !== undefined ? { overrideNote: note } : {}),
+        }),
+      });
+      const body = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        // The client's own `blockingItems` check can be stale (someone else
+        // changed impact state concurrently) - a real `APPROVAL_BLOCKED`
+        // from the call itself opens the same dialog the client-side check
+        // would have, with the server's freshly-recomputed rows, rather than
+        // just showing a generic error.
+        if (body?.error?.code === 'APPROVAL_BLOCKED') {
+          const blocking: ImpactRowDTO[] = Array.isArray(body?.error?.details?.blocking)
+            ? body.error.details.blocking
+            : [];
+          setItems((current) => withUpdatedImpact(current, blocking));
+          setDialogOpen(true);
+          return;
+        }
+        // Close the override dialog on any other failure too - it's a fixed
+        // overlay, so leaving it open would hide the error banner below
+        // behind it.
+        setDialogOpen(false);
+        setErrorMessage(body?.error?.message ?? 'Something went wrong. Please try again.');
+        return;
+      }
+
+      const updated: ArtifactVersionDTO = body.version;
+      setStatus(updated.status);
+      setItems(updated.items);
+      setSelectedArchitectureOptionId(updated.selectedArchitectureOptionId);
+      if (note !== undefined) setOverrideNote(note);
+      setDialogOpen(false);
+      // Same version id, so no remount happens on its own (see the `key`
+      // comment above) - refresh anyway so the Server Component parent's own
+      // read is fresh too (e.g. a subsequent full navigation, or a sibling
+      // page reading the same project).
+      router.refresh();
+    } catch {
+      setErrorMessage('Could not reach the server. Check your connection and try again.');
+    } finally {
+      setPending(false);
+    }
+  }
+
   function handleApproveClick() {
-    if (status !== 'draft' || pending) return;
+    if (status !== 'draft' || pending || revisePending || aiRevisePending) return;
     // Same gate as the disabled Approve button below, defended here too -
     // this component doesn't trust its own button state, same as the
     // `!version` check above doesn't trust the caller.
@@ -194,35 +394,98 @@ export function ArtifactReviewScreen({
       return;
     }
 
-    // No network call to await in this fixture-backed path - the delay
-    // below exists purely to demonstrate the loading affordance a real
-    // `POST .../approve` round trip would have.
-    setPending(true);
-    window.setTimeout(() => {
-      setStatus('approved');
-      if (requiresOptionSelection && selectedOptionId) {
-        setSelectedArchitectureOptionId(selectedOptionId);
-      }
-      setPending(false);
-    }, 500);
+    void submitApprove();
   }
 
   function handleDialogConfirm(note: string) {
-    // FR-084: the override doesn't bypass the gate, it satisfies it - every
-    // currently-blocking item gets acknowledged, then approval proceeds.
-    setItems((current) =>
-      current.map((item) =>
-        item.impact && !item.impact.acknowledged
-          ? { ...item, impact: { ...item.impact, acknowledged: true } }
-          : item,
-      ),
-    );
-    setStatus('approved');
-    setOverrideNote(note);
-    if (requiresOptionSelection && selectedOptionId) {
-      setSelectedArchitectureOptionId(selectedOptionId);
+    void submitApprove(note);
+  }
+
+  /**
+   * `POST /api/projects/:projectId/artifacts/:type/revise` (TR FR-081): a new
+   * draft with every item unchanged and zero model calls, from the current
+   * approved version. Unlike Approve, this mints a brand-new
+   * `artifact_version` (a new id) - `router.refresh()` on success lets the
+   * page re-read the newest version and remount this component with it (see
+   * the `key` comment above), rather than trying to patch local state onto a
+   * version this instance was never initialized from.
+   */
+  async function handleReviseManually() {
+    if (pending || revisePending || aiRevisePending || artifactType === 'architecture') return;
+    setRevisePending(true);
+    setErrorMessage(null);
+    try {
+      const response = await fetch(`/api/projects/${projectId}/artifacts/${artifactType}/revise`, {
+        method: 'POST',
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        setErrorMessage(body?.error?.message ?? 'Something went wrong. Please try again.');
+        return;
+      }
+      router.refresh();
+    } catch {
+      setErrorMessage('Could not reach the server. Check your connection and try again.');
+    } finally {
+      setRevisePending(false);
     }
-    setDialogOpen(false);
+  }
+
+  // "Request AI revision" click opens the inline feedback prompt (same
+  // interaction shape as `WarningRow`'s inline acknowledge-note textarea in
+  // `warning-panel.tsx`) rather than submitting immediately - feedback is
+  // optional-but-encouraged, so the reviewer always gets a chance to add it
+  // before the call fires.
+  function handleRequestAiRevisionClick() {
+    if (status !== 'draft' || pending || revisePending || aiRevisePending) return;
+    setAiRevisionOpen(true);
+  }
+
+  function handleCancelAiRevision() {
+    setAiRevisionOpen(false);
+    setAiRevisionFeedback('');
+  }
+
+  /**
+   * Same endpoint as `handleGenerate` above, this time with `feedback` -
+   * exactly "an AI revision of an existing approved version" per the
+   * `generate` route's own doc comment. An empty/whitespace-only feedback
+   * omits the key entirely rather than sending `feedback: ''`, since a blank
+   * textarea means "no feedback," not "empty feedback."
+   */
+  async function handleConfirmAiRevision() {
+    if (aiRevisePending) return;
+    setAiRevisePending(true);
+    setErrorMessage(null);
+    setStaleReason(null);
+    try {
+      const trimmedFeedback = aiRevisionFeedback.trim();
+      const response = await fetch(
+        `/api/projects/${projectId}/artifacts/${artifactType}/generate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(trimmedFeedback ? { feedback: trimmedFeedback } : {}),
+        },
+      );
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        setErrorMessage(body?.error?.message ?? 'Something went wrong. Please try again.');
+        return;
+      }
+      if (body?.status === 'stale') {
+        setStaleReason(body.reason ?? 'base_changed');
+        setAiRevisionOpen(false);
+        return;
+      }
+      setAiRevisionOpen(false);
+      setAiRevisionFeedback('');
+      router.refresh();
+    } catch {
+      setErrorMessage('Could not reach the server. Check your connection and try again.');
+    } finally {
+      setAiRevisePending(false);
+    }
   }
 
   return (
@@ -232,6 +495,14 @@ export function ArtifactReviewScreen({
         isRequirements && 'lg:grid lg:grid-cols-[minmax(0,2fr)_minmax(17rem,1fr)] lg:items-start',
       )}
     >
+      {staleReason && (
+        <p role="status" className="text-status-draft-text text-sm lg:col-span-2">
+          {staleReason === 'dependency_superseded'
+            ? 'A prerequisite changed during generation.'
+            : 'The current draft changed during generation.'}{' '}
+          Generate again to use the latest state.
+        </p>
+      )}
       <header
         className={cn(
           'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
@@ -522,7 +793,7 @@ export function ArtifactReviewScreen({
                       <li
                         key={item.itemVersionId}
                         className={cn(
-                          'border-surface-dim rounded-lg border p-4',
+                          'border-surface-dim hover:border-outline-variant rounded-lg border p-4 transition-colors',
                           isRequirements && 'bg-surface-container-lowest p-5',
                           isRequirements &&
                             itemQualityIssues.length > 0 &&
@@ -656,7 +927,7 @@ export function ArtifactReviewScreen({
 
       <div
         className={cn(
-          'border-surface-dim bg-surface-container-lowest flex flex-wrap items-center gap-3 rounded-xl border p-6',
+          'border-surface-dim bg-surface-container-lowest sticky bottom-4 z-30 flex flex-wrap items-center gap-3 rounded-xl border p-6',
           isRequirements && 'order-4 lg:order-none lg:col-span-2 lg:row-start-4 lg:justify-between',
         )}
       >
@@ -679,8 +950,8 @@ export function ArtifactReviewScreen({
                   : 'Review closed'}
             </p>
             <p className="text-on-surface-variant mt-1 text-xs leading-relaxed">
-              In the full approval flow, only the selected option’s candidate decisions become
-              canonical. This fixture preview keeps approval in this page only.
+              Only the selected option’s candidate decisions become canonical Architecture
+              Decisions, materialized when you approve (FR-022).
             </p>
           </div>
         )}
@@ -692,10 +963,25 @@ export function ArtifactReviewScreen({
               : 'No source references recorded in these item payloads.'}
           </p>
         )}
+        {errorMessage && (
+          <p
+            role="alert"
+            className="bg-error-container text-on-error-container flex w-full items-start gap-2 rounded-lg p-3 text-sm leading-relaxed"
+          >
+            <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <span>{errorMessage}</span>
+          </p>
+        )}
         <button
           type="button"
           onClick={handleApproveClick}
-          disabled={status !== 'draft' || pending || (requiresOptionSelection && !selectedOptionId)}
+          disabled={
+            status !== 'draft' ||
+            pending ||
+            revisePending ||
+            aiRevisePending ||
+            (requiresOptionSelection && !selectedOptionId)
+          }
           title={
             requiresOptionSelection && !selectedOptionId && status === 'draft'
               ? 'Select an architecture option above before approving (FR-022).'
@@ -712,22 +998,80 @@ export function ArtifactReviewScreen({
                 ? 'Approve selected option'
                 : 'Approve'}
         </button>
+        {!aiRevisionOpen && (
+          <button
+            type="button"
+            onClick={handleRequestAiRevisionClick}
+            disabled={status !== 'draft' || pending || revisePending || aiRevisePending}
+            title={status !== 'draft' ? AI_REVISION_STATUS_TITLE : AI_REVISION_TITLE}
+            className="border-surface-dim text-on-surface hover:bg-surface-container-low focus-visible:ring-primary disabled:text-outline flex h-11 items-center gap-2 rounded-lg border px-5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed"
+          >
+            {aiRevisePending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+            {aiRevisePending ? 'Requesting…' : 'Request AI revision'}
+          </button>
+        )}
         <button
           type="button"
-          disabled
-          title={REVISION_DISABLED_TITLE}
-          className="border-surface-dim text-outline focus-visible:ring-primary flex h-11 items-center rounded-lg border px-5 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed"
+          onClick={() => void handleReviseManually()}
+          disabled={
+            pending || revisePending || aiRevisePending || version.artifactType === 'architecture'
+          }
+          title={
+            version.artifactType === 'architecture'
+              ? MANUAL_REVISION_ARCHITECTURE_TITLE
+              : MANUAL_REVISION_TITLE
+          }
+          className="border-surface-dim text-on-surface hover:bg-surface-container-low focus-visible:ring-primary disabled:text-outline flex h-11 items-center gap-2 rounded-lg border px-5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed"
         >
-          Request AI revision
+          {revisePending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+          {revisePending ? 'Revising…' : 'Revise manually'}
         </button>
-        <button
-          type="button"
-          disabled
-          title={REVISION_DISABLED_TITLE}
-          className="border-surface-dim text-outline focus-visible:ring-primary flex h-11 items-center rounded-lg border px-5 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed"
-        >
-          Revise manually
-        </button>
+        {aiRevisionOpen && (
+          <div className="border-surface-dim bg-surface-container-low w-full basis-full rounded-lg border p-3">
+            <label
+              htmlFor="ai-revision-feedback"
+              className="font-mono-code text-on-surface-variant text-[10px] font-medium tracking-wide uppercase"
+            >
+              Feedback for the AI revision (optional)
+            </label>
+            <textarea
+              autoFocus
+              id="ai-revision-feedback"
+              value={aiRevisionFeedback}
+              onChange={(event) => setAiRevisionFeedback(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  handleCancelAiRevision();
+                }
+              }}
+              rows={2}
+              placeholder="What should the AI change or focus on? (leave blank to just regenerate)"
+              className="border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus-visible:ring-primary mt-2 w-full resize-y rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+            />
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleConfirmAiRevision()}
+                disabled={aiRevisePending}
+                className="bg-primary-container text-on-primary-container hover:bg-primary-container-hover focus-visible:ring-primary flex h-9 items-center gap-2 rounded-md px-3.5 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {aiRevisePending && (
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                )}
+                {aiRevisePending ? 'Requesting…' : 'Confirm revision'}
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelAiRevision}
+                disabled={aiRevisePending}
+                className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary rounded-md px-3 py-1.5 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {dialogOpen && (
@@ -743,11 +1087,15 @@ export function ArtifactReviewScreen({
           item={editingItem}
           onCancel={() => setEditingItem(null)}
           onSave={(updatedItem) => {
-            // Replace by `itemVersionId`, per this story's spec - no network
-            // call, no new id minted here (a real rebind mints a new
-            // ItemVersion server-side; this fixture-backed path stays a
-            // local, same-id update, same simplification the Approve flow
-            // above already makes).
+            // TODO(SCRUM-86 follow-up): still local-state-only, no network
+            // call, no new id minted here. Wiring this to
+            // `PUT /api/artifact-versions/:versionId/items/:logicalItemId`
+            // properly needs its two-step preview/confirm rebind flow
+            // (`ItemEditError` CONFIRMATION_REQUIRED - a real rebind mints a
+            // new ItemVersion server-side) - a larger, separate piece of
+            // work, deliberately out of scope here. Replaces by
+            // `itemVersionId`, same simplification the Approve flow used to
+            // make before this story wired it to the real API.
             setItems((current) =>
               current.map((existing) =>
                 existing.itemVersionId === updatedItem.itemVersionId ? updatedItem : existing,

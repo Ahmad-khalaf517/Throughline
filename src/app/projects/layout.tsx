@@ -1,12 +1,18 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { getVerifiedUser } from '@/auth';
+import { getAppUserById, getVerifiedUser } from '@/auth';
 import { ProjectSidebar } from '@/components/projects/project-sidebar';
+import { UserMenu } from '@/components/projects/user-menu';
 import { signOutAction } from '../actions';
 
 export default async function ProjectsLayout({ children }: LayoutProps<'/projects'>) {
   const user = await getVerifiedUser();
   if (!user) redirect('/sign-in');
+
+  // getVerifiedUser's displayName reflects Supabase Auth's user_metadata
+  // (set at sign-up only), not the app_user row - re-read the persisted row,
+  // same as session/bootstrap/route.ts, since that's what stays current.
+  const appUser = await getAppUserById(user.id);
 
   return (
     <div className="bg-surface text-on-surface min-h-screen">
@@ -19,17 +25,11 @@ export default async function ProjectsLayout({ children }: LayoutProps<'/project
             THROUGHLINE
           </Link>
           <div className="flex items-center gap-4">
-            <span className="text-on-surface-variant hidden max-w-48 truncate text-xs sm:block">
-              {user.email}
-            </span>
-            <form action={signOutAction}>
-              <button
-                type="submit"
-                className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary rounded-md px-2 py-1 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none"
-              >
-                Sign out
-              </button>
-            </form>
+            <UserMenu
+              displayName={appUser?.displayName ?? null}
+              email={user.email}
+              signOutAction={signOutAction}
+            />
           </div>
         </div>
       </header>

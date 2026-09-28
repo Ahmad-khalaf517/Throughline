@@ -111,6 +111,12 @@ body {
     sans-serif;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
 /*
  * Marketing display scale. The Stitch type scale (headline-xl tops out at
  * 28px/600) is tuned for dense app chrome, not a hero. These extend it with

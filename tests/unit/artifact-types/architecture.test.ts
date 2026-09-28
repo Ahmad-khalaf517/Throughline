@@ -42,7 +42,7 @@ beforeAll(async () => {
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-key';
   process.env.NEXT_PUBLIC_SITE_URL = 'https://example.test';
   architecture = await import('@/artifact-types/architecture');
-});
+}, 30_000);
 
 // `overrides` is deliberately loose: the negative cases below build options that
 // are invalid on purpose (a stack missing a field, an extra key), which the

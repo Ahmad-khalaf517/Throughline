@@ -249,6 +249,12 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
                     )}
                   </div>
                 </div>
+                <Link
+                  href={`/projects/${projectId}/warnings`}
+                  className="bg-primary-container text-on-primary-container hover:bg-primary-container-hover focus-visible:ring-primary mt-4 flex h-10 w-full items-center justify-center rounded-lg text-sm font-medium shadow-sm transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+                >
+                  View impact blast radius
+                </Link>
               </div>
             ) : (
               <p className="text-status-approved-text bg-status-approved-bg mt-4 rounded-md px-3 py-3 text-sm">
