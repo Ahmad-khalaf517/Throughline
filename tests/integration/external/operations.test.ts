@@ -387,6 +387,75 @@ describe('runOperation', () => {
     if (result.status === 'completed') expect(result.ref.externalKey).toBe('THR-2');
   });
 
+  it('reconcile() throwing DefinitiveProviderError finalizes the row as failed with that message', async () => {
+    const { projectId, versionId } = await setupProject('ui_requirements');
+    const operationKey = `stitch:generate:${versionId}`;
+    const requestHash = 'hash-recon-definitive';
+    await fx.createExternalOperation(sql, {
+      projectId,
+      provider: 'stitch',
+      operationKey,
+      requestHash,
+      status: 'reconciliation_required',
+      sourceArtifactVersionId: versionId,
+    });
+
+    const send = vi.fn();
+    const reconcile = vi.fn(async () => {
+      throw new DefinitiveProviderError('rejected_on_reconcile');
+    });
+    const result = await runOperation({
+      projectId,
+      provider: 'stitch',
+      operationType: 'generate_ui',
+      operationKey,
+      requestHash,
+      targetDescriptor: {},
+      sourceArtifactVersionId: versionId,
+      send,
+      reconcile,
+    });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(result).toEqual({ status: 'failed', errorMessage: 'rejected_on_reconcile' });
+    const row = await operationRow(operationKey);
+    expect(row?.status).toBe('failed');
+    expect(row?.error_message).toBe('rejected_on_reconcile');
+  });
+
+  it('reconcile() throwing a plain Error propagates and leaves the row reconciliation_required', async () => {
+    const { projectId, versionId } = await setupProject('ui_requirements');
+    const operationKey = `stitch:generate:${versionId}`;
+    const requestHash = 'hash-recon-plain-error';
+    await fx.createExternalOperation(sql, {
+      projectId,
+      provider: 'stitch',
+      operationKey,
+      requestHash,
+      status: 'reconciliation_required',
+      sourceArtifactVersionId: versionId,
+    });
+
+    const reconcile = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    await expect(
+      runOperation({
+        projectId,
+        provider: 'stitch',
+        operationType: 'generate_ui',
+        operationKey,
+        requestHash,
+        targetDescriptor: {},
+        sourceArtifactVersionId: versionId,
+        send: vi.fn(),
+        reconcile,
+      }),
+    ).rejects.toThrow('boom');
+
+    expect((await operationRow(operationKey))?.status).toBe('reconciliation_required');
+  });
+
   it('a failed row is retried: status flips to pending and send() is called again (ERD 7.2 step 3.b)', async () => {
     const { projectId, versionId } = await setupProject('ui_requirements');
     const operationKey = `stitch:generate:${versionId}`;

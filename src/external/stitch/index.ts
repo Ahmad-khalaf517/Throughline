@@ -25,21 +25,23 @@
 // rule), never through `lineage/identity` directly - see that file's own
 // `getUiRequirementsForPrompt` header comment for why.
 //
-// No verified real Stitch REST API shape exists anywhere in this codebase -
-// no spike has run yet (E4-S5/Spike B is the NEXT story, and depends on this
-// one). The raw-fetch client below (`requireStitchConfig`/`stitchFetch`/
-// `requestGeneration`) is therefore this story's own explicit, disclosed
-// judgment call, same convention `jira`'s `sendCreateIssue`/`adfDoc` comments
-// already use for their own undecided details (issue-type naming, marker
-// mechanism): POST `${STITCH_BASE_URL}/v1/generate` with `{ prompt }`,
-// expecting back `{ id, htmlUrl, screenshotUrl }` - a generation id plus two
-// short-lived remote URLs this module immediately downloads and re-uploads to
-// Supabase Storage (FR-052: "shall persist the useful Stitch result rather
-// than depend permanently on remote output URLs" - the remote URLs are used
-// exactly once, to fetch bytes, never stored or read again). E4-S5 replaces
-// this shape once a real spike confirms the actual Stitch API.
+// Talks to Stitch through Google's official `@google/stitch-sdk` (ESM-only;
+// this module hands it only the `apiKey` - the base URL is left to the SDK
+// default, https://stitch.googleapis.com/mcp). One Stitch project is created per
+// generation, titled with a deterministic marker containing the operation key
+// (`throughline:stitch:generate:<uiRequirementsVersionId>`), then
+// `project.generate(prompt, 'DESKTOP')` produces the screen. `getHtml()`/
+// `getImage()` return short-lived DOWNLOAD URLs this module immediately fetches
+// and re-uploads to Supabase Storage (FR-052: "shall persist the useful Stitch
+// result rather than depend permanently on remote output URLs" - the remote
+// URLs are used exactly once, to fetch bytes, never stored or read again).
+// The project-title marker is also what `reconcileGenerate` searches by (a slow
+// generation can time out client-side after the screen really was created -
+// Spike B, TR 42). Stitch cannot enumerate screens (verified live 2026-09-28),
+// so reconcile falls back to regenerating once - see its own doc comment.
 import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
+import { Stitch, StitchError, StitchToolClient, type Screen } from '@google/stitch-sdk';
 import { env } from '@/lib/env';
 import { db, schema } from '@/db';
 import { getStorageServiceClient } from '@/auth';
@@ -197,24 +199,49 @@ export async function previewPrompt(
 }
 
 // ---------------------------------------------------------------------------
-// Stitch HTTP client - raw fetch, judgment-call shape (see header comment).
+// Stitch SDK client (official `@google/stitch-sdk`).
 // ---------------------------------------------------------------------------
 
-interface StitchConfig {
-  baseUrl: string;
-  apiKey: string;
+/** Deterministic project title - the marker `reconcileGenerate` finds the project by. */
+function projectTitle(uiRequirementsVersionId: string): string {
+  return `throughline:stitch:generate:${uiRequirementsVersionId}`;
 }
 
-function requireStitchConfig(): StitchConfig {
-  if (!env.STITCH_BASE_URL || !env.STITCH_API_KEY) {
-    const missing: string[] = [];
-    if (!env.STITCH_BASE_URL) missing.push('STITCH_BASE_URL');
-    if (!env.STITCH_API_KEY) missing.push('STITCH_API_KEY');
-    throw new Error(
-      `Stitch is not configured - missing ${missing.join(', ')} (ERD 7.5, real mode).`,
-    );
+function requireStitchApiKey(): string {
+  if (!env.STITCH_API_KEY) {
+    throw new Error('Stitch is not configured - missing STITCH_API_KEY (ERD 7.5, real mode).');
   }
-  return { baseUrl: env.STITCH_BASE_URL, apiKey: env.STITCH_API_KEY };
+  return env.STITCH_API_KEY;
+}
+
+/**
+ * Runs `fn` against a fresh SDK client and always closes it. `baseUrl` is
+ * deliberately left to the SDK default.
+ */
+async function withStitch<T>(apiKey: string, fn: (client: Stitch) => Promise<T>): Promise<T> {
+  const toolClient = new StitchToolClient({ apiKey });
+  try {
+    return await fn(new Stitch(toolClient));
+  } finally {
+    await toolClient.close().catch(() => undefined);
+  }
+}
+
+// ERD 7.2: `failed` is reserved for DEFINITIVE provider rejections. These SDK
+// codes are the 4xx-equivalents; RATE_LIMITED/NETWORK_ERROR/UNKNOWN_ERROR
+// (which is also what the SDK wraps timeouts and 5xx into) stay ambiguous.
+const DEFINITIVE_STITCH_CODES: ReadonlySet<string> = new Set([
+  'VALIDATION_ERROR',
+  'AUTH_FAILED',
+  'PERMISSION_DENIED',
+  'NOT_FOUND',
+]);
+
+function classifyStitchError(error: unknown): unknown {
+  if (error instanceof StitchError && DEFINITIVE_STITCH_CODES.has(error.code)) {
+    return new DefinitiveProviderError(`stitch_generate_rejected:${error.code}`);
+  }
+  return error; // ambiguous - propagates unchanged (ERD 7.2 R6/R9)
 }
 
 function requireStorageBucket(): string {
@@ -225,54 +252,6 @@ function requireStorageBucket(): string {
     );
   }
   return env.SUPABASE_STORAGE_BUCKET;
-}
-
-/** Thrown for any non-2xx Stitch response - `sendGenerate` classifies 4xx as definitive, everything else as ambiguous (ERD 7.2). */
-class StitchHttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'StitchHttpError';
-  }
-}
-
-async function stitchFetch<T>(config: StitchConfig, path: string, init: RequestInit): Promise<T> {
-  const url = `${config.baseUrl.replace(/\/$/, '')}${path}`;
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      ...init.headers,
-    },
-  });
-  const bodyText = await res.text();
-  if (!res.ok) {
-    throw new StitchHttpError(
-      res.status,
-      `Stitch API ${init.method ?? 'GET'} ${path} -> ${res.status}: ${bodyText}`,
-    );
-  }
-  return bodyText ? (JSON.parse(bodyText) as T) : ({} as T);
-}
-
-interface StitchGenerateResponse {
-  id: string;
-  htmlUrl: string;
-  screenshotUrl: string;
-}
-
-async function requestGeneration(
-  config: StitchConfig,
-  prompt: string,
-): Promise<StitchGenerateResponse> {
-  return stitchFetch<StitchGenerateResponse>(config, '/v1/generate', {
-    method: 'POST',
-    body: JSON.stringify({ prompt }),
-  });
 }
 
 async function fetchBytes(url: string): Promise<Buffer> {
@@ -316,36 +295,22 @@ interface AssetMetadata {
 }
 
 /**
- * `runOperation`'s `send()` closure. Uploads both assets to Supabase Storage
- * INSIDE `send()` itself (same discipline `github`'s own `sendCreateRepo` uses
- * for `writeProvenanceFiles` - a failure here is ALSO ambiguous/retryable via
- * the same path as a lost create response, not a separate failure mode), then
- * returns the storage keys/checksums via `SendResult.metadata` (the same slot
- * `jira`'s `jiraProjectKey` and `github`'s `mode` already use) so `generate`
- * can read them back off the finalized `external_ref` without a second
- * round-trip.
+ * Downloads a generated screen's HTML + screenshot and uploads both to
+ * Supabase Storage. Shared by `send` and `reconcile` (which must return the
+ * same shape). Runs INSIDE those closures (same discipline `github`'s own
+ * `sendCreateRepo` uses for `writeProvenanceFiles` - a failure here is ALSO
+ * ambiguous/retryable via the same path as a lost create response).
  */
-async function sendGenerate(args: {
-  config: StitchConfig;
+async function persistScreen(args: {
+  screen: Screen;
   storage: StorageServiceClient;
   bucket: string;
-  prompt: string;
   uiRequirementsVersionId: string;
 }): Promise<{ externalId: string; externalUrl: string; metadata: AssetMetadata }> {
-  let response: StitchGenerateResponse;
-  try {
-    response = await requestGeneration(args.config, args.prompt);
-  } catch (error) {
-    if (error instanceof StitchHttpError && error.status >= 400 && error.status < 500) {
-      // ERD 7.2: "`failed` is reserved for DEFINITIVE provider rejections
-      // (validation/4xx)."
-      throw new DefinitiveProviderError(`stitch_generate_rejected:${error.status}`);
-    }
-    throw error; // ambiguous - propagates unchanged (ERD 7.2 R6/R9)
-  }
-
-  const html = await fetchBytes(response.htmlUrl);
-  const screenshot = await fetchBytes(response.screenshotUrl);
+  const htmlUrl = await args.screen.getHtml();
+  const screenshotUrl = await args.screen.getImage();
+  const html = await fetchBytes(htmlUrl);
+  const screenshot = await fetchBytes(screenshotUrl);
 
   const htmlStorageKey = `stitch/${args.uiRequirementsVersionId}/index.html`;
   const screenshotStorageKey = `stitch/${args.uiRequirementsVersionId}/screenshot.png`;
@@ -356,29 +321,113 @@ async function sendGenerate(args: {
   await uploadAsset(args.storage, args.bucket, screenshotStorageKey, screenshot, 'image/png');
 
   return {
-    externalId: response.id,
+    externalId: `${args.screen.projectId}/${args.screen.id}`,
     // Informational only (audit trail of where the bytes originally came
     // from) - FR-052's "never depend permanently on remote output URLs" means
     // this module never reads it back; `getSignedAssetUrls` below is the only
     // read path a future UI ever uses.
-    externalUrl: response.htmlUrl,
+    externalUrl: htmlUrl,
     metadata: { htmlStorageKey, htmlChecksum, screenshotStorageKey, screenshotChecksum },
   };
 }
 
 /**
- * `runOperation`'s `reconcile()` closure. ERD 7.5 describes no reconciliation
- * mechanism for Stitch, and ERD 4.14 itself notes "Stitch has no chosen
- * target" (operation_key has no separate resource name to search an object
- * by, unlike GitHub's repo name or Jira's label) - there is nothing to look
- * up here. An honest stub: always reports not-found. This leaves a genuinely
- * ambiguous `send()` outcome (a lost response, a 5xx) stuck in
- * `reconciliation_required` until a future story defines a real strategy
- * (E4-S5, the next one in this pipeline) - disclosed, not papered over with
- * an invented mechanism.
+ * `runOperation`'s `send()` closure: create the marker-titled project, generate
+ * one DESKTOP screen, persist its assets. Definitive SDK rejections become
+ * `DefinitiveProviderError` (FR-054 manual_fallback); everything else -
+ * including the SDK's timeout - propagates ambiguous and is never re-sent
+ * (reconcile finds the screen instead).
  */
-async function reconcileGenerate(): Promise<{ found: false }> {
-  return { found: false };
+async function sendGenerate(args: {
+  apiKey: string;
+  storage: StorageServiceClient;
+  bucket: string;
+  prompt: string;
+  uiRequirementsVersionId: string;
+}): Promise<{ externalId: string; externalUrl: string; metadata: AssetMetadata }> {
+  return withStitch(args.apiKey, async (client) => {
+    let screen: Screen;
+    try {
+      const project = await client.createProject(projectTitle(args.uiRequirementsVersionId));
+      screen = await project.generate(args.prompt, 'DESKTOP');
+    } catch (error) {
+      throw classifyStitchError(error);
+    }
+    return persistScreen({
+      screen,
+      storage: args.storage,
+      bucket: args.bucket,
+      uiRequirementsVersionId: args.uiRequirementsVersionId,
+    });
+  });
+}
+
+/**
+ * `runOperation`'s `reconcile()` closure (ERD 7.3, Spike B / TR 42): Stitch's
+ * generation is slow and can time out client-side after the screen was in fact
+ * created. Stitch CANNOT enumerate screens (verified live 2026-09-28:
+ * `project.screens()` / list_screens returns empty even for a project with a
+ * generated screen, and the project record carries no screen list), so a lost
+ * screen can never be recovered by lookup. `runOperation` never resends and
+ * treats `found: false` as a dead end (reconciliation_required forever), so this
+ * closure does:
+ *   1. the cheap lookup - find the marker-titled project via `stitch.projects()`
+ *      and, if `screens()` ever returns one, persist it (harmless if the API
+ *      later starts listing screens); no second generate.
+ *   2. otherwise REGENERATE: reuse the marker project if one exists (else
+ *      create it), call `project.generate` exactly once, persist, and return
+ *      `found: true` with the same shape `send` returns.
+ * Only reached via a user-initiated retry (`runOperation` never auto-reconciles),
+ * so it is bounded: at most one generate per call. Error mapping is identical to
+ * `send`: definitive => `DefinitiveProviderError` (manual_fallback); an ambiguous
+ * regenerate error returns `found: false` (reconciliation_required, retryable;
+ * `generate()` surfaces StitchReconciliationRequiredError). Disclosed tradeoff: a
+ * still-running server-side generation from the lost attempt may produce a
+ * duplicate orphan screen/project on Stitch's side - harmless to Throughline.
+ */
+async function reconcileGenerate(args: {
+  apiKey: string;
+  storage: StorageServiceClient;
+  bucket: string;
+  prompt: string;
+  uiRequirementsVersionId: string;
+}): Promise<
+  | { found: true; externalId: string; externalUrl: string; metadata: AssetMetadata }
+  | { found: false }
+> {
+  const title = projectTitle(args.uiRequirementsVersionId);
+  return withStitch(args.apiKey, async (client) => {
+    const persist = (screen: Screen) =>
+      persistScreen({
+        screen,
+        storage: args.storage,
+        bucket: args.bucket,
+        uiRequirementsVersionId: args.uiRequirementsVersionId,
+      });
+
+    const projects = (await client.projects()).filter(
+      (project) => (project.data as { title?: string } | undefined)?.title === title,
+    );
+    for (const project of projects) {
+      const [screen] = await project.screens();
+      if (screen) {
+        return { found: true as const, ...(await persist(screen)) };
+      }
+    }
+
+    let screen: Screen;
+    try {
+      const project = projects[0] ?? (await client.createProject(title));
+      screen = await project.generate(args.prompt, 'DESKTOP');
+    } catch (error) {
+      const classified = classifyStitchError(error);
+      if (classified instanceof DefinitiveProviderError) throw classified;
+      // Ambiguous: the regenerate itself is inconclusive, so report
+      // "not found" -> reconciliation_required (retryable, 409 at the route).
+      return { found: false as const };
+    }
+    return { found: true as const, ...(await persist(screen)) };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +534,7 @@ export async function generate(uiRequirementsVersionId: string): Promise<StitchO
     throw new AlreadyGeneratedError(uiRequirementsVersionId);
   }
 
-  const config = requireStitchConfig();
+  const apiKey = requireStitchApiKey();
   const bucket = requireStorageBucket();
   const storage = getStorageServiceClient();
 
@@ -502,8 +551,9 @@ export async function generate(uiRequirementsVersionId: string): Promise<StitchO
     requestHash,
     targetDescriptor: { uiRequirementsVersionId },
     sourceArtifactVersionId: uiRequirementsVersionId,
-    send: () => sendGenerate({ config, storage, bucket, prompt, uiRequirementsVersionId }),
-    reconcile: () => reconcileGenerate(),
+    send: () => sendGenerate({ apiKey, storage, bucket, prompt, uiRequirementsVersionId }),
+    reconcile: () =>
+      reconcileGenerate({ apiKey, storage, bucket, prompt, uiRequirementsVersionId }),
   });
 
   switch (result.status) {

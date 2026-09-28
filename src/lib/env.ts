@@ -49,13 +49,10 @@ const envSchema = z.object({
 
   // --- module 16: stitch --- (wired, E4-S4/SCRUM-53)
   // All optional, same reasoning as GitHub/Jira above - stitch/index.ts's own
-  // requireStitchConfig()/requireStorageBucket() throw a clear error at call
-  // time (previewPrompt/generate) instead of blocking boot. STITCH_BASE_URL
-  // has no verified real Stitch REST API shape behind it yet (no spike has
-  // run - E4-S5/Spike B is next); same z.string().url() shape as
-  // JIRA_BASE_URL regardless.
+  // requireStitchApiKey()/requireStorageBucket() throw a clear error at call
+  // time (previewPrompt/generate) instead of blocking boot. Stitch is reached
+  // through the official @google/stitch-sdk, which owns its own base URL.
   STITCH_API_KEY: z.string().min(1).optional(),
-  STITCH_BASE_URL: z.string().url().optional(),
   SUPABASE_STORAGE_BUCKET: z.string().min(1).optional(),
 });
 
