@@ -25,7 +25,7 @@ export default async function ProjectLayout({
 
   return (
     <div>
-      <div className="border-surface-dim bg-surface-container-lowest border-b">
+      <div className="border-surface-dim bg-surface-container-lowest sticky top-10 z-30 border-b">
         <div className="mx-auto max-w-6xl px-4 pt-6 sm:px-6">
           <Link
             href="/projects"
