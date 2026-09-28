@@ -1,7 +1,7 @@
 # Throughline - ERD / Data Model
 
-**Document version:** 1.9 - **FROZEN for implementation** (see section 14 for what may still change)
-**Status:** Derived from Throughline BRD v2.2 and Technical Requirements & Lineage Invariants v1.4, after twelve review rounds (round 12: section 7.4's Jira marker mechanism, previously "validate in Spike C", is now confirmed final by Spike C - label `tl-<item_version_id>` plus description-footer backup, both requiring a complete-marker-string match, validated live against project SCRUM issue SCRUM-75 and `scripts/spike-jira-reconciliation.ts` - reopened per TR 30.2's own "must be validated during the spike" and this document's own line ~1035 ("Spike C... can change only the content of the marker, not any table"); no table changed; round 11: auth email templates switched to the `token_hash` link pattern - no schema change, a real production PKCE/cross-browser gap found while building forgot-password; round 10: pinned `SET search_path = public` on all 7 Appendix A.2/6.3 functions; all 16 tables, every trigger and `impact()` are applied and verified against the live Supabase project, Project Setup section 13). Parent of Modules -> Project Setup -> API Contracts -> Jira Plan -> Implementation.
+**Document version:** 1.10 - **FROZEN for implementation** (see section 14 for what may still change)
+**Status:** Derived from Throughline BRD v2.2 and Technical Requirements & Lineage Invariants v1.4, after thirteen review rounds (round 13: whole-project deletion - the original decision that "project deletion is out of scope" is reopened at the project owner's request (section 4.2, Appendix B round 13); a new `delete_project()` function (migration `0008`, Appendix A.4) is the one sanctioned way to remove a project and all its rows, `forbid_mutation` and `membership_draft_only` now let a DELETE through only while it runs, every FK stays `ON DELETE RESTRICT`, T44 added, no table or column changed; round 12: section 7.4's Jira marker mechanism, previously "validate in Spike C", is now confirmed final by Spike C - label `tl-<item_version_id>` plus description-footer backup, both requiring a complete-marker-string match, validated live against project SCRUM issue SCRUM-75 and `scripts/spike-jira-reconciliation.ts` - reopened per TR 30.2's own "must be validated during the spike" and this document's own line ~1035 ("Spike C... can change only the content of the marker, not any table"); no table changed; round 11: auth email templates switched to the `token_hash` link pattern - no schema change, a real production PKCE/cross-browser gap found while building forgot-password; round 10: pinned `SET search_path = public` on all 7 Appendix A.2/6.3 functions; all 16 tables, every trigger and `impact()` are applied and verified against the live Supabase project, Project Setup section 13). Parent of Modules -> Project Setup -> API Contracts -> Jira Plan -> Implementation.
 **Target engine:** PostgreSQL 15+ (`NULLS NOT DISTINCT` needs 15). **Verified:** the complete Appendix A DDL, all triggers, `impact()` and the Supabase hardening apply cleanly and pass the behaviour suite (Appendix C) on **PostgreSQL 15 and 17** (the versions Supabase runs), as a non-superuser table owner with Supabase's roles and default grants reproduced.
 **Platform:** Supabase Auth + Supabase Postgres (sections 2 and 4.1). **ORM:** Drizzle ORM + drizzle-kit (section 2.1).
 **Primary audience:** Developer, technical reviewers, and AI coding agents.
@@ -101,7 +101,7 @@ erDiagram
 | Timestamps | `timestamptz NOT NULL DEFAULT now()`. |
 | Enums | `text` + `CHECK (col IN (...))`. Easier to evolve than native enums. |
 | JSONB | Validated by a schema (e.g. Zod) in the single write path. Never store anything a downstream item can depend on in `artifact_version.payload` - dependable content must be a `logical_item` (section 5.6). |
-| Deletes | Append-only in P0. Every FK is written **explicitly** `ON DELETE RESTRICT` (the PostgreSQL default is `NO ACTION`, which is not identical). Project deletion is out of scope. |
+| Deletes | Append-only in P0. Every FK is written **explicitly** `ON DELETE RESTRICT` (the PostgreSQL default is `NO ACTION`, which is not identical). The one exception is deleting a whole project, which is done only by `delete_project()` (section 4.2, Appendix A.4): it removes rows leaf-first and switches a transaction-local bypass on for exactly the length of the call, so no FK is ever `CASCADE` and no row of a live project can be deleted any other way. |
 | Platform | **Supabase Auth** for identity and **Supabase Postgres** for the database. The app reads and writes only through its own server (Next.js + Drizzle); the Supabase Data API is never used for data. |
 | Secrets | Provider credentials (GitHub, Jira, Stitch, LLM) and the Supabase **service-role key** are **server-side configuration only**, never a column and never shipped to the browser. The Supabase anon/publishable key is public by design - which is why section A.3 exists. One configured Jira project per instance (technical doc NFR, "API credentials shall remain server-side"). No raw request headers in any column; `metadata` and `target_descriptor` hold whitelisted fields only. |
 | Authentication | The session user is the Supabase user id taken from **verified** data on the server (`auth.getUser()` or verified JWT claims), never from `getSession()`, which reads an unverified cookie. Public sign-up is **open**; the access gate is mandatory email verification (Supabase `mailer_autoconfirm` off) rather than a server-side allowlist (round 9 - was invite-only + allowlist through round 8). |
@@ -163,6 +163,7 @@ SELECT pg_advisory_xact_lock(hashtextextended(:project_id::text, 0));
 - Per-artifact row locks are not enough: approving Requirements and approving Backlog lock different rows yet must observe each other (section 9, R2).
 - Never hold the lock across an LLM or provider call. Call outside, then run one short persist transaction.
 - Partial unique indexes remain as a backstop; the lock is the primary mechanism.
+- Deleting a project (section 4.2) also takes this lock, so it is serialized against an approval or a generation persist in flight for the same project instead of racing one.
 
 ### 3.3 Generation persist transaction
 
@@ -248,6 +249,14 @@ Access gate (NFR-005, round 9): public sign-up is open in Supabase; the gate is 
 Creating a project inserts its four `artifact` rows in the same transaction.
 
 **[DB]** `project_seed_frozen` trigger: `brief` and `input_context` are frozen once **any** Requirements `artifact_version` exists (draft, rejected or approved). Requirement items are the graph's roots but were generated from the brief, and nothing outside the item graph can raise a warning - so an edited brief would silently invalidate every provenance claim. To change the brief after generating, create a new project. The UI states this before the first generation.
+
+**Deletion (round 13).** A project can be deleted, together with everything that hangs off it: `artifact`, `artifact_version`, `architecture_option`, `approval_event`, `generation_context_ref`, `logical_item`, `item_version`, membership, `semantic_dependency`, `impact_acknowledgement`, `ai_generation_run`, `external_operation`, `external_ref` and `stitch_output`. The `app_user` row is **not** touched (a user outlives their projects, section 4.1). Why this reopens the original "project deletion is out of scope" decision: the owner needs to be able to remove a project - a demo or test project, or one stuck with a failed external operation, could otherwise never leave the database - and nothing in the lineage model needs a deleted project's history to survive, because every row of it is scoped to that one project.
+
+- **[DB]** The only way to do it is `SELECT delete_project(p_project_id uuid) -> boolean` (Appendix A.4; `false` and no effect when the project does not exist). It deletes leaf-first in one call, and the caller runs it in one transaction under the project lock (section 3.2), so a failure leaves the whole project in place.
+- **[DB]** `forbid_mutation` and `membership_draft_only` still refuse every `UPDATE` and every `DELETE` - except that they let a **`DELETE`** through while the transaction-local setting `throughline.project_deletion` is `'on'`. Only `delete_project()` sets it, and it sets it back to `'off'` before returning, so a later statement in the same transaction is refused as before. `UPDATE` has no bypass at all.
+- **[DB]** Every FK stays `ON DELETE RESTRICT`; nothing cascades. So `DELETE FROM project` (or any table of a live project) issued directly is still refused, and the constraints keep protecting a project that is *not* being deleted. Two places need a single statement rather than an ordering: `artifact_version` and membership reference themselves (`base_approved_version_id`, `parent_logical_item_id`), and `artifact_version` <-> `architecture_option` is the schema's one FK cycle (section 2) - `RESTRICT` is checked when a statement ends, so each is deleted whole by one statement (the cycle by a data-modifying CTE).
+- **Not deleted: anything outside the database.** A GitHub repository, Jira issues or Stitch screens the project created stay where they are; only Throughline's `external_ref` rows for them go. The UI says so before the user confirms.
+- **[APP]** `artifact-lifecycle.deleteProject` is the sole caller (Module Boundaries 4.3); the route is `DELETE /api/projects/:projectId` (API Contracts section 3). The UI requires the user to type the project's name before it enables the confirm button; that is a UI safeguard, not an API precondition.
 
 ### 4.3 `artifact`
 
@@ -824,8 +833,9 @@ Currentness is re-evaluated against the live approved state on every read; nothi
 | Base version belongs to same artifact | **DB** composite FK |
 | One ItemVersion per LogicalItem per ArtifactVersion | **DB** UNIQUE on membership |
 | ItemVersion belongs to declared LogicalItem; item belongs to version's artifact | **DB** composite FKs |
-| Membership frozen after draft | **DB** `membership_draft_only` trigger |
-| ItemVersion / edges / events / acks / context refs / architecture options immutable | **DB** `forbid_mutation` trigger (UPDATE/DELETE) |
+| Membership frozen after draft | **DB** `membership_draft_only` trigger (its DELETE refusal is lifted only inside `delete_project()`, section 4.2) |
+| ItemVersion / edges / events / acks / context refs / architecture options immutable | **DB** `forbid_mutation` trigger (UPDATE/DELETE; DELETE is lifted only inside `delete_project()`, section 4.2 - never UPDATE) |
+| A project's rows cannot be deleted piecemeal; deleting a project removes all of it or none | **DB** `ON DELETE RESTRICT` everywhere + `delete_project()` (one transaction, T44) |
 | Jira ref matches a real membership row; provider/item provenance shape | **DB** composite FK + CHECK |
 | No self-edges; ack subject exactly one; override needs a note | **DB** CHECKs |
 | Acknowledgement's obsolete and acknowledged-against versions belong to one LogicalItem | **DB** composite FKs via `root_logical_item_id` |
@@ -915,6 +925,7 @@ Each is an integration test against a real PostgreSQL instance. T1 is the core p
 | T41 | Edit Epic E-01's title, re-approve the Backlog, re-export to Jira; choose Skip for E-01. | The Skip / Create New prompt appears for the Epic; no second Jira Epic is created; its Stories are parented to the existing Jira Epic of E-01. |
 | T42 | Preview a Jira export whose Stories include a flagged Story. | The preview lists the impact rows and requires an explicit confirmation; the resulting ref is flagged immediately. |
 | T43 | Try to generate UI Requirements before Architecture is approved, and a Backlog before UI Requirements is approved. | Both refused (TR FR-080). |
+| T44 | Delete a project that has a row in every project-scoped table (approved Architecture with its selected option, an Epic with a child Story, GitHub/Jira/Stitch refs, acknowledgements against an item version and an external ref) via `delete_project()`, alongside a second identical project. Also: delete without the function; a forbidden delete or update after it in the same transaction; roll back after it; call it as `anon`; an unknown project id. | The first project has zero rows in all 15 project-scoped tables and the second is untouched; the owner's `app_user` row remains. Without the function every delete stays refused (`append-only`, `frozen`, FK `RESTRICT`); after it returns, and for any `UPDATE`, the guards are back in force; a rollback leaves the whole project in place; `anon` is denied `EXECUTE` (T34); an unknown id returns `false` and deletes nothing. |
 
 ---
 
@@ -933,6 +944,7 @@ Each is an integration test against a real PostgreSQL instance. T1 is the core p
 11. **The Architecture option choice is not persisted before approval** (a selection can only exist on an approved version, by CHECK), so it is a parameter of the approve request and a reload clears it.
 12. Manual-fallback Stitch output, once the API later succeeds for the same UI Requirements version, is overwritten in place rather than kept as history.
 13. Architecture has no manual revision path (regeneration only), because its decisions become items only at approval (section 3.6).
+14. **Deleting a project is permanent and local to the database** (round 13). There is no soft delete, no undo and no retention of a deleted project's audit history (`approval_event`, acknowledgements and every version go with it). It does not touch GitHub, Jira or Stitch, and it does not stop an external write already in flight: `external-operations.runOperation` holds no transaction across the provider call (section 7.2), so an operation that finishes after the project is gone finds no row to update - the external object exists with no Throughline record of it.
 
 ---
 
@@ -986,7 +998,8 @@ Per its section 45.1, behavior the ERD needs must be stated in the Technical Req
 | Section 23.1 | `generation_context_ref` |
 | INV-013, INV-020..024, section 26 | Section 5.2, `impact()`, `impact_acknowledgement` |
 | Section 29, 30 | `external_operation`, section 7 |
-| NFR-002, NFR-003 | Composite FKs, triggers, RESTRICT deletes |
+| NFR-002, NFR-003 | Composite FKs, triggers, RESTRICT deletes (a whole-project delete is the one sanctioned exception - section 4.2, `delete_project()`, T44) |
+| Project deletion (owner request, round 13) | Section 4.2, Appendix A.4, T44. No BRD/Technical Requirements id exists for it - see Appendix B round 13 |
 | NFR-004 | `ai_generation_run` |
 | NFR-005 | Supabase Auth (open sign-up, mandatory email verification, verified identity), Data API deny-all (A.3), per-request project ownership check, server-side credentials, private storage bucket + sandboxed HTML, escaped AI text, HMAC repository marker, secret-free columns |
 
@@ -1324,8 +1337,13 @@ Indexes deliberately **not** created: `item_version(logical_item_id)` (covered b
 
 ```sql
 -- T1. Append-only tables
+-- (round 13: a DELETE - never an UPDATE - is let through while delete_project(), A.4, has set the
+--  transaction-local flag; migration 0008 replaces the original body with this one)
 CREATE FUNCTION forbid_mutation() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
 BEGIN
+  IF TG_OP = 'DELETE' AND current_setting('throughline.project_deletion', true) = 'on' THEN
+    RETURN OLD;
+  END IF;
   RAISE EXCEPTION '% on % is not allowed (append-only)', TG_OP, TG_TABLE_NAME;
 END $$;
 
@@ -1409,6 +1427,10 @@ CREATE TRIGGER artifact_version_guard BEFORE UPDATE ON artifact_version
 CREATE FUNCTION membership_draft_only() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
 DECLARE s text;
 BEGIN
+  -- round 13: same DELETE-only bypass as forbid_mutation (migration 0008)
+  IF TG_OP = 'DELETE' AND current_setting('throughline.project_deletion', true) = 'on' THEN
+    RETURN OLD;
+  END IF;
   SELECT status INTO s FROM artifact_version
    WHERE id = COALESCE(NEW.artifact_version_id, OLD.artifact_version_id);
   IF s <> 'draft' THEN
@@ -1484,6 +1506,78 @@ Ordering rules the triggers and constraints impose on the write path:
 - **Demote before promote:** set the old approved version to `superseded` before promoting the new one - the partial unique indexes are not deferrable.
 - **Epics before Stories:** the membership parent FK is not deferrable.
 - **Operations before refs:** the `external_operation` row (with its provenance) exists and is committed before the provider call; the `external_ref` is inserted with the completion.
+
+### A.4 Project deletion (custom migration `0008`, after A.3; round 13)
+
+Executed on PostgreSQL 15 by the T44 suite (`tests/integration/project-deletion.test.ts`), through the real triggers, FKs and A.3 hardening. `forbid_mutation` and `membership_draft_only` (A.2) carry the matching bypass; this is the only function that ever sets it.
+
+```sql
+-- Deletes one project and every row that hangs off it. Returns false (and deletes nothing) when the
+-- project does not exist. The caller (artifact-lifecycle.deleteProject) holds the project lock and owns
+-- the transaction; this function neither commits nor takes a lock of its own.
+--
+-- Order is leaves first. The two places a single statement is required:
+--   * membership references itself (parent_logical_item_id) and artifact_version references itself
+--     (base_approved_version_id): RESTRICT is checked when the statement ends, so deleting all of a
+--     table's rows in ONE statement satisfies a self-reference regardless of row order.
+--   * artifact_version <-> architecture_option is the schema's one real FK cycle. Neither table can go
+--     first, and artifact_version is frozen against the UPDATE that would break the cycle, so both are
+--     deleted by one statement (a data-modifying CTE), whose RESTRICT checks also run only once both are gone.
+CREATE FUNCTION delete_project(p_project_id uuid) RETURNS boolean
+LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM project WHERE id = p_project_id) THEN
+    RETURN false;
+  END IF;
+
+  PERFORM set_config('throughline.project_deletion', 'on', true);   -- transaction-local
+
+  DELETE FROM stitch_output          WHERE project_id = p_project_id;
+  DELETE FROM impact_acknowledgement WHERE project_id = p_project_id;
+  DELETE FROM external_ref           WHERE project_id = p_project_id;
+  DELETE FROM external_operation     WHERE project_id = p_project_id;
+  DELETE FROM ai_generation_run      WHERE project_id = p_project_id;
+  DELETE FROM semantic_dependency    WHERE project_id = p_project_id;
+
+  DELETE FROM generation_context_ref
+   WHERE target_artifact_version_id IN (
+           SELECT av.id FROM artifact_version av JOIN artifact a ON a.id = av.artifact_id
+            WHERE a.project_id = p_project_id)
+      OR source_artifact_version_id IN (
+           SELECT av.id FROM artifact_version av JOIN artifact a ON a.id = av.artifact_id
+            WHERE a.project_id = p_project_id);
+
+  DELETE FROM approval_event
+   WHERE artifact_version_id IN (
+           SELECT av.id FROM artifact_version av JOIN artifact a ON a.id = av.artifact_id
+            WHERE a.project_id = p_project_id);
+
+  DELETE FROM artifact_version_item_membership
+   WHERE artifact_id IN (SELECT id FROM artifact WHERE project_id = p_project_id);
+
+  DELETE FROM item_version  WHERE project_id = p_project_id;
+  DELETE FROM logical_item  WHERE project_id = p_project_id;
+
+  WITH removed_options AS (
+    DELETE FROM architecture_option
+     WHERE artifact_version_id IN (
+             SELECT av.id FROM artifact_version av JOIN artifact a ON a.id = av.artifact_id
+              WHERE a.project_id = p_project_id)
+    RETURNING id
+  )
+  DELETE FROM artifact_version
+   WHERE artifact_id IN (SELECT id FROM artifact WHERE project_id = p_project_id);
+
+  DELETE FROM artifact WHERE project_id = p_project_id;
+  DELETE FROM project  WHERE id = p_project_id;
+
+  PERFORM set_config('throughline.project_deletion', 'off', true);  -- close the bypass again
+  RETURN true;
+END $$;
+
+-- A.3 applies to this function too (Supabase grants EXECUTE on every new function to anon by default):
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticated;
+```
 
 ---
 
@@ -1638,7 +1732,25 @@ This is an Auth **configuration** change (Supabase Dashboard -> Authentication -
 
 ---
 
+### Round 13 (v1.9 -> v1.10: whole-project deletion; reopens the original "project deletion is out of scope" decision)
+
+**Stated reason for reopening a frozen decision:** the project owner asked to be able to delete a project and all of its data from the database, with a confirmation that requires typing the project's name. Nothing in the BRD or Technical Requirements requires or forbids it, so this is recorded as a product decision here rather than under an invented `FR-xxx` id; it changes no table, column or requirement. The append-only guarantees are kept for every other statement; only the delete of a whole project is newly possible.
+
+| Ref | Change | Note |
+|---|---|---|
+| R13-1 | New function `delete_project(uuid) -> boolean` (section 4.2, Appendix A.4, migration `0008_project_deletion.sql`); deletes the project's rows leaf-first, in the caller's transaction, and returns `false` for an unknown id | A recursive `ON DELETE CASCADE` would have satisfied "delete everything" but weakened NFR-002/NFR-003 for every project, live ones included: an accidental `DELETE FROM artifact_version` would then cascade instead of being refused. Ordered deletes keep every FK `RESTRICT` |
+| R13-2 | `forbid_mutation()` and `membership_draft_only()` now `RETURN OLD` for a `DELETE` while the transaction-local setting `throughline.project_deletion` is `'on'`; `UPDATE` has no bypass | The row-level append-only triggers fire for every row a purge removes, so a plain `DELETE FROM project` (or a cascade) was refused however it was written. The flag is set only inside `delete_project()` and reset before it returns, so it never outlives the call (T44e). Chosen over `ALTER TABLE ... DISABLE TRIGGER` (DDL: takes a table-level lock that blocks every other project's writes for its duration) and `session_replication_role = replica` (needs a privilege the app's database role need not have, and also switches off FK checks) |
+| R13-3 | Self-references and the `artifact_version` <-> `architecture_option` FK cycle are handled by deleting each whole table in one statement (the cycle by a data-modifying CTE) instead of by an `UPDATE` that nulls the link | `artifact_version` is frozen against exactly that `UPDATE` (`artifact_version_guard`); `RESTRICT` is checked at statement end, so one statement satisfies it. Verified on PostgreSQL 15 with a project that has an approved Architecture with its selected option, a draft based on an approved sibling and an Epic with a child Story (T44a) |
+| R13-4 | EXECUTE on `delete_project()` revoked from `PUBLIC`, `anon`, `authenticated` (A.3's schema-wide revoke repeated in `0008`) | Same hardening as every function (T34); T44g proves `anon` is denied |
+| R13-5 | Known limitation 14 (section 11): deletion is permanent, local to the database, and does not stop an external write in flight | No soft delete or undo was asked for; provider objects are deliberately never deleted by Throughline (BRD: no deletion synchronization) |
+| R13-6 | Test T44 (section 10, `tests/integration/project-deletion.test.ts`) | 8 checks: full purge with an untouched bystander project, unknown id, atomic rollback, guards intact without the function / after it returns / for `UPDATE`, `anon` denied, and the `artifact-lifecycle.deleteProject` wrapper |
+| R13-7 | `0008` applied to the live `throughline` Supabase project (PostgreSQL 17.6, as `postgres`) on 2026-09-28 and recorded in `supabase_migrations.schema_migrations` as `20260928152219 0008_project_deletion` | Applied as direct SQL in one transaction, **not** with `pnpm db:migrate`: the live database has no `drizzle.__drizzle_migrations` ledger (`0000`-`0007` were applied through Supabase's migration tooling and are recorded only in `supabase_migrations.schema_migrations`), so `drizzle-kit migrate` would try to re-run `0000` against existing tables. Inside that same transaction, before commit: both trigger functions carry the bypass and a pinned `search_path`; `anon`/`authenticated` are denied `EXECUTE` on `delete_project`; and a rolled-back self-test on throwaway rows showed a direct `DELETE FROM item_version` still refused (`append-only`), `delete_project()` removing the project, artifact, item and item version, a second call returning `false`, and the owner's `app_user` kept. Afterwards no self-test row remained and the existing data (9 projects, 46 versions, 2 users) was unchanged |
+
+---
+
 ## Appendix C - Verification suite
+
+Round 13 adds T44 (project deletion, section 10; `tests/integration/project-deletion.test.ts`, passing on PostgreSQL 15 through the real triggers and FKs). Otherwise:
 
 Round 7 changed no DDL, so these results still apply unchanged. T40-T43 are application-level integration tests (they exercise service code, not new constraints) and belong to slices 2 and 4.
 
