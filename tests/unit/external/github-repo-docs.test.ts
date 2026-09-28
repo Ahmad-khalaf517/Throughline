@@ -58,6 +58,7 @@ function adr(overrides: Partial<AdrForDocs> = {}): AdrForDocs {
 const readmeArgs = () => ({
   selected: selected(),
   mode: 'docs-only' as const,
+  starter: null,
   architectureVersionId: VERSION_ID,
   adrItems: [adr(), adr({ displayKey: 'ADR-02' })],
 });
@@ -72,12 +73,57 @@ describe('buildReadme', () => {
     expect(readme).toContain('A server-rendered Django application handles the swap workflow');
   });
 
-  it('does not claim a scaffold in scaffold mode: it says no starter files were generated', () => {
-    const readme = buildReadme({ ...readmeArgs(), mode: 'scaffold' });
+  describe('with a starter (scaffold mode)', () => {
+    const starter = {
+      label: 'Django',
+      gettingStarted: '```bash\npython manage.py runserver\n```',
+      notScaffolded: ['the front-end application', 'infrastructure and deployment configuration'],
+    };
+    const withStarter = () => buildReadme({ ...readmeArgs(), mode: 'scaffold', starter });
 
-    expect(readme).toContain('initialization mode: **scaffold**');
-    expect(readme).toContain('no starter files were generated');
-    expect(readme).not.toContain('no application code was generated');
+    it('says a starter was generated, not that the repo is docs-only', () => {
+      const readme = withStarter();
+
+      expect(readme).toContain('initialization mode: **scaffold**');
+      expect(readme).toContain('A Django starter was generated from the selected stack');
+      expect(readme).not.toContain('no application code was generated');
+    });
+
+    it('adds a Getting started section, after the stack and before the decisions', () => {
+      const readme = withStarter();
+
+      expect(readme).toContain('## Getting started\n\n```bash\npython manage.py runserver\n```');
+      expect(readme.indexOf('## Technology stack')).toBeLessThan(
+        readme.indexOf('## Getting started'),
+      );
+      expect(readme.indexOf('## Getting started')).toBeLessThan(
+        readme.indexOf('## Architecture decisions'),
+      );
+    });
+
+    it('lists what the starter did not generate, so the repo never implies more than it holds', () => {
+      expect(withStarter()).toContain(
+        '**Not generated** (documentation only): the front-end application; infrastructure and deployment configuration.',
+      );
+    });
+
+    it('omits the "Not generated" line when the starter covers every layer', () => {
+      const readme = buildReadme({
+        ...readmeArgs(),
+        mode: 'scaffold',
+        starter: { ...starter, notScaffolded: [] },
+      });
+
+      expect(readme).toContain('## Getting started');
+      expect(readme).not.toContain('Not generated');
+    });
+  });
+
+  it('has no Getting started section without a starter (docs-only)', () => {
+    const readme = buildReadme(readmeArgs());
+
+    expect(readme).not.toContain('## Getting started');
+    expect(readme).toContain('no application code was generated');
   });
 
   it('renders the stack descriptor as a table with readable labels', () => {

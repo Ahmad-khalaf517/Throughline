@@ -1,10 +1,14 @@
 # Throughline - Technical Requirements & Lineage Invariants
 
-**Document version:** 1.5  
+**Document version:** 1.6  
 **Project type:** AI-assisted software project initialization platform  
 **Delivery context:** Solo capstone project, 8 full-time development days  
-**Status:** Technical baseline aligned with Throughline BRD v2.3 and ERD/Data Model v1.9; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v1.5: added FR-003/FR-004 (BR-011) for the project dashboard overview and persistent navigation shell.  
+**Status:** Technical baseline aligned with Throughline BRD v2.4 and ERD/Data Model v1.9; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v1.5: added FR-003/FR-004 (BR-011) for the project dashboard overview and persistent navigation shell. v1.6: FR-032 now pins a small set of starters (Django, Next.js) instead of one, each a deterministic file set generated in scaffold mode (FR-031); BRD v2.4.  
 **Primary audience:** Developer, technical reviewers, and AI coding agents
+
+### Revision 1.6 alignment
+
+BRD v2.4 widened the pinned GitHub starter from one to a small set. **FR-032** is retitled and now names two starters, Django and Next.js (with PostgreSQL). Reason: real AI-proposed stacks are mostly Django, so a single starter shaped like Throughline's own Next.js stack almost never matched and scaffold mode wrote no code at all. A real AI-proposed stack is matched to a starter from its structured stack descriptor (FR-031); anything no starter fits stays docs-only, so a mismatched codebase is still never created. Each starter is a fixed, deterministic set of files (not model-written code), so the GitHub preview (FR-030) lists exactly the files that will be written, and each was run or typechecked before being pinned. **FR-031**'s scaffold-mode sentence and the scope lines that said "one pinned starter" were updated to match. No ERD change: `external_ref.metadata.mode` is still `scaffold` | `docs-only`. The preview response gains a `starter` field (API Contracts v1.11).
 
 ### Revision 1.5 alignment
 
@@ -148,7 +152,7 @@ The capstone implementation has the following fixed constraints:
 | ORM / migrations | Drizzle ORM + drizzle-kit, SQL-first |
 | Object storage | Private Supabase Storage bucket for Stitch HTML/screenshots |
 | AI | One LLM provider |
-| External systems | GitHub (one pinned starter), one configured Jira project, Google Stitch |
+| External systems | GitHub (pinned starters: Django, Next.js), one configured Jira project, Google Stitch |
 
 Schema, triggers, the impact function, and connection and hardening rules are specified in the ERD/Data Model v1.9.
 
@@ -457,7 +461,7 @@ The system shall support two conceptual modes:
 
 **Scaffold mode**
 
-Used when the selected architecture matches the supported pinned starter/template closely enough for safe initialization.
+Used when the selected architecture matches one of the supported pinned starters (FR-032) closely enough for safe initialization.
 
 **Docs-only mode**
 
@@ -469,13 +473,15 @@ The mode is chosen from the selected option's structured stack descriptor (FR-02
 
 The MVP creates **one repository per project**. There is no re-initialization flow; a later architecture change is reported as drift (FR-036), never applied to the repository.
 
-### FR-032 - Use One Pinned Starter for MVP
+### FR-032 - Use Pinned Starters for MVP
 
-Throughline shall use one approved, pinned repository starter/template for scaffold mode.
+Throughline shall use approved, pinned starters for scaffold mode: a small set, currently **Django** and **Next.js** (with PostgreSQL). Each starter is a fixed, deterministic set of files authored in this repository and run (Django) or typechecked (Next.js) before it is pinned. Which starter applies is decided from the selected option's structured stack descriptor (FR-031); a stack no starter fits gets docs-only mode.
 
-The project shall not spend capstone time authoring a generic starter from scratch.
+The project shall not spend capstone time authoring a generic starter from scratch, and shall not write code from model output into a repository: a starter is a fixed template, so the GitHub preview can list exactly the files that will be written (FR-030).
 
-The selected starter's license must be checked before use.
+Starters are written in this repository, so no third-party template license applies. A starter that adopts third-party template code must have that code's license checked before use.
+
+A starter covers the layers the stack names that it can (for example the Django side of a Django + React stack); the layers it does not generate are stated in the README and the preview, so the repository never implies more than it holds.
 
 ### FR-033 - Add Architecture Rationale
 
@@ -1468,7 +1474,7 @@ P0 is the minimum acceptable capstone.
 ### GitHub
 
 - preview
-- one pinned starter for scaffold mode
+- pinned starters (Django, Next.js) for scaffold mode
 - docs-only fallback/mode when architecture does not fit the starter
 - repository creation
 - README customization

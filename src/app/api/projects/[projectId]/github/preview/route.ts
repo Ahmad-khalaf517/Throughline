@@ -86,6 +86,8 @@ export async function POST(request: Request, { params }: RouteParams) {
     return NextResponse.json({
       mode: preview.mode,
       repoName: preview.repoName,
+      // FR-030: the exact files the write will add. `null` = docs-only.
+      starter: preview.starter ?? null,
       impact: await toImpactRowDTOs(preview.impact),
     });
   } catch (error) {

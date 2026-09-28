@@ -39,6 +39,7 @@ import {
   type SelectedArchitectureOption,
 } from '@/artifact-types/architecture';
 import { buildReadme, buildAdrDoc } from './repo-docs';
+import { pickStarter, readStack, type Starter, type StarterFile } from './starters';
 
 // ---------------------------------------------------------------------------
 // Errors - initRepo's signature (Module Boundaries 4.6) is `Promise<ExternalRef>`,
@@ -249,57 +250,49 @@ function createOctokitClient(): Octokit {
 // ---------------------------------------------------------------------------
 
 /**
- * FR-032: "Throughline shall use one approved, pinned repository
- * starter/template for scaffold mode." No real starter/template repository
- * is named anywhere in the frozen ERD/TR/BRD, and this project's own
- * capstone scope explicitly excludes "any real template-repository cloning/
- * scaffolding mechanism" (this story's own instructions) - so there is
- * nothing to point a real license check (FR-032's second sentence) at
- * either. This constant is THIS story's own placeholder decision, recorded
- * the same way E4-S1 recorded `RECONCILIATION_THRESHOLD_MS`: it stands in
- * for "the one pinned starter" with this project's OWN stack shape (the
- * only concrete, unambiguous stack this codebase can point to), so
- * `previewInit`/`initRepo` have a real, testable "close enough" comparison
- * instead of an unimplemented decision. A real starter-repo choice plus its
- * license check is future work, not built here.
+ * FR-031: scaffold mode when a pinned starter fits the selected stack, docs-only
+ * otherwise - never a mismatched codebase. Which starters exist and how each
+ * decides it fits lives in ./starters (Django, Next.js). FR-032 as first
+ * written asked for ONE pinned starter, matched loosely against this project's
+ * own stack; real AI-proposed stacks are mostly Django, so that starter almost
+ * never matched and "scaffold" wrote nothing. It is now a small pinned SET,
+ * each generating real, runnable files (recorded in TR FR-032).
  */
-const PINNED_REFERENCE_STACK = {
-  frontend: 'next.js + typescript',
-  backend: 'next.js route handlers (same app)',
-  database: 'postgresql via drizzle orm',
-  hosting: 'vercel + supabase',
-  repositoryLayout: 'single repo, layered src/ modules',
-} as const;
-
-function normalizeForCompare(value: unknown): string {
-  return String(value ?? '')
-    .toLowerCase()
-    .trim();
+interface StarterPlan {
+  id: Starter['id'];
+  label: string;
+  files: StarterFile[];
+  gettingStarted: string;
+  notScaffolded: string[];
 }
 
-/**
- * FR-031: "matches the supported pinned starter/template closely enough for
- * safe initialization." Neither ERD nor TR defines "closely enough" - this
- * is this story's own judgment call: deliberately loose substring
- * containment per field (an AI-authored stack descriptor's free text will
- * never match the reference byte-for-byte), but ALL FIVE fields must match
- * for `scaffold` - any mismatch or missing field falls back to `docs-only`,
- * per FR-031's own "must not silently create a mismatched codebase."
- */
-function stackMatchesPinnedReference(stack: unknown): boolean {
-  if (typeof stack !== 'object' || stack === null) return false;
-  const candidate = stack as Record<string, unknown>;
-  return (Object.keys(PINNED_REFERENCE_STACK) as (keyof typeof PINNED_REFERENCE_STACK)[]).every(
-    (field) => {
-      const expectedTokens = PINNED_REFERENCE_STACK[field].split(/[\s+]+/).filter(Boolean);
-      const actual = normalizeForCompare(candidate[field]);
-      return expectedTokens.every((token) => actual.includes(token));
-    },
-  );
+function planStarter(
+  starter: Starter | null,
+  repoName: string,
+  selected: SelectedArchitectureOption,
+): StarterPlan | null {
+  if (!starter) return null;
+  const context = {
+    repoName,
+    title: selected.option.title,
+    stack: readStack(selected.option.stack),
+  };
+  return {
+    id: starter.id,
+    label: starter.label,
+    files: starter.files(context),
+    gettingStarted: starter.gettingStarted(context),
+    notScaffolded: starter.notScaffolded(context.stack),
+  };
 }
 
-function decideMode(stack: unknown): 'scaffold' | 'docs-only' {
-  return stackMatchesPinnedReference(stack) ? 'scaffold' : 'docs-only';
+/** What the preview tells the user will be added (FR-030): the starter and its exact file list. */
+export interface StarterPreview {
+  id: Starter['id'];
+  label: string;
+  files: string[];
+  /** Layers the stack names that no starter file covers - documentation only. */
+  notScaffolded: string[];
 }
 
 async function resolveApprovedSelection(
@@ -398,10 +391,17 @@ async function suggestRepoName(projectId: string, projectName?: string): Promise
 export async function previewInit(
   architectureVersionId: string,
   projectName?: string,
-): Promise<{ mode: 'scaffold' | 'docs-only'; repoName: string; impact: ImpactRow[] }> {
+): Promise<{
+  mode: 'scaffold' | 'docs-only';
+  repoName: string;
+  starter: StarterPreview | null;
+  impact: ImpactRow[];
+}> {
   const selected = await resolveApprovedSelection(architectureVersionId);
-  const mode = decideMode(selected.option.stack);
+  const starter = pickStarter(selected.option.stack);
+  const mode = starter ? 'scaffold' : 'docs-only';
   const repoName = await suggestRepoName(selected.projectId, projectName);
+  const plan = planStarter(starter, repoName, selected);
 
   // TR FR-085: "Every external-write preview... shows current impact for
   // the items it would create from." There is no `external_ref` yet at
@@ -421,7 +421,17 @@ export async function previewInit(
     (row) => row.subjectKind === 'item_version' && adrItemVersionIds.has(row.subjectId),
   );
 
-  return { mode, repoName, impact };
+  return {
+    mode,
+    repoName,
+    starter: plan && {
+      id: plan.id,
+      label: plan.label,
+      files: plan.files.map((file) => file.path),
+      notScaffolded: plan.notScaffolded,
+    },
+    impact,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +493,7 @@ async function sendCreateRepo(args: {
   repoName: string;
   marker: string;
   mode: 'scaffold' | 'docs-only';
+  starter: StarterPlan | null;
   selected: SelectedArchitectureOption;
   architectureVersionId: string;
   adrItems: ArchitectureDecisionItem[];
@@ -539,6 +550,7 @@ async function sendCreateRepo(args: {
   await writeProvenanceFiles(args.octokit, created.ownerLogin, args.repoName, {
     marker: args.marker,
     mode: args.mode,
+    starter: args.starter,
     selected: args.selected,
     architectureVersionId: args.architectureVersionId,
     adrItems: args.adrItems,
@@ -602,6 +614,7 @@ async function reconcileRepo(args: {
 function buildLineageJson(args: {
   marker: string;
   mode: 'scaffold' | 'docs-only';
+  starter: StarterPlan | null;
   selected: SelectedArchitectureOption;
   architectureVersionId: string;
   adrItems: ArchitectureDecisionItem[];
@@ -621,6 +634,12 @@ function buildLineageJson(args: {
       title: args.selected.option.title,
       stack: args.selected.option.stack,
     },
+    // The pinned starter that generated the code files, if any (docs-only: null).
+    starter: args.starter && {
+      id: args.starter.id,
+      label: args.starter.label,
+      files: args.starter.files.map((file) => file.path),
+    },
     architectureDecisions: args.adrItems.map((item) => ({
       displayKey: item.displayKey,
       logicalItemId: item.logicalItemId,
@@ -637,6 +656,7 @@ async function writeProvenanceFiles(
   args: {
     marker: string;
     mode: 'scaffold' | 'docs-only';
+    starter: StarterPlan | null;
     selected: SelectedArchitectureOption;
     architectureVersionId: string;
     adrItems: ArchitectureDecisionItem[];
@@ -651,6 +671,20 @@ async function writeProvenanceFiles(
     message: 'Throughline: add architecture rationale (FR-033)',
     content: encode(buildReadme(args)),
   });
+
+  // The generated code, one commit per file. Sequential on purpose (the
+  // contents API rejects concurrent writes to one branch), and lineage.json
+  // stays LAST so it is only ever present in a repository whose files all
+  // landed.
+  for (const file of args.starter?.files ?? []) {
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner,
+      repo,
+      path: file.path,
+      message: `Throughline: add ${args.starter?.label} starter - ${file.path}`,
+      content: encode(file.content),
+    });
+  }
 
   for (const item of args.adrItems) {
     await octokit.rest.repos.createOrUpdateFileContents({
@@ -676,8 +710,9 @@ export async function initRepo(
   repoName: string,
 ): Promise<ExternalRef> {
   const selected = await resolveApprovedSelection(architectureVersionId);
-  const mode = decideMode(selected.option.stack);
   const normalizedRepoName = normalizeRepoName(repoName);
+  const starter = planStarter(pickStarter(selected.option.stack), normalizedRepoName, selected);
+  const mode = starter ? 'scaffold' : 'docs-only';
   const operationKey = `github:create_repo:${selected.projectId}:${normalizedRepoName}`;
   // Request fingerprint (ERD 7.2/29): same repoName + mode must round-trip
   // to the same hash so a genuine resend (same inputs) is never flagged as
@@ -707,6 +742,7 @@ export async function initRepo(
         repoName: normalizedRepoName,
         marker,
         mode,
+        starter,
         selected,
         architectureVersionId,
         adrItems,

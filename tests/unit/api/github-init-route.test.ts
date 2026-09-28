@@ -149,7 +149,12 @@ describe('POST /api/projects/:projectId/github/init', () => {
     mockedGetVerifiedUser.mockResolvedValue(user);
     mockedRequireProjectOwner.mockResolvedValue(undefined);
     mockedGetProjectById.mockResolvedValue(baseProject());
-    mockedPreviewInit.mockResolvedValue({ mode: 'docs-only', repoName: 'suggested', impact: [] });
+    mockedPreviewInit.mockResolvedValue({
+      mode: 'docs-only',
+      repoName: 'suggested',
+      starter: null,
+      impact: [],
+    });
   });
 
   it('returns 401 UNAUTHENTICATED when there is no verified user', async () => {
@@ -216,6 +221,7 @@ describe('POST /api/projects/:projectId/github/init', () => {
     mockedPreviewInit.mockResolvedValue({
       mode: 'docs-only',
       repoName: 'suggested',
+      starter: null,
       impact: [
         {
           subjectKind: 'item_version',
