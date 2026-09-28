@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ExternalOperationDTO } from '@/lib/serialize';
 import { describeOperationStatus } from '@/lib/external-preview';
 
 interface OperationStatusProps {
   operationId: string;
+  /** Called once when polling observes a terminal status (`completed`/`failed`). */
+  onSettled?: () => void;
 }
 
 const POLL_INTERVAL_MS = 3000;
@@ -29,7 +31,11 @@ interface ErrorBody {
  * non-2xx retry response is surfaced here as "retry didn't complete" - the
  * durable operation row is still there and still visible via the next poll.
  */
-export function OperationStatus({ operationId }: OperationStatusProps) {
+export function OperationStatus({ operationId, onSettled }: OperationStatusProps) {
+  const onSettledRef = useRef(onSettled);
+  useEffect(() => {
+    onSettledRef.current = onSettled;
+  }, [onSettled]);
   const [operation, setOperation] = useState<ExternalOperationDTO | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
@@ -59,6 +65,8 @@ export function OperationStatus({ operationId }: OperationStatusProps) {
         setOperation(op);
         if (op.status === 'pending' || op.status === 'reconciliation_required') {
           timer = setTimeout(poll, POLL_INTERVAL_MS);
+        } else {
+          onSettledRef.current?.();
         }
       } catch {
         if (!cancelled) {

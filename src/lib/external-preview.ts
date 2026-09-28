@@ -255,6 +255,19 @@ export function readImpactFromError(body: unknown): ImpactRowDTO[] | null {
   return impact as ImpactRowDTO[];
 }
 
+/**
+ * The Stitch web URL for a generated project. Our `external_ref.externalId`
+ * is stored as `<projectId>/<screenId>` (src/external/stitch), and the Stitch
+ * web app addresses a project by that same numeric id. Returns `null` for
+ * anything not of that shape (legacy/malformed ids) so the caller renders no
+ * link rather than a broken one.
+ */
+export function stitchProjectUrl(externalId: string | null | undefined): string | null {
+  if (!externalId) return null;
+  const match = /^(\d+)\/[0-9a-f]+$/i.exec(externalId);
+  return match ? `https://stitch.withgoogle.com/projects/${match[1]}` : null;
+}
+
 export interface ExistingRepository {
   /** An `https://` URL, safe to render as a link. */
   url: string;

@@ -48,6 +48,7 @@ import { getStorageServiceClient } from '@/auth';
 import {
   runOperation,
   getRefById,
+  getOperationsForVersion,
   DefinitiveProviderError,
   type ExternalRef,
 } from '@/external/operations';
@@ -595,6 +596,56 @@ export async function generate(uiRequirementsVersionId: string): Promise<StitchO
       // `RunOperationResult`'s real 6-variant union.
       throw new Error(`unexpected 'refused' status for Stitch operation ${operationKey}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// FR-052/053/054 - read the persisted result back (SCRUM-91). Without this the
+// only place a generated result lived was the generating page's own React
+// state: leaving and returning showed the form again (a second submit then hit
+// ALREADY_GENERATED), and a refresh mid-generation hit the in-flight error.
+// ---------------------------------------------------------------------------
+
+export type StitchOutputState =
+  | { state: 'none' }
+  | { state: 'generated'; output: StitchOutput }
+  | { state: 'manual_fallback'; output: StitchOutput }
+  | {
+      state: 'in_progress';
+      operationId: string;
+      status: 'pending' | 'reconciliation_required';
+    };
+
+/**
+ * What exists for one UI Requirements version, as a discriminated state.
+ * Precedence: a `mode='api'` output wins; else an unfinished operation
+ * (`pending`/`reconciliation_required`) means `in_progress` - even over an
+ * older `manual_fallback` row, since a retry in flight is more current; else a
+ * `manual_fallback` row; else `none`. A `failed` operation with a fallback row
+ * is just `manual_fallback`. Reads `stitch_output` directly (own table) and the
+ * operation only through `external-operations` (Module Boundaries 4.5); never
+ * throws for the empty case.
+ */
+export async function getOutput(uiRequirementsVersionId: string): Promise<StitchOutputState> {
+  const output = await findExistingStitchOutput(uiRequirementsVersionId);
+  if (output?.mode === 'api') return { state: 'generated', output };
+
+  const operationKey = `stitch:generate:${uiRequirementsVersionId}`;
+  const operations = await getOperationsForVersion(uiRequirementsVersionId, 'stitch');
+  const active = operations.find(
+    (op) =>
+      op.operationKey === operationKey &&
+      (op.status === 'pending' || op.status === 'reconciliation_required'),
+  );
+  if (active) {
+    return {
+      state: 'in_progress',
+      operationId: active.id,
+      status: active.status as 'pending' | 'reconciliation_required',
+    };
+  }
+
+  if (output) return { state: 'manual_fallback', output };
+  return { state: 'none' };
 }
 
 // ---------------------------------------------------------------------------

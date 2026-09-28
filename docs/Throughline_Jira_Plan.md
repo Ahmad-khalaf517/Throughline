@@ -1,7 +1,7 @@
 # Throughline - Jira Implementation Plan
 
 **Document version:** 1.5
-**Status:** Derived from ERD/Data Model v1.9, Technical Requirements & Lineage Invariants v1.5, Module Boundaries v1.11, API Contracts v1.6, and Project Setup & Configuration Plan v1.4. Parent of the day-by-day implementation plan and of coding. v1.5: added E5-S13 to align the existing Backlog review UI with the Stitch hierarchy and quality-gate layout, without changing FR-063/FR-064 behavior.
+**Status:** Derived from ERD/Data Model v1.10, Technical Requirements & Lineage Invariants v1.6, Module Boundaries v1.16, API Contracts v1.14, and Project Setup & Configuration Plan v1.4. Parent of the day-by-day implementation plan and of coding. v1.5: added E5-S13 to align the existing Backlog review UI with the Stitch hierarchy and quality-gate layout, without changing FR-063/FR-064 behavior.
 **Purpose:** The ticket breakdown for building **Throughline itself** over the 8-day capstone window - not the in-product Jira *integration* (that is FR-070..074, delivered by Epic 4 below). This plan is what gets created in a real Jira project to run the build.
 **CSV export:** `Throughline_Jira_Import.csv` is not kept in the repo - it was a mechanical, always-derivable restatement of the table below with no decisions of its own. Regenerate it from this plan (same 71 issues, Jira's CSV import format) immediately before the actual bulk-import, rather than carrying a second copy that can drift from this table.
 

@@ -24,9 +24,10 @@ that shape (Module Boundaries section 4.7) - four route sets that call
 
 3. **`POST .../github/preview`, `POST .../github/init`,
    `GET .../jira/preview`, `POST .../jira/export`, `GET .../stitch/preview`,
-   `POST .../stitch/generate` (E4-S6, narrowed by E4-T3)**: no layer-3/4/5
+   `POST .../stitch/generate` and `GET .../stitch/output` (E4-S6, narrowed by
+   E4-T3; the last added by SCRUM-91)**: no layer-3/4/5
    export maps a `projectId` to its approved version ids, and each of these
-   six needs that mapping for its own `409 PREREQUISITE_NOT_APPROVED` check -
+   seven needs that mapping for its own `409 PREREQUISITE_NOT_APPROVED` check -
    so they call `artifact-lifecycle.getProjectById` directly to resolve the
    `architecture`/`backlog`/`ui_requirements` approved version id before ever
    calling the layer-5 provider function.

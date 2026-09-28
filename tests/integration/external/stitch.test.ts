@@ -690,4 +690,103 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.mode).toBe('api');
   });
+
+  describe('getOutput (SCRUM-91)', () => {
+    async function setup(name: string, screenOrFlow: string) {
+      const { projectId } = await fx.createProjectWithOwner(sql, { name });
+      const artifactId = await fx.createArtifact(sql, projectId, 'ui_requirements');
+      const { versionId } = await createApprovedUiRequirementsVersion(
+        sql,
+        projectId,
+        artifactId,
+        1,
+        [{ screenOrFlow, interactionRequirement: 'Do the thing' }],
+      );
+      return { versionId };
+    }
+
+    it("none: no output and no operation -> { state: 'none' }, never throws", async () => {
+      const { versionId } = await setup('stitch getOutput none', 'Empty');
+
+      expect(await stitch.getOutput(versionId)).toEqual({ state: 'none' });
+    });
+
+    it("generated: mode='api' output -> { state: 'generated', output }", async () => {
+      const { versionId } = await setup('stitch getOutput generated', 'Home');
+      const world = createFakeExternalWorld();
+      const generated = await withFakeFetch(world.fetch, () => stitch.generate(versionId));
+
+      const result = await stitch.getOutput(versionId);
+
+      expect(result.state).toBe('generated');
+      if (result.state !== 'generated') throw new Error('unreachable');
+      expect(result.output.id).toBe(generated.id);
+      expect(result.output.mode).toBe('api');
+    });
+
+    it("manual_fallback: failed operation + fallback row -> { state: 'manual_fallback' }", async () => {
+      const { versionId } = await setup('stitch getOutput fallback', 'Cart');
+      const world = createFakeExternalWorld();
+      sdkWorld.nextGenerate = 'validation_error';
+      await withFakeFetch(world.fetch, () => stitch.generate(versionId));
+
+      const result = await stitch.getOutput(versionId);
+
+      expect(result.state).toBe('manual_fallback');
+      if (result.state !== 'manual_fallback') throw new Error('unreachable');
+      expect(result.output.promptText).toContain('Cart');
+    });
+
+    it("in_progress: a pending operation with no output -> { state: 'in_progress', status: 'pending' }", async () => {
+      const { versionId } = await setup('stitch getOutput pending', 'Search');
+      const world = createFakeExternalWorld();
+      sdkWorld.nextGenerate = 'network_error';
+      await expect(
+        withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+      ).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+
+      const result = await stitch.getOutput(versionId);
+
+      expect(result).toMatchObject({ state: 'in_progress', status: 'pending' });
+    });
+
+    it("in_progress: reconciliation_required operation -> status 'reconciliation_required'", async () => {
+      const { versionId } = await setup('stitch getOutput reconciliation', 'Profile');
+      const world = createFakeExternalWorld();
+      sdkWorld.nextGenerate = 'network_error';
+      await expect(
+        withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+      ).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+      sdkWorld.nextGenerate = 'network_error';
+      await expect(
+        withClockAdvancedPastThreshold(() =>
+          withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+        ),
+      ).rejects.toThrow(stitch.StitchReconciliationRequiredError);
+
+      const result = await stitch.getOutput(versionId);
+
+      expect(result).toMatchObject({ state: 'in_progress', status: 'reconciliation_required' });
+    });
+
+    it('precedence: a pending retry beats an older manual_fallback row', async () => {
+      const { versionId } = await setup('stitch getOutput retry beats fallback', 'Inbox');
+      const world = createFakeExternalWorld();
+      sdkWorld.nextGenerate = 'validation_error';
+      await withFakeFetch(world.fetch, () => stitch.generate(versionId));
+      expect((await stitch.getOutput(versionId)).state).toBe('manual_fallback');
+
+      // Retry in place: the operation goes back to pending, the fallback row stays.
+      sdkWorld.nextGenerate = 'network_error';
+      await expect(
+        withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+      ).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+
+      expect((await stitchOutputRows(versionId))[0]!.mode).toBe('manual_fallback');
+      expect(await stitch.getOutput(versionId)).toMatchObject({
+        state: 'in_progress',
+        status: 'pending',
+      });
+    });
+  });
 });
