@@ -11,7 +11,9 @@ import {
   describeRepoNameAvailability,
   isExternalWriteBlocked,
   isRepoNameBlocked,
+  readExistingRepository,
   readImpactFromError,
+  type ExistingRepository,
   type RepoNameAvailability,
 } from '@/lib/external-preview';
 import { PreviewShell, type PreviewState } from './preview-shell';
@@ -78,6 +80,9 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [result, setResult] = useState<GithubWriteResult | null>(null);
   const [availability, setAvailability] = useState<RepoNameAvailability | null>(null);
+  // Set when the project already has a repository (409 GITHUB_ALREADY_INITIALIZED
+  // with a link) - the screen then shows that repository instead of a form.
+  const [existing, setExisting] = useState<ExistingRepository | null>(null);
   const typedName = repoName.trim();
 
   useEffect(() => {
@@ -110,6 +115,16 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
               reviewHref: `/projects/${projectId}/artifacts/architecture`,
             });
             return;
+          }
+          if (errorBody.error?.code === 'GITHUB_ALREADY_INITIALIZED') {
+            // One repository per project: show where it is. Without a usable
+            // link (none stored, or not https) this falls through to the
+            // plain "already initialized" message below.
+            const repository = readExistingRepository(body);
+            if (repository) {
+              setExisting(repository);
+              return;
+            }
           }
           setState({
             status: 'error',
@@ -269,6 +284,8 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
     }
   }
 
+  if (existing) return <ExistingRepositoryCard repository={existing} />;
+
   return (
     <PreviewShell state={state}>
       {preview &&
@@ -363,6 +380,34 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
           </form>
         ))}
     </PreviewShell>
+  );
+}
+
+/**
+ * The project already has its one repository (FR-031: one per project, no
+ * re-initialization) - so instead of a form, say so and link to it.
+ */
+function ExistingRepositoryCard({ repository }: { repository: ExistingRepository }) {
+  return (
+    <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
+      <p className="text-on-surface text-sm font-medium">
+        This project already has a GitHub repository.
+      </p>
+      {repository.name && (
+        <p className="font-mono-code text-on-surface-variant mt-1 text-sm">{repository.name}</p>
+      )}
+      <a
+        href={repository.url}
+        target="_blank"
+        rel="noreferrer"
+        className="text-primary-container hover:text-primary-container-hover mt-2 inline-block text-sm font-medium break-all"
+      >
+        {repository.url} →
+      </a>
+      <p className="text-on-surface-variant mt-3 text-xs">
+        Only one repository is created per project.
+      </p>
+    </div>
   );
 }
 

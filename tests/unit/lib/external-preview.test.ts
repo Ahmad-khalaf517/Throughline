@@ -9,6 +9,7 @@ import {
   isExternalWriteBlocked,
   isRepoNameBlocked,
   missingJiraDecisions,
+  readExistingRepository,
   readImpactFromError,
   splitImpact,
   stitchProjectUrl,
@@ -310,5 +311,59 @@ describe('describeRepoNameAvailability / isRepoNameBlocked', () => {
     expect(isRepoNameBlocked(failed, 'my-repo')).toBe(false);
     expect(isRepoNameBlocked(taken, 'my-repo-2')).toBe(false); // stale: about other text
     expect(isRepoNameBlocked(null, 'my-repo')).toBe(false);
+  });
+});
+
+describe('readExistingRepository', () => {
+  const conflict = (repository: unknown) => ({
+    error: { code: 'GITHUB_ALREADY_INITIALIZED', message: 'x', details: { repository } },
+  });
+
+  it('reads the URL and owner/name from a 409 GITHUB_ALREADY_INITIALIZED', () => {
+    expect(
+      readExistingRepository(
+        conflict({ url: 'https://github.com/octo/demo-repo', name: 'octo/demo-repo' }),
+      ),
+    ).toEqual({ url: 'https://github.com/octo/demo-repo', name: 'octo/demo-repo' });
+  });
+
+  it('keeps the link when the name was never stored', () => {
+    for (const name of [null, undefined, '', '   ', 42]) {
+      expect(
+        readExistingRepository(conflict({ url: 'https://github.com/octo/demo-repo', name })),
+      ).toEqual({ url: 'https://github.com/octo/demo-repo', name: null });
+    }
+  });
+
+  it('returns null when there is no usable link, so the screen falls back to the plain message', () => {
+    for (const url of [null, undefined, '', '   ', 42, {}, 'not a url', 'github.com/octo/x']) {
+      expect(readExistingRepository(conflict({ url, name: 'octo/x' })), String(url)).toBeNull();
+    }
+  });
+
+  it('refuses a URL that is not https, because it is rendered as an href', () => {
+    for (const url of [
+      'javascript:alert(1)',
+      'data:text/html,<script>alert(1)</script>',
+      'http://github.com/octo/demo-repo',
+      'ftp://github.com/octo/demo-repo',
+      'file:///etc/passwd',
+    ]) {
+      expect(readExistingRepository(conflict({ url, name: 'octo/x' })), url).toBeNull();
+    }
+  });
+
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['a string', 'oops'],
+    ['no error', {}],
+    ['error is a string', { error: 'oops' }],
+    ['no details', { error: { code: 'X' } }],
+    ['details is a string', { error: { details: 'oops' } }],
+    ['no repository', { error: { details: {} } }],
+    ['repository is a string', { error: { details: { repository: 'oops' } } }],
+  ])('returns null for a malformed body (%s)', (_label, body) => {
+    expect(readExistingRepository(body)).toBeNull();
   });
 });

@@ -140,6 +140,60 @@ describe('POST /api/projects/:projectId/github/preview', () => {
     expect(mockedPreviewInit).not.toHaveBeenCalled();
   });
 
+  it('tells the screen where the existing repository is (its URL and owner/name) so it can link to it', async () => {
+    mockedGetProjectById.mockResolvedValue(baseProject());
+    mockedGetRefsForProject.mockResolvedValue([
+      {
+        id: 'ref-1',
+        provider: 'github',
+        sourceArtifactVersionId: 'arch-v1',
+        externalUrl: 'https://github.com/octo/demo-repo',
+        externalKey: 'octo/demo-repo',
+      },
+    ] as never);
+
+    const response = await POST(postRequest({ repoName: 'x' }), paramsFor('project-1'));
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error.code).toBe('GITHUB_ALREADY_INITIALIZED');
+    expect(body.error.details).toEqual({
+      repository: { url: 'https://github.com/octo/demo-repo', name: 'octo/demo-repo' },
+    });
+    expect(mockedPreviewInit).not.toHaveBeenCalled();
+  });
+
+  it('sends null for a URL/name the ref never stored (e.g. adopted through reconciliation)', async () => {
+    mockedGetProjectById.mockResolvedValue(baseProject());
+    mockedGetRefsForProject.mockResolvedValue([
+      { id: 'ref-1', provider: 'github', externalUrl: null, externalKey: null },
+    ] as never);
+
+    const response = await POST(postRequest({ repoName: 'x' }), paramsFor('project-1'));
+
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.details).toEqual({
+      repository: { url: null, name: null },
+    });
+  });
+
+  it("ignores another provider's ref: a Jira or Stitch ref is not an existing repository", async () => {
+    mockedGetProjectById.mockResolvedValue(baseProject());
+    mockedGetRefsForProject.mockResolvedValue([
+      { id: 'ref-1', provider: 'jira', externalUrl: 'https://example.atlassian.net/browse/X-1' },
+    ] as never);
+    mockedPreviewInit.mockResolvedValue({
+      mode: 'docs-only',
+      repoName: 'x',
+      starter: null,
+      impact: [],
+    });
+
+    const response = await POST(postRequest({ repoName: 'x' }), paramsFor('project-1'));
+
+    expect(response.status).toBe(200);
+  });
+
   it('returns 409 PREREQUISITE_NOT_APPROVED when previewInit reports no selected option', async () => {
     mockedGetProjectById.mockResolvedValue(baseProject());
     mockedPreviewInit.mockRejectedValue(

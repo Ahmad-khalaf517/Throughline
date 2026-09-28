@@ -267,3 +267,43 @@ export function stitchProjectUrl(externalId: string | null | undefined): string 
   const match = /^(\d+)\/[0-9a-f]+$/i.exec(externalId);
   return match ? `https://stitch.withgoogle.com/projects/${match[1]}` : null;
 }
+
+export interface ExistingRepository {
+  /** An `https://` URL, safe to render as a link. */
+  url: string;
+  /** `owner/name`, when the ref stored one. */
+  name: string | null;
+}
+
+/**
+ * The repository a project already has, from the `details.repository` of a
+ * `409 GITHUB_ALREADY_INITIALIZED` (API Contracts section 8) - so the GitHub
+ * screen can link to it instead of dead-ending on "already initialized".
+ *
+ * `null` for anything that is not a usable link: no `details`, a null/blank
+ * URL (a ref adopted through reconciliation may have none), or a URL that is
+ * not `https://`. The URL is rendered as an `href`, so `javascript:` and
+ * `data:` values are refused here rather than trusted to be well-formed; the
+ * caller then falls back to the plain message.
+ */
+export function readExistingRepository(body: unknown): ExistingRepository | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const errorValue = (body as { error?: unknown }).error;
+  if (typeof errorValue !== 'object' || errorValue === null) return null;
+  const details = (errorValue as { details?: unknown }).details;
+  if (typeof details !== 'object' || details === null) return null;
+  const repository = (details as { repository?: unknown }).repository;
+  if (typeof repository !== 'object' || repository === null) return null;
+
+  const { url, name } = repository as { url?: unknown; name?: unknown };
+  if (typeof url !== 'string') return null;
+  try {
+    if (new URL(url).protocol !== 'https:') return null;
+  } catch {
+    return null;
+  }
+  return {
+    url,
+    name: typeof name === 'string' && name.trim() !== '' ? name : null,
+  };
+}
