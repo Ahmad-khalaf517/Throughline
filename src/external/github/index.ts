@@ -91,6 +91,19 @@ export class GithubOperationFailedError extends Error {
   }
 }
 
+/**
+ * `checkRepoName` only: GitHub answered the name lookup with a definitive 4xx
+ * other than "not found" (e.g. 401/403 for an unusable `GITHUB_TOKEN`). Not a
+ * `GithubOperationFailedError` - a lookup is not an `external_operation`, so
+ * there is no row to fail. `message` already names GitHub's own reason.
+ */
+export class GithubLookupRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GithubLookupRejectedError';
+  }
+}
+
 export class GithubOperationRefusedError extends Error {
   constructor(reason: string) {
     super(`GitHub operation refused: ${reason}`);
@@ -319,6 +332,42 @@ async function resolveApprovedSelection(
 }
 
 // ---------------------------------------------------------------------------
+// Repository-name availability - lets the user try names before `initRepo`.
+// ---------------------------------------------------------------------------
+
+export interface RepoNameCheck {
+  /** What `initRepo` would actually create: the input run through `normalizeRepoName`. Empty when `invalid`. */
+  repoName: string;
+  /** `invalid` = nothing usable is left after normalization (no GitHub call is made). */
+  status: 'available' | 'taken' | 'invalid';
+}
+
+/**
+ * Read-only: one `GET /repos/{owner}/{name}` under the configured owner, no
+ * DB and no operation row. Advisory only - `initRepo` stays the authority
+ * (its create call still answers 422 `name_taken_by_other` if the name is
+ * gone by then, or if the token cannot see a private repo that already uses
+ * it, which reads as 404 here).
+ */
+export async function checkRepoName(repoName: string): Promise<RepoNameCheck> {
+  const normalized = normalizeRepoName(repoName);
+  if (!normalized) return { repoName: normalized, status: 'invalid' };
+
+  try {
+    await createOctokitClient().rest.repos.get({ owner: requireOwner(), repo: normalized });
+    return { repoName: normalized, status: 'taken' };
+  } catch (error) {
+    if (error instanceof RequestError && error.status === 404) {
+      return { repoName: normalized, status: 'available' };
+    }
+    if (isDefinitiveRejection(error)) {
+      throw new GithubLookupRejectedError(describeRejection(error, 'check the repository name'));
+    }
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // FR-030 - preview.
 // ---------------------------------------------------------------------------
 
@@ -384,7 +433,7 @@ function isDefinitiveRejection(error: unknown): error is RequestError {
  * `reconciliation_required` forever (reconcile finds no repo and never
  * resends), and the user only ever saw "Something went wrong."
  */
-function describeRejection(error: RequestError): string {
+function describeRejection(error: RequestError, action: string): string {
   const data: unknown = error.response?.data;
   const githubMessage =
     typeof data === 'object' && data !== null && 'message' in data
@@ -396,12 +445,12 @@ function describeRejection(error: RequestError): string {
   }
   if (error.status === 403) {
     return (
-      `GitHub refused to create the repository (${detail}) - the configured GITHUB_TOKEN ` +
-      'is not allowed to create repositories for this account. Use a token with ' +
-      'repository-creation access (e.g. a classic token with the `repo` scope).'
+      `GitHub refused to ${action} (${detail}) - the configured GITHUB_TOKEN does not have ` +
+      'the access this needs. Use a token with repository access (e.g. a classic token with ' +
+      'the `repo` scope).'
     );
   }
-  return `GitHub rejected the request to create the repository (${detail}).`;
+  return `GitHub rejected the request to ${action} (${detail}).`;
 }
 
 async function sendCreateRepo(args: {
@@ -445,7 +494,7 @@ async function sendCreateRepo(args: {
       throw new DefinitiveProviderError('name_taken_by_other');
     }
     if (isDefinitiveRejection(error)) {
-      throw new DefinitiveProviderError(describeRejection(error));
+      throw new DefinitiveProviderError(describeRejection(error, 'create the repository'));
     }
     throw error;
   }

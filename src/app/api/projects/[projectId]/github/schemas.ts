@@ -6,6 +6,10 @@ export const githubPreviewSchema = z.object({
   repoName: z.string().min(1, 'repoName is required'),
 });
 
+export const githubCheckNameSchema = z.object({
+  repoName: z.string().min(1, 'repoName is required'),
+});
+
 export const githubInitSchema = z.object({
   repoName: z.string().min(1, 'repoName is required'),
   impactAcknowledged: z.boolean(),

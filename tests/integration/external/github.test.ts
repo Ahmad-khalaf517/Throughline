@@ -780,4 +780,90 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       });
     });
   });
+
+  // `checkRepoName` backs POST .../github/check-name - the advisory "is this
+  // name free?" answer shown while the user types. Read-only: no operation
+  // row, and no repository is ever created by asking.
+  describe('checkRepoName - repository-name availability', () => {
+    function respondingToLookupWith(
+      fake: ReturnType<typeof createFakeGitHub>,
+      status: number,
+      body: unknown,
+    ) {
+      return async (url: string | URL, init?: RequestInit): Promise<Response> => {
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (method === 'GET' && /^\/repos\/[^/]+\/[^/]+$/.test(new URL(url).pathname)) {
+          return new Response(JSON.stringify(body), {
+            status,
+            headers: { 'content-type': 'application/json; charset=utf-8' },
+          });
+        }
+        return fake.fetch(url, init);
+      };
+    }
+
+    it('reports a free name as available, returns the normalized name, and creates nothing', async () => {
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        await expect(github.checkRepoName('My New Repo!')).resolves.toEqual({
+          repoName: 'my-new-repo',
+          status: 'available',
+        });
+      });
+
+      expect(fake.repos.size).toBe(0);
+    });
+
+    it('reports an existing repository at that name as taken, whoever owns it', async () => {
+      const fake = createFakeGitHub(FAKE_OWNER);
+      fake.seedForeignRepo('already-here', 'some unrelated description');
+
+      await withFakeFetch(fake.fetch, async () => {
+        await expect(github.checkRepoName('Already Here')).resolves.toEqual({
+          repoName: 'already-here',
+          status: 'taken',
+        });
+      });
+    });
+
+    it('reports a name with nothing usable left as invalid without calling GitHub at all', async () => {
+      const neverCalled = vi.fn(async () => {
+        throw new Error('GitHub must not be called for an invalid name');
+      });
+
+      await withFakeFetch(neverCalled, async () => {
+        await expect(github.checkRepoName('!!! ???')).resolves.toEqual({
+          repoName: '',
+          status: 'invalid',
+        });
+      });
+
+      expect(neverCalled).not.toHaveBeenCalled();
+    });
+
+    it("turns a definitive 4xx other than not-found into GithubLookupRejectedError carrying GitHub's reason", async () => {
+      const fetchImpl = respondingToLookupWith(createFakeGitHub(FAKE_OWNER), 403, {
+        message: 'Resource not accessible by personal access token',
+      });
+
+      await withFakeFetch(fetchImpl, async () => {
+        const failure = await github.checkRepoName('some-name').catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(github.GithubLookupRejectedError);
+        expect((failure as Error).message).toMatch(/403: Resource not accessible/);
+      });
+    });
+
+    it('lets a 5xx propagate unchanged - it says nothing about the name, so it is not a rejection', async () => {
+      const fetchImpl = respondingToLookupWith(createFakeGitHub(FAKE_OWNER), 503, {
+        message: 'Service Unavailable',
+      });
+
+      await withFakeFetch(fetchImpl, async () => {
+        const failure = await github.checkRepoName('some-name').catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).not.toBeInstanceOf(github.GithubLookupRejectedError);
+      });
+    });
+  });
 });

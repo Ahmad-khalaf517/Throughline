@@ -7,8 +7,11 @@ import { FormMessage } from '@/components/auth/form-message';
 import type { ExternalRefDTO, ImpactRowDTO } from '@/lib/serialize';
 import {
   describeExternalError,
+  describeRepoNameAvailability,
   isExternalWriteBlocked,
+  isRepoNameBlocked,
   readImpactFromError,
+  type RepoNameAvailability,
 } from '@/lib/external-preview';
 import { PreviewShell, type PreviewState } from './preview-shell';
 import { ImpactGate } from './impact-gate';
@@ -31,6 +34,16 @@ interface ErrorBody {
   error?: { code?: string; message?: string; details?: { impact?: ImpactRowDTO[] } };
 }
 
+// How long the field must sit unchanged before it is checked against GitHub -
+// one request per pause in typing, not one per keystroke.
+const AVAILABILITY_DEBOUNCE_MS = 500;
+
+const AVAILABILITY_TONE_CLASSNAME = {
+  neutral: 'text-secondary',
+  success: 'text-primary',
+  error: 'text-error',
+} as const;
+
 const INPUT_CLASSNAME =
   'border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus:border-primary focus:bg-surface-container-low focus:ring-primary h-11 w-full rounded-lg border px-3.5 text-sm transition-colors focus:ring-1 focus:outline-none';
 
@@ -39,7 +52,8 @@ const SUBMIT_CLASSNAME =
 
 /**
  * `POST /api/projects/:projectId/github/preview` + `.../github/init`
- * (API Contracts section 8; E5-S9). Client-`fetch` mutation pattern copied
+ * (API Contracts section 8; E5-S9), plus `.../github/check-name` so the user
+ * can see whether a name is free before submitting. Client-`fetch` mutation pattern copied
  * from `new-project-form.tsx`: `pending`/`error` state, `401 -> /sign-in`,
  * `body?.error?.message`, a `catch` -> "Could not reach the server" branch.
  *
@@ -58,6 +72,8 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [result, setResult] = useState<GithubWriteResult | null>(null);
+  const [availability, setAvailability] = useState<RepoNameAvailability | null>(null);
+  const typedName = repoName.trim();
 
   useEffect(() => {
     let cancelled = false;
@@ -119,6 +135,61 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
       cancelled = true;
     };
   }, [projectId, router]);
+
+  // `POST .../github/check-name` (API Contracts section 8), advisory only:
+  // `github/init` still decides for real. Waits for the preview (which
+  // supplies the first name to check), then re-checks a moment after every
+  // edit. No state is set synchronously here - "checking" is derived from
+  // `availability` being for different text than the field holds now.
+  useEffect(() => {
+    if (state.status !== 'ready' || result || typedName === '') return;
+
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/projects/${projectId}/github/check-name`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoName: typedName }),
+          signal: controller.signal,
+        });
+
+        if (response.status === 401) {
+          router.push('/sign-in');
+          return;
+        }
+
+        const body = await response.json();
+        if (controller.signal.aborted) return;
+
+        if (!response.ok) {
+          setAvailability({
+            kind: 'error',
+            typed: typedName,
+            message: (body as ErrorBody).error?.message ?? 'Something went wrong.',
+          });
+          return;
+        }
+
+        const check = body as { repoName: string; status: 'available' | 'taken' | 'invalid' };
+        setAvailability({ kind: check.status, typed: typedName, repoName: check.repoName });
+      } catch {
+        if (controller.signal.aborted) return;
+        setAvailability({
+          kind: 'error',
+          typed: typedName,
+          message: 'Could not reach the server.',
+        });
+      }
+    }, AVAILABILITY_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [projectId, router, state.status, result, typedName]);
+
+  const availabilityCopy = describeRepoNameAvailability(availability, typedName);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -214,8 +285,22 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
                 id="github-repo-name"
                 value={repoName}
                 onChange={(event) => setRepoName(event.target.value)}
+                aria-describedby="github-repo-name-availability"
+                aria-invalid={isRepoNameBlocked(availability, typedName) || undefined}
+                autoComplete="off"
+                spellCheck={false}
                 className={INPUT_CLASSNAME}
               />
+              <p
+                id="github-repo-name-availability"
+                role="status"
+                aria-live="polite"
+                className={`min-h-4 text-xs ${
+                  availabilityCopy ? AVAILABILITY_TONE_CLASSNAME[availabilityCopy.tone] : ''
+                }`}
+              >
+                {availabilityCopy?.text}
+              </p>
             </FieldShell>
 
             <ImpactGate
@@ -231,7 +316,8 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
               type="submit"
               disabled={
                 submitting ||
-                repoName.trim().length === 0 ||
+                typedName.length === 0 ||
+                isRepoNameBlocked(availability, typedName) ||
                 isExternalWriteBlocked(preview.impact, acknowledged)
               }
               className={SUBMIT_CLASSNAME}

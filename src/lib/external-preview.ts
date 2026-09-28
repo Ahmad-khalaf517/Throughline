@@ -61,6 +61,75 @@ export function missingJiraDecisions(
     .map((item) => item.logicalItemId);
 }
 
+/**
+ * The last answer `POST .../github/check-name` gave (API Contracts section 8),
+ * tagged with the exact text it was asked about (`typed`, already trimmed).
+ * `error` is "couldn't ask" (network, unusable GitHub credential) - distinct
+ * from a real `taken`/`invalid` answer, and never blocks a submit.
+ */
+export type RepoNameAvailability =
+  | { kind: 'available' | 'taken' | 'invalid'; typed: string; repoName: string }
+  | { kind: 'error'; typed: string; message: string };
+
+export interface RepoNameAvailabilityCopy {
+  tone: 'neutral' | 'success' | 'error';
+  text: string;
+}
+
+/**
+ * What to show under the repository-name field, or `null` for an empty field.
+ * "Checking" is derived, not stored: any answer for text other than what is in
+ * the field right now is stale (the user kept typing), so it reads as
+ * checking until an answer for the current text arrives. That keeps a slow
+ * response for an old name from ever being shown against a new one.
+ */
+export function describeRepoNameAvailability(
+  latest: RepoNameAvailability | null,
+  typedName: string,
+): RepoNameAvailabilityCopy | null {
+  if (typedName === '') return null;
+  if (!latest || latest.typed !== typedName) {
+    return { tone: 'neutral', text: 'Checking availability…' };
+  }
+  switch (latest.kind) {
+    case 'available':
+      return {
+        tone: 'success',
+        text:
+          latest.repoName === typedName
+            ? `"${latest.repoName}" is available.`
+            : `"${latest.repoName}" is available - the repository will be created with that name.`,
+      };
+    case 'taken':
+      return {
+        tone: 'error',
+        text: `"${latest.repoName}" is already taken on this GitHub account - pick a different name.`,
+      };
+    case 'invalid':
+      return {
+        tone: 'error',
+        text: 'Use letters, numbers and hyphens - nothing usable is left in that name.',
+      };
+    case 'error':
+      return { tone: 'error', text: `Couldn't check availability. ${latest.message}` };
+  }
+}
+
+/**
+ * Disables "Create repository" only for a *known-bad* name for the text
+ * currently in the field. A stale, missing or failed check never blocks: the
+ * server (`github/init`) is the authority and still answers
+ * `NAME_TAKEN_BY_OTHER` if the name is unusable, so a check that could not run
+ * must not lock the user out.
+ */
+export function isRepoNameBlocked(latest: RepoNameAvailability | null, typedName: string): boolean {
+  return (
+    latest !== null &&
+    latest.typed === typedName &&
+    (latest.kind === 'taken' || latest.kind === 'invalid')
+  );
+}
+
 export interface OperationStatusCopy {
   label: string;
   detail: string;
