@@ -4,9 +4,12 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { PROJECT_SECTIONS } from './project-navigation';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function ProjectSidebar() {
   const pathname = usePathname();
-  const projectId = pathname.split('/')[2];
+  const segment = pathname.split('/')[2];
+  const projectId = segment && UUID_RE.test(segment) ? segment : null;
   const basePath = projectId ? `/projects/${projectId}` : null;
 
   return (

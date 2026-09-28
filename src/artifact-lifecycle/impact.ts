@@ -18,6 +18,7 @@ import {
   getItemVersionProjectIds as readItemVersionProjectIds,
 } from '@/lineage/identity';
 import { acknowledge, getWarnings, type ImpactRow } from '@/lineage/impact';
+import { toImpactRowDTO, type ImpactRowDTO } from '@/lib/serialize';
 import { UUID_RE } from './shared';
 
 // Code-unit order, not `localeCompare`: every value compared below is a
@@ -48,6 +49,22 @@ export async function getImpactWarnings(projectId: string): Promise<ImpactRow[]>
       compareStrings(a.subjectKind, b.subjectKind) ||
       compareStrings(a.subjectId, b.subjectId),
   );
+}
+
+/**
+ * `getImpactWarnings` with every row's display keys resolved server-side
+ * (`ImpactRowDTO`, API Contracts 1.8) - the shape the warnings/dependencies
+ * pages need in one call. Same "compose above" shape `getCurrentItemImpactCauses`
+ * already uses just above for its own narrower (item-scoped) case: this module
+ * may reach `identity.getDisplayKeysByItemVersionId` (layer 1) to do the
+ * resolution; a page calling this directly may not reach layer 1 itself.
+ */
+export async function getImpactWarningsResolved(projectId: string): Promise<ImpactRowDTO[]> {
+  const warnings = await getImpactWarnings(projectId);
+  if (!warnings.length) return [];
+  const pathIds = [...new Set(warnings.flatMap((row) => [row.rootItemVersionId, ...row.path]))];
+  const labels = await withTx((tx) => getDisplayKeysByItemVersionId(tx, pathIds));
+  return warnings.map((row) => toImpactRowDTO(row, labels));
 }
 
 export interface ItemImpactCause {
