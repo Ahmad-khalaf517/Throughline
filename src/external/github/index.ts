@@ -497,7 +497,13 @@ async function sendCreateRepo(args: {
     const response = await args.octokit.rest.repos.createForAuthenticatedUser({
       name: args.repoName,
       description: `${MARKER_PREFIX}${args.marker}`,
-      private: true,
+      // Always public: the repository exists to be shown (demoed, linked,
+      // read by people without access to Throughline), and everything
+      // written to it - README, ADRs, lineage.json - is architecture
+      // documentation and ids, never a secret. There is deliberately no
+      // visibility option (FR-030 only asks for one "if configurable"); the
+      // GitHub screen tells the user up front that the repository is public.
+      private: false,
     });
     created = {
       id: response.data.id,

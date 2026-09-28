@@ -151,6 +151,8 @@ function createFakeGitHub(owner: string) {
   const repos = new Map<string, FakeRepo>();
   // `<repo>/<path>` -> decoded file text, for every contents-API write.
   const files = new Map<string, string>();
+  // Every `POST /user/repos` body received, in order.
+  const createRequests: { name: string; description?: string; private?: boolean }[] = [];
 
   function repoKey(name: string): string {
     return `${owner}/${name}`;
@@ -193,8 +195,13 @@ function createFakeGitHub(owner: string) {
 
     if (method === 'POST' && pathname === '/user/repos') {
       const body = init?.body
-        ? (JSON.parse(String(init.body)) as { name: string; description?: string })
+        ? (JSON.parse(String(init.body)) as {
+            name: string;
+            description?: string;
+            private?: boolean;
+          })
         : { name: '' };
+      createRequests.push(body);
       const fullName = repoKey(body.name);
       if (repos.has(fullName)) {
         return jsonResponse(422, {
@@ -249,7 +256,7 @@ function createFakeGitHub(owner: string) {
     throw new Error(`fake GitHub fetch: unhandled ${method} ${pathname}`);
   }
 
-  return { fetch: fetchImpl, seedForeignRepo, repos, files };
+  return { fetch: fetchImpl, seedForeignRepo, repos, files, createRequests };
 }
 
 // Thin wrapper implementing "simulate a lost response" (ERD 7.2) on top of
@@ -967,6 +974,24 @@ describe('github (E4-S2 / SCRUM-51)', () => {
   // The files `initRepo` commits carry the real architecture, read from the
   // selected option and each ADR's item-version payload (see repo-docs.ts,
   // whose builders are unit-tested on their own) - not just ids.
+  describe('initRepo - repository visibility', () => {
+    it('always asks GitHub for a public repository, never a private one', async () => {
+      const { architectureVersionId } = await approvedArchitecture('github visibility');
+      const repoName = `public-repo-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        await github.initRepo(architectureVersionId, repoName);
+      });
+
+      expect(fake.createRequests).toHaveLength(1);
+      expect(fake.createRequests[0]).toMatchObject({
+        name: github.normalizeRepoName(repoName),
+        private: false,
+      });
+    });
+  });
+
   describe('initRepo - repository documentation content', () => {
     it("commits the ADR's decision text and the option's stack table, not just provenance ids", async () => {
       const { projectId } = await fx.createProjectWithOwner(sql, { name: 'github docs content' });

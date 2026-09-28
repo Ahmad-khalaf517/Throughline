@@ -277,11 +277,19 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
             <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
               <p className="text-on-surface text-sm font-medium">
                 Mode: <span className="font-mono-code">{preview.mode}</span>
+                <span className="text-outline mx-2" aria-hidden="true">
+                  ·
+                </span>
+                Visibility: <span className="font-mono-code">public</span>
               </p>
               <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
                 {preview.mode === 'scaffold'
                   ? 'This stack matches the supported starter, but starter files are not generated yet - the repository is created with documentation only: a README with the stack and trade-offs, and one ADR per approved decision.'
                   : 'Creates a repository with documentation only - a README with the stack and trade-offs, and one ADR per approved decision. This stack has no generated scaffold.'}
+              </p>
+              <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
+                The repository is created <strong className="font-medium">public</strong> - anyone
+                on GitHub can read its README and ADRs.
               </p>
             </div>
 
