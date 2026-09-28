@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { LogOut, Pencil } from 'lucide-react';
+import { friendlyNameFromEmail } from '@/lib/utils';
 import { EditProfileDialog, type UpdateDisplayNameState } from './edit-profile-dialog';
 
 interface UserMenuProps {
@@ -18,25 +19,6 @@ interface UserMenuProps {
   ) => Promise<UpdateDisplayNameState>;
 }
 
-/**
- * `displayName ?? friendlyNameFromEmail(email)` used to be the caller's job
- * (`projects/layout.tsx` pre-merged `appUser?.displayName ?? user.email`),
- * which meant a `null` displayName fell all the way back to a raw email
- * address in the header. Splitting the local part on `.`/`_`/`-` and
- * title-casing each piece turns `kassem.amin22` into "Kassem Amin22" - not
- * perfect, but a name-shaped label instead of a raw address.
- */
-function friendlyNameFromEmail(email: string): string {
-  const local = email.split('@')[0] ?? email;
-  return (
-    local
-      .split(/[._-]+/)
-      .filter(Boolean)
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(' ') || email
-  );
-}
-
 // `label` is `displayName ?? friendlyNameFromEmail(email)` - when it's still
 // an email-shaped fallback, split on the local part so initials read as "KA"
 // rather than the whole address's first two characters.
@@ -51,11 +33,12 @@ function initialsOf(label: string): string {
 
 /**
  * Avatar + name trigger for the dashboard shell header, opening a small menu
- * with the full name/email (the header's own label truncates) and sign out.
- * No dropdown-menu primitive exists in this codebase yet, so this is a
- * minimal self-contained popover - same reasoning as review/item-edit-dialog.tsx's
- * hand-rolled dialog: Escape and outside-click close it, focus returns to the
- * trigger on close (screen-kit skill's keyboard-operability bar).
+ * with the full name/email (the header's own label truncates), profile
+ * editing, and sign out. No dropdown-menu primitive exists in this codebase
+ * yet, so this is a minimal self-contained popover - same reasoning as
+ * review/item-edit-dialog.tsx's hand-rolled dialog: Escape and outside-click
+ * close it, focus returns to the trigger on close (screen-kit skill's
+ * keyboard-operability bar).
  */
 export function UserMenu({
   displayName,
@@ -63,11 +46,11 @@ export function UserMenu({
   signOutAction,
   updateDisplayNameAction,
 }: UserMenuProps) {
+  const label = displayName ?? friendlyNameFromEmail(email);
   const [open, setOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const label = displayName ?? friendlyNameFromEmail(email);
 
   useEffect(() => {
     if (!open) return;
