@@ -427,7 +427,22 @@ async function reconcileAndFinalize(
   operationId: string,
   opts: RunOperationOptions,
 ): Promise<RunOperationResult> {
-  const result = await opts.reconcile();
+  let result: ReconcileResult;
+  try {
+    result = await opts.reconcile();
+  } catch (error) {
+    // Same finalization as `sendAndFinalize`: a definitive rejection thrown
+    // from reconcile() means `failed`. Anything else propagates unchanged and
+    // the row stays `reconciliation_required`.
+    if (error instanceof DefinitiveProviderError) {
+      await db
+        .update(schema.externalOperation)
+        .set({ status: 'failed', errorMessage: error.message })
+        .where(eq(schema.externalOperation.id, operationId));
+      return { status: 'failed', errorMessage: error.message };
+    }
+    throw error;
+  }
   if (result.found === 'foreign') {
     // ERD 7.3/TR 30.1: "exists without the marker, it belongs to someone
     // else: the operation fails definitively" - the same `failed` +

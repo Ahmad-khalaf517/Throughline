@@ -53,15 +53,19 @@
 //     never leaves this process. Disclosed, not papered over: this does NOT
 //     prove the real bucket/network path works, only that the module's own
 //     code correctly drives whatever `fetch` is in play.
-//   - Does NOT validate a real Stitch HTTP endpoint shape - none exists
-//     anywhere. STITCH_API_KEY/STITCH_BASE_URL are blank in this worktree's
-//     .env.local (confirmed by reading it, same as GITHUB_TOKEN/JIRA_* were
-//     for E4-T1/E4-T2). src/external/stitch/index.ts's own header comment
-//     already discloses its POST `/v1/generate` -> `{id,htmlUrl,
-//     screenshotUrl}` shape as an undecided judgment call, unconfirmed by
-//     any real spike. Faking that same shape here does not newly confirm or
-//     deny it - see the live MCP finding below for what WAS actually learned
-//     about real Stitch, empirically, and why it doesn't settle this either.
+//   - Does NOT reach the real Stitch service. src/external/stitch/index.ts
+//     (post SCRUM-90) talks to Stitch through Google's official
+//     `@google/stitch-sdk` (createProject -> project.generate -> screen.
+//     getHtml/getImage download URLs; reconcile finds the marker project via
+//     stitch.projects() and, since Stitch cannot enumerate screens, regenerates
+//     once). STITCH_API_KEY is blank in this worktree's
+//     .env.local, so this script FAKES the SDK boundary itself (prototype
+//     patches on the SDK's own Stitch/Project/Screen classes - see
+//     `installFakeStitchSdk` below); the download URLs the fake screens
+//     return are served by the same in-process fake fetch. That proves this
+//     module's own orchestration against the SDK's real call shapes, not the
+//     real service. (The earlier "invented POST /v1/generate" shape from
+//     E4-S4 no longer exists - it was replaced by the SDK.)
 //
 // ===========================================================================
 // What this run actually found (an empirical, live finding - NOT reproduced
@@ -98,20 +102,17 @@
 //     directly supports FR-054's manual-fallback requirement and the BRD's
 //     own already-flagged risk ("Stitch: Availability/support/pricing risk
 //     must be reassessed before commercialization," BRD line 289).
-//   - Separately: there is no real STITCH_API_KEY/HTTP endpoint for the
-//     "available programmatic workflow" the BRD names - confirmed by reading
-//     this environment's own .env.local (STITCH_API_KEY/SUPABASE_STORAGE_
-//     BUCKET both genuinely blank, same as GITHUB_TOKEN/JIRA_*). The MCP-
-//     based access used above is a fundamentally DIFFERENT integration
-//     surface (Claude-side tool calls, not a server-callable REST endpoint) -
-//     it is NOT something the deployed Next.js app could call the same way,
-//     and it remains genuinely unknown whether a production Throughline
-//     would integrate via a public REST API (if Google ever ships one) or
-//     something else entirely. This gap is real and unresolved: the MCP
-//     finding confirms real resource IDs, real async slowness, and a real
-//     ambiguous-timeout failure mode exist for Stitch in general - it does
-//     NOT confirm or deny src/external/stitch's own invented `POST
-//     /v1/generate` shape either way.
+//   - Historical note (superseded by SCRUM-90): when this spike was first
+//     written, src/external/stitch used an INVENTED `POST /v1/generate`
+//     client because no programmatic Stitch API was known. The official
+//     `@google/stitch-sdk` (the same tool surface the MCP session above used)
+//     is now the integration. A later live smoke test (2026-09-28) found that
+//     `project.screens()` / list_screens returns EMPTY even for a project with
+//     a generated screen, so a lost screen can never be recovered by
+//     enumeration. `reconcileGenerate` therefore does a cheap title-marker
+//     lookup and, when no screen is recoverable, regenerates exactly once
+//     (user-initiated retry only); a still-running server-side generation
+//     from the lost attempt may leave a duplicate orphan on Stitch's side.
 // ===========================================================================
 //
 // What IS real about this run (unlike E4-T1/E4-T2, which had zero real
@@ -135,24 +136,25 @@
 //                                                       real storage client;
 //                                                       only its outbound
 //                                                       fetch is faked)
-//   STITCH_API_KEY / STITCH_BASE_URL            FAKE  (blank in .env.local -
+//   STITCH_API_KEY                              FAKE  (blank in .env.local -
 //                                                       spike-local values set
 //                                                       via process.env below,
 //                                                       before the first
 //                                                       import that reads them)
 //   SUPABASE_STORAGE_BUCKET                     FAKE  (blank in .env.local -
 //                                                       same reason)
-//   Stitch's own HTTP responses                 FAKE  (in-process fake fetch,
-//                                                       same technique as
-//                                                       stitch.test.ts)
+//   @google/stitch-sdk calls                    FAKE  (SDK class prototypes
+//                                                       patched in-process;
+//                                                       asset downloads via
+//                                                       the fake fetch)
 //   Supabase Storage's own HTTP responses        FAKE  (same fetch, same file)
 //
 // Dynamic-import-after-env-setup gotcha (same one tests/integration/
 // external/stitch.test.ts's own header comment documents): src/lib/env.ts
 // parses `process.env` ONCE, at that module's own first import, into a
 // frozen singleton (`export const env = loadEnv()`). Since STITCH_API_KEY/
-// STITCH_BASE_URL/SUPABASE_STORAGE_BUCKET are blank in .env.local, this
-// script must set `process.env.*` for those three BEFORE the first import of
+// SUPABASE_STORAGE_BUCKET are blank in .env.local, this
+// script must set `process.env.*` for those two BEFORE the first import of
 // anything that transitively imports src/lib/env (../src/db, ../src/external/
 // stitch, ...). A static top-level `import` is hoisted and would run before
 // any of this file's own top-level statements regardless of source order, so
@@ -211,16 +213,18 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
-// 1. Fake Stitch API + fake Supabase Storage - ONE combined `fetch`, since
-//    `stitch.generate` calls both through the same global fetch (the Stitch
-//    HTTP client in src/external/stitch/index.ts and @supabase/supabase-js's
-//    own storage client both resolve `fetch` lazily at call time). Close,
+// 1. Fake Stitch assets + fake Supabase Storage - ONE combined `fetch`, since
+//    `stitch.generate` downloads the SDK's asset URLs and uploads to Storage
+//    through the same global fetch (src/external/stitch/index.ts's
+//    `fetchBytes` and @supabase/supabase-js's own storage client both resolve
+//    `fetch` lazily at call time). The SDK calls themselves are faked
+//    separately by `installFakeStitchSdk`. Close,
 //    spike-local adaptation of tests/integration/external/stitch.test.ts's
 //    own `createFakeExternalWorld` - re-declared here rather than imported,
 //    since tests/integration/** is vitest-only test support.
 // ---------------------------------------------------------------------------
 
-const STITCH_BASE_URL = 'https://fake-stitch.spike-e4-s5.test';
+const FAKE_STITCH_ASSET_HOST = 'https://fake-stitch.spike-e4-s5.test';
 const HTML_CONTENT = '<html><body>Spike E4-S5 fake Stitch prototype</body></html>';
 const SCREENSHOT_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]); // fake PNG header
 
@@ -243,32 +247,19 @@ function bodyToBuffer(body: unknown): Buffer {
 }
 
 let nextFakeGenerationId = 1;
+let failNextSdkGenerate = false; // armed by world.setFailNextGenerate, consumed by the faked SDK
 
 function createFakeExternalWorld() {
   const storedObjects = new Map<string, Buffer>(); // key: `${bucket}/${path}`
-  let failNextGenerate = false;
-
   function setFailNextGenerate(value: boolean): void {
-    failNextGenerate = value;
+    failNextSdkGenerate = value;
   }
 
   async function fetchImpl(url: string | URL, init?: RequestInit): Promise<Response> {
     const { pathname } = new URL(url);
     const method = (init?.method ?? 'GET').toUpperCase();
 
-    // --- fake Stitch API ---
-    if (method === 'POST' && pathname === '/v1/generate') {
-      if (failNextGenerate) {
-        failNextGenerate = false;
-        return jsonResponse(422, { error: 'invalid_prompt' }); // definitive 4xx (ERD 7.2)
-      }
-      const id = `spike-gen-${nextFakeGenerationId++}`;
-      return jsonResponse(200, {
-        id,
-        htmlUrl: `${STITCH_BASE_URL}/assets/html/${id}`,
-        screenshotUrl: `${STITCH_BASE_URL}/assets/screenshot/${id}`,
-      });
-    }
+    // --- fake Stitch asset downloads (URLs handed out by the faked SDK) ---
     if (method === 'GET' && pathname.startsWith('/assets/html/')) {
       return new Response(HTML_CONTENT, { status: 200, headers: { 'content-type': 'text/html' } });
     }
@@ -302,6 +293,47 @@ function createFakeExternalWorld() {
   return { fetch: fetchImpl, storedObjects, setFailNextGenerate };
 }
 
+/**
+ * Fakes the `@google/stitch-sdk` boundary by patching the SDK's own class
+ * prototypes (ESM class prototypes are mutable), so the REAL
+ * src/external/stitch module runs unmodified against SDK-shaped objects.
+ * Call shapes mirror the SDK's .d.ts: Stitch.createProject(title) -> Project;
+ * Project.generate(prompt, deviceType) -> Screen; Screen.getHtml()/getImage()
+ * -> download URL strings. A definitive failure is a StitchError
+ * VALIDATION_ERROR (the SDK's 4xx-equivalent).
+ */
+async function installFakeStitchSdk() {
+  const sdk = await import('@google/stitch-sdk');
+  sdk.Stitch.prototype.createProject = async function (title?: string) {
+    const projectId = `spike-proj-${nextFakeGenerationId++}`;
+    return {
+      projectId,
+      id: projectId,
+      data: { name: `projects/${projectId}`, title },
+      generate: async (_prompt: string, _deviceType?: string) => {
+        if (failNextSdkGenerate) {
+          failNextSdkGenerate = false;
+          throw new sdk.StitchError({
+            code: 'VALIDATION_ERROR',
+            message: 'spike fake: invalid prompt',
+            recoverable: false,
+          });
+        }
+        const screenId = `spike-screen-${nextFakeGenerationId++}`;
+        return {
+          projectId,
+          id: screenId,
+          screenId,
+          getHtml: async () => `${FAKE_STITCH_ASSET_HOST}/assets/html/${screenId}`,
+          getImage: async () => `${FAKE_STITCH_ASSET_HOST}/assets/screenshot/${screenId}`,
+        };
+      },
+    } as unknown as Awaited<ReturnType<typeof sdk.Stitch.prototype.createProject>>;
+  };
+  // Never connected, so nothing to close.
+  sdk.StitchToolClient.prototype.close = async () => undefined;
+}
+
 async function withFakeFetch<T>(
   fakeFetch: (url: string | URL, init?: RequestInit) => Promise<Response>,
   fn: () => Promise<T>,
@@ -327,17 +359,17 @@ async function main() {
       'what it explicitly does NOT do, and the live MCP finding folded into this run.',
   );
 
-  // STITCH_API_KEY/STITCH_BASE_URL/SUPABASE_STORAGE_BUCKET are blank in
+  // STITCH_API_KEY/SUPABASE_STORAGE_BUCKET are blank in
   // .env.local - fill in spike-local fake values BEFORE the first import of
   // anything that reads them (src/lib/env.ts's module-level singleton).
   // DATABASE_URL/NEXT_PUBLIC_SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY etc. are
   // already real via .env.local and are left untouched.
   process.env.STITCH_API_KEY = 'spike-e4-s5-fake-key';
-  process.env.STITCH_BASE_URL = STITCH_BASE_URL;
   process.env.SUPABASE_STORAGE_BUCKET = 'spike-e4-s5-stitch-assets';
 
   const { db, schema } = await import('../src/db');
   const stitch = await import('../src/external/stitch');
+  await installFakeStitchSdk();
   const { eq, and } = await import('drizzle-orm');
 
   // -------------------------------------------------------------------------
@@ -789,10 +821,9 @@ async function main() {
       "supporting FR-054 manual fallback and the BRD's own already-flagged Stitch availability risk.",
   );
   console.log(
-    '\nUnresolved gap this run does NOT settle: no real STITCH_API_KEY/HTTP endpoint exists ' +
-      "anywhere in this environment - src/external/stitch's own POST /v1/generate shape remains " +
-      'an undecided judgment call from E4-S4, neither confirmed nor denied by this run or by the ' +
-      'live MCP finding above (a fundamentally different integration surface).',
+    '\nNot proven by this run: the real Stitch service. The @google/stitch-sdk boundary is ' +
+      'faked in-process (installFakeStitchSdk); real generation/reconciliation needs a real ' +
+      'STITCH_API_KEY.',
   );
   console.log('===================================================================\n');
 

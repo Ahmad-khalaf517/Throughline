@@ -1,16 +1,18 @@
 import { createHash } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, inject, it, vi } from 'vitest';
 import type postgres from 'postgres';
 import { connect } from '../support/connection';
 import * as fx from '../support/fixtures';
 import type { JsonValue } from '../support/types';
 
-// `stitch`'s real previewPrompt/generate (E4-S4 / SCRUM-53, Module
-// Boundaries 4.6, ERD 7.5/4.16, TR FR-050..054) against real Testcontainers
-// Postgres, real triggers/CHECKs, and TWO in-process fakes - a raw-fetch
-// "Stitch API" (this module's own judgment-call shape, see
-// src/external/stitch/index.ts's header comment - no real spike has run yet,
-// E4-S5 is next) and a fake Supabase Storage backend (its own real
+// `stitch`'s real previewPrompt/generate/reconcile (E4-S4 / SCRUM-53, reworked
+// onto the official `@google/stitch-sdk` by SCRUM-90; Module Boundaries 4.6,
+// ERD 7.5/4.16, TR FR-050..054) against real Testcontainers Postgres, real
+// triggers/CHECKs, and TWO in-process fakes - a `vi.mock` of
+// `@google/stitch-sdk` (Stitch/StitchToolClient/StitchError with the SDK's real
+// call shapes: createProject -> generate -> getHtml/getImage download URLs,
+// projects()/screens() for reconcile) and a fake fetch that serves the asset
+// download URLs plus a fake Supabase Storage backend (its own real
 // @supabase/supabase-js client is exercised for real; only the underlying
 // `fetch` calls it makes are faked, same "swap fetch, keep the real client
 // code" technique tests/integration/external/jira.test.ts/github.test.ts
@@ -27,10 +29,108 @@ import type { JsonValue } from '../support/types';
 // so every env var it (transitively) reads must be in `process.env` BEFORE
 // the first `await import('@/external/stitch')`.
 
+// ---------------------------------------------------------------------------
+// Fake `@google/stitch-sdk` - hoisted so it is in place before
+// `@/external/stitch` imports the SDK. State lives in `sdkWorld` so tests can
+// script per-call behavior and assert call counts.
+// ---------------------------------------------------------------------------
+
+type GenerateBehavior =
+  | 'ok'
+  | 'validation_error' // definitive: StitchError VALIDATION_ERROR, nothing created
+  | 'network_error' // ambiguous: NETWORK_ERROR, nothing created (no screen)
+  | 'timeout_after_create'; // ambiguous: screen IS created, but the call throws UNKNOWN_ERROR
+
+const sdkWorld = vi.hoisted(() => ({
+  projects: [] as {
+    projectId: string;
+    title: string;
+    screens: { id: string; projectId: string }[];
+  }[],
+  nextId: 1,
+  createProjectCalls: 0,
+  generateCalls: 0,
+  // Real Stitch's list_screens returns EMPTY even for a project with a generated
+  // screen (verified live 2026-09-28), so the default is false. Only the "old
+  // path" test flips it to prove reconcile still adopts a listed screen.
+  screensListable: false,
+  // One-shot: consumed (reset to 'ok') by the next generate() call.
+  nextGenerate: 'ok' as GenerateBehavior,
+  reset() {
+    this.projects = [];
+    this.screensListable = false;
+    this.createProjectCalls = 0;
+    this.generateCalls = 0;
+    this.nextGenerate = 'ok';
+  },
+}));
+
+vi.mock('@google/stitch-sdk', () => {
+  class StitchError extends Error {
+    readonly code: string;
+    constructor(data: { code: string; message: string }) {
+      super(data.message);
+      this.name = 'StitchError';
+      this.code = data.code;
+    }
+  }
+  const assetHost = 'https://fake-stitch.example.test';
+  function toScreen(screen: { id: string; projectId: string }) {
+    return {
+      id: screen.id,
+      screenId: screen.id,
+      projectId: screen.projectId,
+      getHtml: async () => `${assetHost}/assets/html/${screen.id}`,
+      getImage: async () => `${assetHost}/assets/screenshot/${screen.id}`,
+    };
+  }
+  function toProject(record: (typeof sdkWorld.projects)[number]) {
+    return {
+      id: record.projectId,
+      projectId: record.projectId,
+      data: { name: `projects/${record.projectId}`, title: record.title },
+      screens: async () => (sdkWorld.screensListable ? record.screens.map(toScreen) : []),
+      generate: async (_prompt: string, _deviceType?: string) => {
+        sdkWorld.generateCalls += 1;
+        const behavior = sdkWorld.nextGenerate;
+        sdkWorld.nextGenerate = 'ok';
+        if (behavior === 'validation_error') {
+          throw new StitchError({ code: 'VALIDATION_ERROR', message: 'invalid prompt' });
+        }
+        if (behavior === 'network_error') {
+          throw new StitchError({ code: 'NETWORK_ERROR', message: 'connection reset' });
+        }
+        const screen = { id: `screen-${sdkWorld.nextId++}`, projectId: record.projectId };
+        record.screens.push(screen);
+        if (behavior === 'timeout_after_create') {
+          throw new StitchError({ code: 'UNKNOWN_ERROR', message: 'request timed out' });
+        }
+        return toScreen(screen);
+      },
+    };
+  }
+  class StitchToolClient {
+    constructor(_config?: unknown) {}
+    async close(): Promise<void> {}
+  }
+  class Stitch {
+    constructor(_client: unknown) {}
+    async createProject(title?: string) {
+      sdkWorld.createProjectCalls += 1;
+      const record = { projectId: `project-${sdkWorld.nextId++}`, title: title ?? '', screens: [] };
+      sdkWorld.projects.push(record);
+      return toProject(record);
+    }
+    async projects() {
+      return sdkWorld.projects.map(toProject);
+    }
+  }
+  return { Stitch, StitchToolClient, StitchError };
+});
+
 let sql: postgres.Sql;
 let stitch: typeof import('@/external/stitch');
 
-const STITCH_BASE_URL = 'https://fake-stitch.example.test';
 const SUPABASE_URL = 'https://example.test';
 const STORAGE_BUCKET = 'stitch-assets';
 
@@ -51,7 +151,6 @@ beforeAll(async () => {
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
   process.env.NEXT_PUBLIC_SITE_URL = 'http://localhost:3000';
   process.env.STITCH_API_KEY = 'fake-stitch-key';
-  process.env.STITCH_BASE_URL = STITCH_BASE_URL;
   process.env.SUPABASE_STORAGE_BUCKET = STORAGE_BUCKET;
 
   stitch = await import('@/external/stitch');
@@ -134,19 +233,20 @@ async function stitchOutputRows(sourceUiRequirementsVersionId: string) {
 }
 
 async function stitchOperationRows(projectId: string) {
-  return sql<{ operation_key: string; status: string }[]>`
-    SELECT operation_key, status FROM external_operation
+  return sql<{ operation_key: string; status: string; error_message: string | null }[]>`
+    SELECT operation_key, status, error_message FROM external_operation
     WHERE project_id = ${projectId} AND provider = 'stitch'
     ORDER BY created_at
   `;
 }
 
 // ---------------------------------------------------------------------------
-// Fake Stitch API + fake Supabase Storage - one combined `fetch`, since
-// `stitch.generate` calls both through the same global fetch (the Stitch
-// HTTP client and @supabase/supabase-js's own storage client both resolve
-// `fetch` lazily at call time - src/external/stitch/index.ts's and
-// src/auth/supabase-storage.ts's own header comments).
+// Fake asset downloads + fake Supabase Storage - one combined `fetch`, since
+// `stitch.generate` downloads the (faked) SDK's asset URLs and uploads to
+// Storage through the same global fetch (src/external/stitch/index.ts's
+// `fetchBytes` and @supabase/supabase-js's own storage client both resolve
+// `fetch` lazily at call time - src/auth/supabase-storage.ts's own header
+// comment). The SDK calls themselves are faked by the `vi.mock` above.
 // ---------------------------------------------------------------------------
 
 function jsonResponse(status: number, data: unknown): Response {
@@ -163,33 +263,13 @@ function bodyToBuffer(body: unknown): Buffer {
   throw new Error('fake Supabase Storage: unsupported upload body type in test');
 }
 
-let nextFakeGenerationId = 1;
-
 function createFakeExternalWorld() {
   const storedObjects = new Map<string, Buffer>(); // key: `${bucket}/${path}`
-  let failNextGenerate = false;
-
-  function setFailNextGenerate(value: boolean): void {
-    failNextGenerate = value;
-  }
-
   async function fetchImpl(url: string | URL, init?: RequestInit): Promise<Response> {
     const { pathname } = new URL(url);
     const method = (init?.method ?? 'GET').toUpperCase();
 
-    // --- fake Stitch API ---
-    if (method === 'POST' && pathname === '/v1/generate') {
-      if (failNextGenerate) {
-        failNextGenerate = false;
-        return jsonResponse(422, { error: 'invalid_prompt' });
-      }
-      const id = `gen-${nextFakeGenerationId++}`;
-      return jsonResponse(200, {
-        id,
-        htmlUrl: `${STITCH_BASE_URL}/assets/html/${id}`,
-        screenshotUrl: `${STITCH_BASE_URL}/assets/screenshot/${id}`,
-      });
-    }
+    // --- fake Stitch asset downloads (URLs the mocked SDK hands out) ---
     if (method === 'GET' && pathname.startsWith('/assets/html/')) {
       return new Response(HTML_CONTENT, { status: 200, headers: { 'content-type': 'text/html' } });
     }
@@ -219,7 +299,7 @@ function createFakeExternalWorld() {
     throw new Error(`fake fetch: unhandled ${method} ${pathname}`);
   }
 
-  return { fetch: fetchImpl, storedObjects, setFailNextGenerate };
+  return { fetch: fetchImpl, storedObjects };
 }
 
 async function withFakeFetch<T>(
@@ -235,30 +315,6 @@ async function withFakeFetch<T>(
   }
 }
 
-/** Same technique as jira.test.ts/github.test.ts's own dropper: the real fake call still runs to completion; only the caller's view of the response is lost. */
-function createResponseDropper(
-  underlyingFetch: (url: string | URL, init?: RequestInit) => Promise<Response>,
-) {
-  let dropNext = false;
-  function simulateLostResponseOnNextGenerate(): void {
-    dropNext = true;
-  }
-  async function fetchWithDrop(url: string | URL, init?: RequestInit): Promise<Response> {
-    const { pathname } = new URL(url);
-    const method = (init?.method ?? 'GET').toUpperCase();
-    const shouldDrop = method === 'POST' && pathname === '/v1/generate' && dropNext;
-    const response = await underlyingFetch(url, init);
-    if (shouldDrop) {
-      dropNext = false;
-      throw new TypeError(
-        'test-simulated network fault: response lost before the client could observe it',
-      );
-    }
-    return response;
-  }
-  return { fetch: fetchWithDrop, simulateLostResponseOnNextGenerate };
-}
-
 /** Advances the FAKE clock past stitch's 90s RECONCILIATION_THRESHOLD_MS (src/external/operations/index.ts) - same technique jira.test.ts/github.test.ts already use. */
 async function withClockAdvancedPastThreshold<T>(fn: () => Promise<T>): Promise<T> {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -270,7 +326,11 @@ async function withClockAdvancedPastThreshold<T>(fn: () => Promise<T>): Promise<
   }
 }
 
-describe('stitch (E4-S4 / SCRUM-53)', () => {
+describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
+  beforeEach(() => {
+    sdkWorld.reset();
+  });
+
   it('previewPrompt: approved version -> prompt text built from item content + impact shape', async () => {
     const { projectId } = await fx.createProjectWithOwner(sql, { name: 'stitch previewPrompt' });
     const artifactId = await fx.createArtifact(sql, projectId, 'ui_requirements');
@@ -327,6 +387,11 @@ describe('stitch (E4-S4 / SCRUM-53)', () => {
     const world = createFakeExternalWorld();
     const output = await withFakeFetch(world.fetch, () => stitch.generate(versionId));
 
+    // One project per generation, titled with the deterministic operation-key marker.
+    expect(sdkWorld.createProjectCalls).toBe(1);
+    expect(sdkWorld.generateCalls).toBe(1);
+    expect(sdkWorld.projects[0]!.title).toBe(`throughline:stitch:generate:${versionId}`);
+
     expect(output.mode).toBe('api');
     expect(output.externalRefId).not.toBeNull();
     expect(output.htmlStorageKey).toBe(`stitch/${versionId}/index.html`);
@@ -382,7 +447,7 @@ describe('stitch (E4-S4 / SCRUM-53)', () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("generate: Stitch 4xx -> DefinitiveProviderError -> mode='manual_fallback' written directly, no ref, workflow continues", async () => {
+  it("generate: SDK definitive error (VALIDATION_ERROR) -> DefinitiveProviderError -> mode='manual_fallback' written directly, no ref, workflow continues", async () => {
     const { projectId } = await fx.createProjectWithOwner(sql, { name: 'stitch manual fallback' });
     const artifactId = await fx.createArtifact(sql, projectId, 'ui_requirements');
     const { versionId } = await createApprovedUiRequirementsVersion(sql, projectId, artifactId, 1, [
@@ -390,7 +455,7 @@ describe('stitch (E4-S4 / SCRUM-53)', () => {
     ]);
 
     const world = createFakeExternalWorld();
-    world.setFailNextGenerate(true);
+    sdkWorld.nextGenerate = 'validation_error';
 
     // FR-054: does NOT throw - the preserved prompt is the output, and the
     // planning workflow continues.
@@ -410,6 +475,7 @@ describe('stitch (E4-S4 / SCRUM-53)', () => {
     const ops = await stitchOperationRows(projectId);
     expect(ops).toHaveLength(1);
     expect(ops[0]!.status).toBe('failed'); // ERD 7.2: reserved for definitive rejections
+    expect(ops[0]!.error_message).toBe('stitch_generate_rejected:VALIDATION_ERROR');
 
     expect(world.storedObjects.size).toBe(0); // nothing was ever uploaded
   });
@@ -422,7 +488,7 @@ describe('stitch (E4-S4 / SCRUM-53)', () => {
     ]);
 
     const world = createFakeExternalWorld();
-    world.setFailNextGenerate(true);
+    sdkWorld.nextGenerate = 'validation_error';
     const firstAttempt = await withFakeFetch(world.fetch, () => stitch.generate(versionId));
     expect(firstAttempt.mode).toBe('manual_fallback');
     const fallbackRowId = firstAttempt.id;
@@ -446,9 +512,9 @@ describe('stitch (E4-S4 / SCRUM-53)', () => {
     expect(ops[0]!.status).toBe('completed');
   });
 
-  it('reconcile() is an honest not-found stub: an ambiguous send() failure stays reconciliation_required, never silently resolved', async () => {
+  it('SDK ambiguous error (NETWORK_ERROR) -> propagates, operation stays pending; retry past the threshold reconciles by regenerating once in the reused marker project', async () => {
     const { projectId } = await fx.createProjectWithOwner(sql, {
-      name: 'stitch reconciliation stub',
+      name: 'stitch ambiguous no screen',
     });
     const artifactId = await fx.createArtifact(sql, projectId, 'ui_requirements');
     const { versionId } = await createApprovedUiRequirementsVersion(sql, projectId, artifactId, 1, [
@@ -456,36 +522,172 @@ describe('stitch (E4-S4 / SCRUM-53)', () => {
     ]);
 
     const world = createFakeExternalWorld();
-    const dropper = createResponseDropper(world.fetch);
 
-    // First call: the real fake-Stitch generation genuinely happens
-    // underneath, but the caller's view of the response is lost (an
-    // ambiguous failure, NOT a DefinitiveProviderError) - propagates
-    // uncaught, same as github.initRepo's own one-shot behavior. The
-    // operation row is left `pending` (ERD 7.2 R6/R9), not `failed`.
-    dropper.simulateLostResponseOnNextGenerate();
-    await expect(withFakeFetch(dropper.fetch, () => stitch.generate(versionId))).rejects.toThrow(
-      TypeError,
-    );
+    // NOT a DefinitiveProviderError: the StitchError propagates uncaught (ERD
+    // 7.2 R6/R9) and the operation row is left `pending`, not `failed`.
+    sdkWorld.nextGenerate = 'network_error';
+    await expect(
+      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+    ).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
 
     let ops = await stitchOperationRows(projectId);
     expect(ops).toHaveLength(1);
     expect(ops[0]!.status).toBe('pending');
     expect(await stitchOutputRows(versionId)).toHaveLength(0); // nothing written yet
 
-    // Second call, past the reconciliation threshold: the operation moves to
-    // reconciliation_required, and stitch's own reconcile() (ERD 7.5: "Stitch
-    // has no chosen target") always reports not-found - stuck, not silently
-    // resolved either way.
+    // Second call, past the reconciliation threshold: Stitch cannot list
+    // screens, so reconcile() regenerates exactly once, reusing the
+    // marker-titled project (no second createProject).
+    const output = await withClockAdvancedPastThreshold(() =>
+      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+    );
+
+    expect(output.mode).toBe('api');
+    expect(sdkWorld.projects).toHaveLength(1);
+    expect(sdkWorld.createProjectCalls).toBe(1);
+    expect(sdkWorld.generateCalls).toBe(2);
+
+    ops = await stitchOperationRows(projectId);
+    expect(ops).toHaveLength(1); // still the SAME one operation row
+    expect(ops[0]!.status).toBe('completed');
+    expect(await stitchOutputRows(versionId)).toHaveLength(1);
+  });
+
+  it('reconcile-time definitive error (VALIDATION_ERROR) -> manual_fallback, one output row', async () => {
+    const { projectId } = await fx.createProjectWithOwner(sql, {
+      name: 'stitch reconcile definitive',
+    });
+    const artifactId = await fx.createArtifact(sql, projectId, 'ui_requirements');
+    const { versionId } = await createApprovedUiRequirementsVersion(sql, projectId, artifactId, 1, [
+      { screenOrFlow: 'Billing', interactionRequirement: 'Download invoices' },
+    ]);
+
+    const world = createFakeExternalWorld();
+    sdkWorld.nextGenerate = 'network_error';
+    await expect(
+      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+    ).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+
+    sdkWorld.nextGenerate = 'validation_error';
+    const output = await withClockAdvancedPastThreshold(() =>
+      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+    );
+
+    expect(output.mode).toBe('manual_fallback');
+    expect(output.externalRefId).toBeNull();
+    expect(sdkWorld.generateCalls).toBe(2);
+    expect(await stitchOutputRows(versionId)).toHaveLength(1);
+    const ops = await stitchOperationRows(projectId);
+    expect(ops).toHaveLength(1);
+    expect(ops[0]!.status).toBe('failed');
+    expect(ops[0]!.error_message).toBe('stitch_generate_rejected:VALIDATION_ERROR');
+  });
+
+  it('reconcile-time ambiguous error -> still reconciliation_required and retryable (never a silent fallback)', async () => {
+    const { projectId } = await fx.createProjectWithOwner(sql, {
+      name: 'stitch reconcile ambiguous',
+    });
+    const artifactId = await fx.createArtifact(sql, projectId, 'ui_requirements');
+    const { versionId } = await createApprovedUiRequirementsVersion(sql, projectId, artifactId, 1, [
+      { screenOrFlow: 'Team', interactionRequirement: 'Invite members' },
+    ]);
+
+    const world = createFakeExternalWorld();
+    sdkWorld.nextGenerate = 'network_error';
+    await expect(
+      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+    ).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+
+    // The reconcile-time regenerate is ALSO ambiguous.
+    sdkWorld.nextGenerate = 'network_error';
     await expect(
       withClockAdvancedPastThreshold(() =>
         withFakeFetch(world.fetch, () => stitch.generate(versionId)),
       ),
     ).rejects.toThrow(stitch.StitchReconciliationRequiredError);
 
-    ops = await stitchOperationRows(projectId);
-    expect(ops).toHaveLength(1); // still the SAME one operation row
+    expect(sdkWorld.generateCalls).toBe(2);
+    let ops = await stitchOperationRows(projectId);
+    expect(ops).toHaveLength(1);
     expect(ops[0]!.status).toBe('reconciliation_required');
-    expect(await stitchOutputRows(versionId)).toHaveLength(0); // still nothing - never a silent fallback write
+    expect(await stitchOutputRows(versionId)).toHaveLength(0);
+
+    // Retryable: a further user-initiated retry reconciles again and succeeds.
+    const output = await withClockAdvancedPastThreshold(() =>
+      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+    );
+    expect(output.mode).toBe('api');
+    expect(sdkWorld.generateCalls).toBe(3);
+    ops = await stitchOperationRows(projectId);
+    expect(ops[0]!.status).toBe('completed');
+    expect(await stitchOutputRows(versionId)).toHaveLength(1);
+  });
+
+  it('timed-out generate() (screen created server-side, not listable) -> reconcile regenerates once; exactly one stitch_output row (Spike B, TR 42)', async () => {
+    const { projectId } = await fx.createProjectWithOwner(sql, { name: 'stitch reconcile regen' });
+    const artifactId = await fx.createArtifact(sql, projectId, 'ui_requirements');
+    const { versionId } = await createApprovedUiRequirementsVersion(sql, projectId, artifactId, 1, [
+      { screenOrFlow: 'Audit trail', interactionRequirement: 'Filter by date' },
+    ]);
+
+    const world = createFakeExternalWorld();
+    sdkWorld.nextGenerate = 'timeout_after_create';
+    await expect(
+      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+    ).rejects.toMatchObject({ code: 'UNKNOWN_ERROR' });
+
+    const output = await withClockAdvancedPastThreshold(() =>
+      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+    );
+
+    expect(output.mode).toBe('api');
+    expect(sdkWorld.generateCalls).toBe(2); // lost screen is unlistable -> regenerated
+    expect(sdkWorld.createProjectCalls).toBe(1); // marker project reused
+    expect(await stitchOutputRows(versionId)).toHaveLength(1);
+    expect((await stitchOperationRows(projectId))[0]!.status).toBe('completed');
+  });
+
+  it('reconcile adopts a screen if screens() ever lists one -> completes with assets, without a second generate() call', async () => {
+    const { projectId } = await fx.createProjectWithOwner(sql, { name: 'stitch reconcile found' });
+    const artifactId = await fx.createArtifact(sql, projectId, 'ui_requirements');
+    const { versionId } = await createApprovedUiRequirementsVersion(sql, projectId, artifactId, 1, [
+      { screenOrFlow: 'Audit log', interactionRequirement: 'Filter by actor' },
+    ]);
+
+    const world = createFakeExternalWorld();
+
+    // The screen IS created on Stitch's side, but the client-side call times
+    // out (UNKNOWN_ERROR - what the SDK wraps timeouts into): ambiguous.
+    sdkWorld.screensListable = true; // hypothetical: the API starts listing screens
+    sdkWorld.nextGenerate = 'timeout_after_create';
+    await expect(
+      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+    ).rejects.toMatchObject({ code: 'UNKNOWN_ERROR' });
+    expect((await stitchOperationRows(projectId))[0]!.status).toBe('pending');
+    expect(await stitchOutputRows(versionId)).toHaveLength(0);
+    expect(world.storedObjects.size).toBe(0); // the timed-out send() never got to upload
+
+    const output = await withClockAdvancedPastThreshold(() =>
+      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+    );
+
+    expect(sdkWorld.generateCalls).toBe(1); // reconcile adopted the screen; never re-sent
+    expect(sdkWorld.createProjectCalls).toBe(1);
+
+    expect(output.mode).toBe('api');
+    expect(output.externalRefId).not.toBeNull();
+    expect(output.htmlStorageKey).toBe(`stitch/${versionId}/index.html`);
+    expect(output.htmlChecksum).toBe(sha256Hex(Buffer.from(HTML_CONTENT)));
+    expect(output.screenshotChecksum).toBe(sha256Hex(SCREENSHOT_BYTES));
+    expect(
+      world.storedObjects.get(`${STORAGE_BUCKET}/stitch/${versionId}/index.html`)?.toString(),
+    ).toBe(HTML_CONTENT);
+
+    const ops = await stitchOperationRows(projectId);
+    expect(ops).toHaveLength(1);
+    expect(ops[0]!.status).toBe('completed');
+    const rows = await stitchOutputRows(versionId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.mode).toBe('api');
   });
 });
