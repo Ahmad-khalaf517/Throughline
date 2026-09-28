@@ -60,7 +60,8 @@ const SUBMIT_CLASSNAME =
  * `body?.error?.message`, a `catch` -> "Could not reach the server" branch.
  *
  * `github/preview` **ignores the request's `repoName`** and always returns
- * its own deterministic suggestion (that route's own header comment) - a
+ * its own suggestion (the project's name, normalized - that route's own
+ * header comment) - a
  * placeholder is sent on first load purely to satisfy the schema's
  * `min(1)`, then the field is populated from the response's `repoName`, not
  * the other way around. This is surprising, hence spelled out here.

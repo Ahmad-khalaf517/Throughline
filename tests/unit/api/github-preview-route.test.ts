@@ -173,6 +173,21 @@ describe('POST /api/projects/:projectId/github/preview', () => {
       repoName: 'throughline-project-project-1',
       impact: [],
     });
-    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1');
+    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1', 'x');
+  });
+
+  it("hands previewInit the project's own name so the suggestion can be based on it", async () => {
+    mockedGetProjectById.mockResolvedValue({ ...baseProject(), name: 'ShiftSwap Verify' });
+    mockedPreviewInit.mockResolvedValue({
+      mode: 'docs-only',
+      repoName: 'shiftswap-verify',
+      impact: [],
+    });
+
+    const response = await POST(postRequest({ repoName: 'ignored' }), paramsFor('project-1'));
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).repoName).toBe('shiftswap-verify');
+    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1', 'ShiftSwap Verify');
   });
 });

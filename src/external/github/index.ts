@@ -301,23 +301,6 @@ function decideMode(stack: unknown): 'scaffold' | 'docs-only' {
   return stackMatchesPinnedReference(stack) ? 'scaffold' : 'docs-only';
 }
 
-/**
- * A safe, always-available SUGGESTED repository name for the preview.
- * Judgment call: derived from `projectId` alone, not `project.name` -
- * `project` is owned by artifact-lifecycle (layer 2), unreachable from this
- * layer-5 module (eslint.config.mjs's layer5-external-provider allow-list
- * only permits layer 0-4 plus this module's paired layer-3 module).
- * `initRepo` never recomputes this - it takes `repoName` as an explicit
- * parameter (Module Boundaries 4.6's own signature) - so the future API
- * route (E4-S6, layer 6, which CAN read `project.name` via
- * artifact-lifecycle) is free to show the user a prettier suggestion before
- * calling `initRepo`; this is only a safe fallback, not the only name ever
- * used.
- */
-function suggestRepoName(projectId: string): string {
-  return normalizeRepoName(`throughline-project-${projectId}`);
-}
-
 async function resolveApprovedSelection(
   architectureVersionId: string,
 ): Promise<SelectedArchitectureOption> {
@@ -367,16 +350,57 @@ export async function checkRepoName(repoName: string): Promise<RepoNameCheck> {
   }
 }
 
+// Each attempt is one GitHub lookup, so this bounds the preview's added latency.
+const MAX_SUGGESTION_ATTEMPTS = 10;
+
+/**
+ * The repository name the preview SUGGESTS, in order of preference:
+ *  1. the project's own name, normalized (`ShiftSwap Verify` ->
+ *     `shiftswap-verify`) - a name the user already chose and will recognize;
+ *  2. that name with a numeric suffix (`-2`, `-3`, ...) when GitHub says it is
+ *     already taken, for up to MAX_SUGGESTION_ATTEMPTS lookups;
+ *  3. `throughline-project-<projectId>`, which cannot collide, when there is
+ *     no usable project name or every attempt was taken.
+ *
+ * `project` is owned by artifact-lifecycle (layer 2), unreachable from this
+ * layer-5 module (eslint.config.mjs's layer5-external-provider allow-list only
+ * permits layer 0-4 plus this module's paired layer-3 module), so the caller -
+ * the preview route, layer 6 - hands the name in. Without one, nothing here
+ * touches the network. `initRepo` never recomputes this; it takes `repoName`
+ * as an explicit parameter.
+ *
+ * A lookup that cannot be made (unusable token, GitHub down) must not break
+ * the preview: a suggestion is advisory and `checkRepoName` reports the real
+ * problem separately, so the unverified project-name slug is returned.
+ */
+async function suggestRepoName(projectId: string, projectName?: string): Promise<string> {
+  const projectIdName = normalizeRepoName(`throughline-project-${projectId}`);
+  const base = projectName ? normalizeRepoName(projectName) : '';
+  if (!base) return projectIdName;
+
+  try {
+    for (let attempt = 1; attempt <= MAX_SUGGESTION_ATTEMPTS; attempt++) {
+      const candidate = attempt === 1 ? base : `${base}-${attempt}`;
+      const { status } = await checkRepoName(candidate);
+      if (status === 'available') return candidate;
+    }
+    return projectIdName;
+  } catch {
+    return base;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // FR-030 - preview.
 // ---------------------------------------------------------------------------
 
 export async function previewInit(
   architectureVersionId: string,
+  projectName?: string,
 ): Promise<{ mode: 'scaffold' | 'docs-only'; repoName: string; impact: ImpactRow[] }> {
   const selected = await resolveApprovedSelection(architectureVersionId);
   const mode = decideMode(selected.option.stack);
-  const repoName = suggestRepoName(selected.projectId);
+  const repoName = await suggestRepoName(selected.projectId, projectName);
 
   // TR FR-085: "Every external-write preview... shows current impact for
   // the items it would create from." There is no `external_ref` yet at

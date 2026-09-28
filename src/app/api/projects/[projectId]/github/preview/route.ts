@@ -25,11 +25,14 @@ async function readJsonBody(request: Request): Promise<unknown> {
 /**
  * `POST /api/projects/:projectId/github/preview` -> API Contracts section 8:
  * `github.previewInit`. `previewInit` ignores the request's `repoName` and
- * always returns its own deterministic suggestion (`suggestRepoName`'s own
- * comment in src/external/github/index.ts anticipates exactly this route) -
- * the request body is still zod-validated (a malformed body is a genuine
- * 400), just never passed through; the request's `repoName` only becomes
- * authoritative at `POST .../github/init`.
+ * always returns its own suggestion: the project's name, normalized (with a
+ * numeric suffix if GitHub says that name is taken), or a project-id-derived
+ * name when there is no usable one - see `suggestRepoName` in
+ * src/external/github/index.ts. This route is what hands it `project.name`,
+ * which that layer-5 module cannot read itself. The request body is still
+ * zod-validated (a malformed body is a genuine 400), just never passed
+ * through; the request's `repoName` only becomes authoritative at
+ * `POST .../github/init`.
  *
  * artifact-lifecycle.getProjectById is called directly - documented
  * exception 3 in src/app/api/README.md.
@@ -69,7 +72,7 @@ export async function POST(request: Request, { params }: RouteParams) {
 
     let preview;
     try {
-      preview = await previewInit(architectureVersionId);
+      preview = await previewInit(architectureVersionId, project.name);
     } catch (error) {
       if (
         error instanceof ArchitectureOptionNotSelectedError ||

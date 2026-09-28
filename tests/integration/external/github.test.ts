@@ -298,6 +298,39 @@ async function withFakeFetch<T>(
   }
 }
 
+/** A project with an approved Architecture (one ADR) - what `previewInit`/`initRepo` start from. */
+async function approvedArchitecture(name: string) {
+  const { projectId } = await fx.createProjectWithOwner(sql, { name });
+  const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+  const adr = await fx.createLogicalItemWithVersion(sql, {
+    projectId,
+    artifactId: architectureArtifactId,
+    itemType: 'architecture_decision',
+  });
+  const architectureVersionId = await approveArchitectureVersion(architectureArtifactId, 1, [
+    { logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId },
+  ]);
+  return { projectId, architectureVersionId };
+}
+
+/** The fake GitHub, except every `GET /repos/{owner}/{name}` lookup answers `status`/`body`. */
+function respondingToLookupWith(
+  fake: ReturnType<typeof createFakeGitHub>,
+  status: number,
+  body: unknown,
+) {
+  return async (url: string | URL, init?: RequestInit): Promise<Response> => {
+    const method = (init?.method ?? 'GET').toUpperCase();
+    if (method === 'GET' && /^\/repos\/[^/]+\/[^/]+$/.test(new URL(url).pathname)) {
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      });
+    }
+    return fake.fetch(url, init);
+  };
+}
+
 describe('github (E4-S2 / SCRUM-51)', () => {
   describe('T11 - lost response; unrelated repo with same name; double-click; stale pending', () => {
     it('T11a: a lost create response reconciles via marker match on the next call - exactly one operation row, one ref', async () => {
@@ -707,20 +740,6 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       };
     }
 
-    async function approvedArchitecture(name: string) {
-      const { projectId } = await fx.createProjectWithOwner(sql, { name });
-      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
-      const adr = await fx.createLogicalItemWithVersion(sql, {
-        projectId,
-        artifactId: architectureArtifactId,
-        itemType: 'architecture_decision',
-      });
-      const architectureVersionId = await approveArchitectureVersion(architectureArtifactId, 1, [
-        { logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId },
-      ]);
-      return { projectId, architectureVersionId };
-    }
-
     it("a 403 ends failed with GitHub's own reason (never left pending), and a retry once the token can create repositories resends and completes", async () => {
       const { projectId, architectureVersionId } = await approvedArchitecture('github 403');
       const repoName = `forbidden-repo-${randomUUID().slice(0, 8)}`;
@@ -785,23 +804,6 @@ describe('github (E4-S2 / SCRUM-51)', () => {
   // name free?" answer shown while the user types. Read-only: no operation
   // row, and no repository is ever created by asking.
   describe('checkRepoName - repository-name availability', () => {
-    function respondingToLookupWith(
-      fake: ReturnType<typeof createFakeGitHub>,
-      status: number,
-      body: unknown,
-    ) {
-      return async (url: string | URL, init?: RequestInit): Promise<Response> => {
-        const method = (init?.method ?? 'GET').toUpperCase();
-        if (method === 'GET' && /^\/repos\/[^/]+\/[^/]+$/.test(new URL(url).pathname)) {
-          return new Response(JSON.stringify(body), {
-            status,
-            headers: { 'content-type': 'application/json; charset=utf-8' },
-          });
-        }
-        return fake.fetch(url, init);
-      };
-    }
-
     it('reports a free name as available, returns the normalized name, and creates nothing', async () => {
       const fake = createFakeGitHub(FAKE_OWNER);
 
@@ -863,6 +865,86 @@ describe('github (E4-S2 / SCRUM-51)', () => {
         const failure = await github.checkRepoName('some-name').catch((error: unknown) => error);
         expect(failure).toBeInstanceOf(Error);
         expect(failure).not.toBeInstanceOf(github.GithubLookupRejectedError);
+      });
+    });
+  });
+
+  // The preview's suggested name: the project's own name (handed in by the
+  // preview route), not the old opaque `throughline-project-<uuid>`.
+  describe('previewInit - repository-name suggestion', () => {
+    function projectIdName(projectId: string): string {
+      return github.normalizeRepoName(`throughline-project-${projectId}`);
+    }
+
+    it("suggests the project's name, normalized, when it is free on GitHub", async () => {
+      const { architectureVersionId } = await approvedArchitecture('suggest free');
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        const preview = await github.previewInit(architectureVersionId, 'ShiftSwap Verify');
+        expect(preview.repoName).toBe('shiftswap-verify');
+        expect(preview.mode).toBe('docs-only');
+      });
+      expect(fake.repos.size).toBe(0); // suggesting never creates anything
+    });
+
+    it('adds the first free numeric suffix when the name is already taken', async () => {
+      const { architectureVersionId } = await approvedArchitecture('suggest taken');
+      const fake = createFakeGitHub(FAKE_OWNER);
+      fake.seedForeignRepo('shiftswap-verify', 'unrelated');
+
+      await withFakeFetch(fake.fetch, async () => {
+        expect((await github.previewInit(architectureVersionId, 'ShiftSwap Verify')).repoName).toBe(
+          'shiftswap-verify-2',
+        );
+
+        fake.seedForeignRepo('shiftswap-verify-2', 'unrelated');
+        expect((await github.previewInit(architectureVersionId, 'ShiftSwap Verify')).repoName).toBe(
+          'shiftswap-verify-3',
+        );
+      });
+    });
+
+    it('falls back to the project-id name (which cannot collide) when every attempt is taken', async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('suggest exhausted');
+      const fake = createFakeGitHub(FAKE_OWNER);
+      fake.seedForeignRepo('busy', 'unrelated');
+      for (let n = 2; n <= 10; n++) fake.seedForeignRepo(`busy-${n}`, 'unrelated');
+
+      await withFakeFetch(fake.fetch, async () => {
+        const preview = await github.previewInit(architectureVersionId, 'busy');
+        expect(preview.repoName).toBe(projectIdName(projectId));
+      });
+    });
+
+    it('uses the project-id name, without calling GitHub, when there is no project name to use', async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('suggest none');
+      const neverCalled = vi.fn(async () => {
+        throw new Error('GitHub must not be called without a usable project name');
+      });
+
+      await withFakeFetch(neverCalled, async () => {
+        // No name at all (what `github/init` passes), and a name that normalizes to nothing.
+        expect((await github.previewInit(architectureVersionId)).repoName).toBe(
+          projectIdName(projectId),
+        );
+        expect((await github.previewInit(architectureVersionId, '!!! ???')).repoName).toBe(
+          projectIdName(projectId),
+        );
+      });
+
+      expect(neverCalled).not.toHaveBeenCalled();
+    });
+
+    it('still previews, with the unverified project-name slug, when GitHub refuses the lookup', async () => {
+      const { architectureVersionId } = await approvedArchitecture('suggest refused');
+      const fetchImpl = respondingToLookupWith(createFakeGitHub(FAKE_OWNER), 403, {
+        message: 'Resource not accessible by personal access token',
+      });
+
+      await withFakeFetch(fetchImpl, async () => {
+        const preview = await github.previewInit(architectureVersionId, 'ShiftSwap Verify');
+        expect(preview.repoName).toBe('shiftswap-verify');
       });
     });
   });

@@ -253,6 +253,9 @@ describe('POST /api/projects/:projectId/github/init', () => {
     const body = await response.json();
     expect(body).toMatchObject({ status: 'completed', ref: { id: 'ref-1', provider: 'github' } });
     expect(mockedInitRepo).toHaveBeenCalledWith('arch-v1', 'my-repo');
+    // init only wants the impact re-check from the preview - it must not pass
+    // a project name, which would make previewInit look names up on GitHub.
+    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1');
   });
 
   it('returns 409 GITHUB_ALREADY_INITIALIZED when the operation was refused', async () => {
