@@ -280,8 +280,8 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
               </p>
               <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
                 {preview.mode === 'scaffold'
-                  ? 'Creates a repository with a generated project scaffold matching the approved Architecture stack.'
-                  : 'Creates a repository with documentation only - this stack has no generated scaffold.'}
+                  ? 'This stack matches the supported starter, but starter files are not generated yet - the repository is created with documentation only: a README with the stack and trade-offs, and one ADR per approved decision.'
+                  : 'Creates a repository with documentation only - a README with the stack and trade-offs, and one ADR per approved decision. This stack has no generated scaffold.'}
               </p>
             </div>
 
