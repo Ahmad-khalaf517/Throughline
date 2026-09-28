@@ -18,7 +18,11 @@ import {
 } from '@/external/operations';
 import { checkDrift as checkGithubDrift } from '@/external/github';
 import { checkDrift as checkJiraDrift } from '@/external/jira';
-import { checkDrift as checkStitchDrift } from '@/external/stitch';
+import {
+  checkDrift as checkStitchDrift,
+  getSignedAssetUrls,
+  type StitchOutput,
+} from '@/external/stitch';
 import {
   toExternalRefDTO,
   toImpactRowDTO,
@@ -110,6 +114,24 @@ export async function serializeRefsWithFreshDrift(refs: ExternalRef[]): Promise<
     const impact = impacts[index];
     return toExternalRefDTO(ref, impact ? toImpactRowDTO(impact, displayKeys) : null);
   });
+}
+
+/**
+ * The `mode: 'api'` wire shape of a Stitch output (API Contracts section 10),
+ * shared by `POST .../stitch/generate` and `GET .../stitch/output`. Signed
+ * URLs are minted fresh on every call and never stored (ERD 4.16, FR-052).
+ */
+export async function serializeStitchApiOutput(output: StitchOutput, ref: ExternalRef) {
+  const urls = await getSignedAssetUrls(output);
+  if (!urls.htmlUrl || !urls.screenshotUrl) {
+    throw new Error(`stitch_output ${output.id} is missing a signed asset URL`);
+  }
+  return {
+    mode: 'api' as const,
+    ref: await serializeRefWithFreshDrift(ref),
+    htmlUrl: urls.htmlUrl,
+    screenshotUrl: urls.screenshotUrl,
+  };
 }
 
 /** Single-ref convenience wrapper around {@link serializeRefsWithFreshDrift} for the routes that only ever build one `ExternalRefDTO` at a time. */

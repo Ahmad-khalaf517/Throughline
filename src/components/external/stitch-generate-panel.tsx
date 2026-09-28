@@ -9,6 +9,7 @@ import {
   describeExternalError,
   isExternalWriteBlocked,
   readImpactFromError,
+  stitchProjectUrl,
 } from '@/lib/external-preview';
 import { PreviewShell, type PreviewState } from './preview-shell';
 import { ImpactGate } from './impact-gate';
@@ -45,9 +46,11 @@ const SECONDARY_BUTTON_CLASSNAME =
  * the other two panels.
  *
  * On success, the generated HTML/screenshot are rendered by
- * `SandboxedHtmlPreview` - a sandboxed, separate-origin iframe without
- * `allow-same-origin` (E5-S10, TR FR-053, ERD 4.16), with the signed URLs
- * still available as "open in a new tab" escape hatches.
+ * `SandboxedHtmlPreview` - the HTML is fetched as text and rendered in an
+ * iframe via `srcDoc` with `sandbox="allow-scripts"` (no `allow-same-origin`),
+ * which gives it an opaque origin (E5-S10, TR FR-053, ERD 4.16 fallback), with the screenshot
+ * and Stitch available as "open in a new tab" links (the HTML is download-only:
+ * a new tab would show source, see `SandboxedHtmlPreview`).
  */
 export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
   const router = useRouter();
@@ -58,13 +61,21 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [result, setResult] = useState<StitchResult | null>(null);
   const [copied, setCopied] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadPreview() {
       try {
-        const response = await fetch(`/api/projects/${projectId}/stitch/preview`);
+        // The persisted output is fetched alongside the preview so returning to
+        // (or refreshing) the page shows what already exists instead of the
+        // form (SCRUM-91). A failed output read is non-fatal: fall back to the
+        // form - the server still guards with ALREADY_GENERATED, handled below.
+        const [response, existing] = await Promise.all([
+          fetch(`/api/projects/${projectId}/stitch/preview`),
+          fetchOutput(projectId),
+        ]);
 
         if (response.status === 401) {
           router.push('/sign-in');
@@ -73,6 +84,7 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
 
         const body = await response.json();
         if (cancelled) return;
+        if (existing) setResult(existing);
 
         if (!response.ok) {
           const errorBody = body as ErrorBody;
@@ -111,6 +123,11 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
       cancelled = true;
     };
   }, [projectId, router]);
+
+  async function refreshOutput() {
+    const existing = await fetchOutput(projectId);
+    setResult(existing);
+  }
 
   async function handleSubmit() {
     if (!preview) return;
@@ -161,6 +178,13 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
           // re-enabling submit.
         }
 
+        // A result already exists (e.g. generated in another tab): show it
+        // rather than the raw error.
+        if (errorBody.error?.code === 'ALREADY_GENERATED') {
+          await refreshOutput();
+          return;
+        }
+
         setSubmitError(
           describeExternalError(
             errorBody.error?.code,
@@ -193,7 +217,18 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
     <PreviewShell state={state}>
       {preview &&
         (result ? (
-          <StitchResultView result={result} onCopy={handleCopy} copied={copied} />
+          <StitchResultView
+            result={result}
+            onCopy={handleCopy}
+            copied={copied}
+            onRetry={() => {
+              // Re-runs the normal generate flow, impact gate included.
+              setSubmitError(null);
+              setRetrying(true);
+              setResult(null);
+            }}
+            onSettled={refreshOutput}
+          />
         ) : (
           <div className="flex flex-col gap-6">
             <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
@@ -223,7 +258,11 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
               disabled={submitting || isExternalWriteBlocked(preview.impact, acknowledged)}
               className={SUBMIT_CLASSNAME}
             >
-              {submitting ? 'Generating…' : 'Generate UI prototype'}
+              {submitting
+                ? 'Generating…'
+                : retrying
+                  ? 'Retry with Stitch'
+                  : 'Generate UI prototype'}
             </button>
           </div>
         ))}
@@ -231,17 +270,52 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
   );
 }
 
+/**
+ * `GET .../stitch/output` (SCRUM-91) -> the panel's own `StitchResult`, or
+ * `null` for "nothing yet" (and for any read failure - see the caller).
+ */
+async function fetchOutput(projectId: string): Promise<StitchResult | null> {
+  try {
+    const response = await fetch(`/api/projects/${projectId}/stitch/output`);
+    if (!response.ok) return null;
+    const body = await response.json();
+    switch (body?.state) {
+      case 'generated':
+        return {
+          mode: 'api',
+          ref: body.ref,
+          htmlUrl: body.htmlUrl,
+          screenshotUrl: body.screenshotUrl,
+        };
+      case 'manual_fallback':
+        return { mode: 'manual_fallback', promptText: body.promptText };
+      case 'in_progress':
+        return { mode: 'pending', operationId: body.operationId };
+      default:
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
 function StitchResultView({
   result,
   onCopy,
   copied,
+  onRetry,
+  onSettled,
 }: {
   result: StitchResult;
   onCopy: (text: string) => void;
   copied: boolean;
+  onRetry: () => void;
+  onSettled: () => void;
 }) {
   if (result.mode === 'pending') {
-    return <OperationStatus operationId={result.operationId} />;
+    // Polls (and offers Retry for reconciliation_required); once the operation
+    // settles, the panel re-reads the persisted output to show its result.
+    return <OperationStatus operationId={result.operationId} onSettled={onSettled} />;
   }
 
   if (result.mode === 'manual_fallback') {
@@ -269,9 +343,14 @@ function StitchResultView({
         >
           {copied ? 'Copied' : 'Copy prompt'}
         </button>
+        <button type="button" onClick={onRetry} className={SECONDARY_BUTTON_CLASSNAME}>
+          Retry with Stitch
+        </button>
       </div>
     );
   }
+
+  const stitchUrl = stitchProjectUrl(result.ref.externalId);
 
   return (
     <div className="border-surface-dim bg-surface-container-lowest flex flex-col gap-3 rounded-xl border p-6">
@@ -286,14 +365,16 @@ function StitchResultView({
       <SandboxedHtmlPreview htmlUrl={result.htmlUrl} screenshotUrl={result.screenshotUrl} />
 
       <div className="flex flex-col gap-1 text-sm">
-        <a
-          href={result.htmlUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="text-primary-container hover:text-primary-container-hover font-medium"
-        >
-          Open generated HTML →
-        </a>
+        {stitchUrl ? (
+          <a
+            href={stitchUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary-container hover:text-primary-container-hover font-medium"
+          >
+            Open in Stitch →
+          </a>
+        ) : null}
         <a
           href={result.screenshotUrl}
           target="_blank"

@@ -9,6 +9,7 @@ import {
   missingJiraDecisions,
   readImpactFromError,
   splitImpact,
+  stitchProjectUrl,
 } from '@/lib/external-preview';
 
 function impactRow(overrides: Partial<ImpactRowDTO> = {}): ImpactRowDTO {
@@ -210,5 +211,28 @@ describe('readImpactFromError', () => {
     expect(readImpactFromError(null)).toBeNull();
     expect(readImpactFromError(undefined)).toBeNull();
     expect(readImpactFromError('not an object')).toBeNull();
+  });
+});
+
+describe('stitchProjectUrl', () => {
+  it('builds the Stitch web URL from projectId/screenId', () => {
+    expect(stitchProjectUrl('123456789/abcdef0123')).toBe(
+      'https://stitch.withgoogle.com/projects/123456789',
+    );
+  });
+
+  it('returns null when there is no slash', () => {
+    expect(stitchProjectUrl('123456789')).toBeNull();
+  });
+
+  it('returns null for empty, null or undefined', () => {
+    expect(stitchProjectUrl('')).toBeNull();
+    expect(stitchProjectUrl(null)).toBeNull();
+    expect(stitchProjectUrl(undefined)).toBeNull();
+  });
+
+  it('returns null for a non-numeric project id', () => {
+    expect(stitchProjectUrl('proj-abc/abcdef')).toBeNull();
+    expect(stitchProjectUrl('/abcdef')).toBeNull();
   });
 });

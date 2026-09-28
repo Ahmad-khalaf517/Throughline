@@ -4,7 +4,6 @@ import { getProjectById } from '@/artifact-lifecycle';
 import {
   previewPrompt,
   generate,
-  getSignedAssetUrls,
   UiRequirementsVersionNotApprovedError,
   AlreadyGeneratedError,
   StitchReconciliationRequiredError,
@@ -13,7 +12,7 @@ import {
 } from '@/external/stitch';
 import { getOperationsForVersion, getRefsForVersion } from '@/external/operations';
 import { ApiError, errorResponse } from '@/lib/errors';
-import { toImpactRowDTOs, serializeRefWithFreshDrift } from '@/app/api/_shared/external';
+import { toImpactRowDTOs, serializeStitchApiOutput } from '@/app/api/_shared/external';
 import { stitchGenerateSchema } from '../schemas';
 
 interface RouteParams {
@@ -89,17 +88,8 @@ export async function POST(request: Request, { params }: RouteParams) {
             uiRequirementsVersionId,
         );
       }
-      const urls = await getSignedAssetUrls(output);
-      if (!urls.htmlUrl || !urls.screenshotUrl) {
-        throw new Error(`stitch_output ${output.id} is missing a signed asset URL`);
-      }
 
-      return NextResponse.json({
-        mode: 'api',
-        ref: await serializeRefWithFreshDrift(ref),
-        htmlUrl: urls.htmlUrl,
-        screenshotUrl: urls.screenshotUrl,
-      });
+      return NextResponse.json(await serializeStitchApiOutput(output, ref));
     } catch (error) {
       if (error instanceof AlreadyGeneratedError) {
         throw new ApiError('ALREADY_GENERATED', error.message);
