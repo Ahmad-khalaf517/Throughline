@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import { CircleAlert, CircleCheck } from 'lucide-react';
 import { FieldShell } from '@/components/auth/field-shell';
 import { FormMessage } from '@/components/auth/form-message';
 import type { ExternalRefDTO, ImpactRowDTO } from '@/lib/serialize';
@@ -38,10 +39,11 @@ interface ErrorBody {
 // one request per pause in typing, not one per keystroke.
 const AVAILABILITY_DEBOUNCE_MS = 500;
 
-const AVAILABILITY_TONE_CLASSNAME = {
-  neutral: 'text-secondary',
-  success: 'text-primary',
-  error: 'text-error',
+// Color is never the only cue: success and error also carry an icon.
+const AVAILABILITY_TONE = {
+  neutral: { className: 'text-secondary', Icon: null },
+  success: { className: 'text-success', Icon: CircleCheck },
+  error: { className: 'text-error', Icon: CircleAlert },
 } as const;
 
 const INPUT_CLASSNAME =
@@ -190,6 +192,8 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
   }, [projectId, router, state.status, result, typedName]);
 
   const availabilityCopy = describeRepoNameAvailability(availability, typedName);
+  const availabilityTone = availabilityCopy ? AVAILABILITY_TONE[availabilityCopy.tone] : null;
+  const AvailabilityIcon = availabilityTone?.Icon;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -295,11 +299,12 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
                 id="github-repo-name-availability"
                 role="status"
                 aria-live="polite"
-                className={`min-h-4 text-xs ${
-                  availabilityCopy ? AVAILABILITY_TONE_CLASSNAME[availabilityCopy.tone] : ''
-                }`}
+                className={`flex min-h-4 items-start gap-1.5 text-xs ${availabilityTone?.className ?? ''}`}
               >
-                {availabilityCopy?.text}
+                {AvailabilityIcon && (
+                  <AvailabilityIcon className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+                )}
+                <span>{availabilityCopy?.text}</span>
               </p>
             </FieldShell>
 

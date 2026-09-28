@@ -39,6 +39,16 @@
   --on-error-container: #93000a;
 
   /*
+   * Inline success text (e.g. "repository name is available"). NOT from the
+   * Stitch project - its design system defines no success color (approval is
+   * ink black, errors are red), so this is a deliberate addition so a
+   * success message is unmistakable next to an error. Chosen to carry the
+   * same visual weight as --error (#ba1a1a) and to pass AA on --surface
+   * (about 6.7:1); pair it with an icon, never color alone.
+   */
+  --success: #166534;
+
+  /*
    * Status badge colors, copied verbatim from "Throughline - Project
    * Dashboard Overview (Semantic Status Colors)" - the one Stitch screen
    * that colors the four artifact_version.status values semantically
@@ -85,6 +95,7 @@
   --color-on-error: var(--on-error);
   --color-error-container: var(--error-container);
   --color-on-error-container: var(--on-error-container);
+  --color-success: var(--success);
 
   --color-status-approved-bg: var(--status-approved-bg);
   --color-status-approved-text: var(--status-approved-text);
