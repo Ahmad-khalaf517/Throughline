@@ -29,7 +29,7 @@ export function ProjectNavigation({ projectId }: { projectId: string }) {
   const basePath = `/projects/${projectId}`;
 
   return (
-    <nav aria-label="Project sections" className="overflow-x-auto">
+    <nav aria-label="Project sections" className="overflow-x-auto lg:hidden">
       <div className="flex min-w-max items-center gap-2">
         {PROJECT_SECTIONS.map((section) => {
           const href = `${basePath}${section.path}`;
