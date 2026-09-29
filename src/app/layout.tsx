@@ -14,8 +14,17 @@ const jetBrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_SITE_URL ?? 'https://throughline-mauve-three.vercel.app',
+  ),
   title: 'Throughline',
   description: 'AI-assisted project scaffolding with deterministic lineage tracking.',
+  openGraph: {
+    title: 'Throughline — Every decision keeps its lineage',
+    description: 'From brief to backlog, connected.',
+    type: 'website',
+  },
+  twitter: { card: 'summary_large_image' },
 };
 
 export default function RootLayout({ children }: LayoutProps<'/'>) {
