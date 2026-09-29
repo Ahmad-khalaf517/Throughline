@@ -7,18 +7,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // top of `@/db`/`@/lib/env`). The shared `_shared/external` helper is real,
 // so `@/external/github`/`jira`/`stitch` must each export a `checkDrift` too.
 const {
-  FakeGithubReconciliationRequiredError,
-  FakeGithubOperationInFlightError,
   FakeGithubOperationConflictError,
+  FakeGithubTargetRequiredError,
   FakeStitchReconciliationRequiredError,
   FakeStitchOperationInFlightError,
   FakeStitchOperationConflictError,
   FakeConnectionRequiredError,
   FakeReconnectRequiredError,
 } = vi.hoisted(() => {
-  class FakeGithubReconciliationRequiredError extends Error {}
-  class FakeGithubOperationInFlightError extends Error {}
   class FakeGithubOperationConflictError extends Error {}
+  class FakeGithubTargetRequiredError extends Error {
+    readonly target = 'githubOwner';
+  }
   class FakeStitchReconciliationRequiredError extends Error {}
   class FakeStitchOperationInFlightError extends Error {}
   class FakeStitchOperationConflictError extends Error {}
@@ -30,9 +30,8 @@ const {
     reason = 'revoked';
   }
   return {
-    FakeGithubReconciliationRequiredError,
-    FakeGithubOperationInFlightError,
     FakeGithubOperationConflictError,
+    FakeGithubTargetRequiredError,
     FakeStitchReconciliationRequiredError,
     FakeStitchOperationInFlightError,
     FakeStitchOperationConflictError,
@@ -60,12 +59,13 @@ vi.mock('@/external/operations', () => ({
   getDisplayKeysForItemVersions: vi.fn(),
 }));
 
+vi.mock('@/artifact-lifecycle', () => ({ getProjectById: vi.fn() }));
+
 vi.mock('@/external/github', () => ({
-  initRepo: vi.fn(),
+  retryOperation: vi.fn(),
   checkDrift: vi.fn(),
-  GithubReconciliationRequiredError: FakeGithubReconciliationRequiredError,
-  GithubOperationInFlightError: FakeGithubOperationInFlightError,
   GithubOperationConflictError: FakeGithubOperationConflictError,
+  GithubTargetRequiredError: FakeGithubTargetRequiredError,
 }));
 
 vi.mock('@/external/jira', () => ({
@@ -88,7 +88,8 @@ import {
   getRefsForVersion,
   getDisplayKeysForItemVersions,
 } from '@/external/operations';
-import { initRepo, checkDrift as checkGithubDrift } from '@/external/github';
+import { getProjectById } from '@/artifact-lifecycle';
+import { retryOperation, checkDrift as checkGithubDrift } from '@/external/github';
 import { exportBacklog, checkDrift as checkJiraDrift } from '@/external/jira';
 import { generate, checkDrift as checkStitchDrift } from '@/external/stitch';
 import { POST } from '@/app/api/external-operations/[operationId]/retry/route';
@@ -100,7 +101,8 @@ const mockedGetOperationById = vi.mocked(getOperationById);
 const mockedGetRefForItem = vi.mocked(getRefForItem);
 const mockedGetRefsForVersion = vi.mocked(getRefsForVersion);
 const mockedGetDisplayKeys = vi.mocked(getDisplayKeysForItemVersions);
-const mockedInitRepo = vi.mocked(initRepo);
+const mockedRetryGithub = vi.mocked(retryOperation);
+const mockedGetProjectById = vi.mocked(getProjectById);
 const mockedExportBacklog = vi.mocked(exportBacklog);
 const mockedGenerate = vi.mocked(generate);
 const mockedCheckGithubDrift = vi.mocked(checkGithubDrift);
@@ -164,7 +166,8 @@ describe('POST /api/external-operations/:operationId/retry', () => {
     mockedGetRefForItem.mockReset();
     mockedGetRefsForVersion.mockReset().mockResolvedValue([]);
     mockedGetDisplayKeys.mockReset().mockResolvedValue(new Map());
-    mockedInitRepo.mockReset();
+    mockedRetryGithub.mockReset();
+    mockedGetProjectById.mockReset().mockResolvedValue({ githubOwner: 'acme' } as never);
     mockedExportBacklog.mockReset();
     mockedGenerate.mockReset();
     mockedCheckGithubDrift.mockReset().mockResolvedValue(null);
@@ -205,7 +208,7 @@ describe('POST /api/external-operations/:operationId/retry', () => {
 
   it('answers 409 RECONNECT_REQUIRED when the recorded connection cannot be used (T49 route half)', async () => {
     mockedGetOperationById.mockResolvedValue(makeOperation({ provider: 'github' }));
-    mockedInitRepo.mockRejectedValue(new FakeReconnectRequiredError('reconnect github'));
+    mockedRetryGithub.mockRejectedValue(new FakeReconnectRequiredError('reconnect github'));
 
     const response = await POST(request(), paramsFor('op-1'));
 
@@ -218,19 +221,23 @@ describe('POST /api/external-operations/:operationId/retry', () => {
   describe('github', () => {
     it('returns 200 { status: completed, ref } on success', async () => {
       mockedGetOperationById.mockResolvedValue(makeOperation({ provider: 'github' }));
-      mockedInitRepo.mockResolvedValue(makeRef());
+      mockedRetryGithub.mockResolvedValue({ status: 'completed', ref: makeRef() } as never);
 
       const response = await POST(request(), paramsFor('op-1'));
 
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body).toMatchObject({ status: 'completed', ref: { id: 'ref-1', provider: 'github' } });
-      expect(mockedInitRepo).toHaveBeenCalledWith('arch-v1', 'my-repo');
+      // The route builds the ctx (D1); the credential is the provider module's job.
+      expect(mockedRetryGithub).toHaveBeenCalledWith('op-1', {
+        userId: 'user-1',
+        githubOwner: 'acme',
+      });
     });
 
     it('returns 200 { status: reconciliation_required } (not 202) per section 7', async () => {
       mockedGetOperationById.mockResolvedValue(makeOperation({ provider: 'github' }));
-      mockedInitRepo.mockRejectedValue(new FakeGithubReconciliationRequiredError('key'));
+      mockedRetryGithub.mockResolvedValue({ status: 'reconciliation_required' });
 
       const response = await POST(request(), paramsFor('op-1'));
 
@@ -241,7 +248,7 @@ describe('POST /api/external-operations/:operationId/retry', () => {
 
     it('returns 200 { status: pending } for an in-flight operation', async () => {
       mockedGetOperationById.mockResolvedValue(makeOperation({ provider: 'github' }));
-      mockedInitRepo.mockRejectedValue(new FakeGithubOperationInFlightError('key'));
+      mockedRetryGithub.mockResolvedValue({ status: 'pending' });
 
       const response = await POST(request(), paramsFor('op-1'));
 
@@ -252,7 +259,7 @@ describe('POST /api/external-operations/:operationId/retry', () => {
 
     it('returns 409 REQUEST_CONFLICT when the retry no longer matches the stored request hash', async () => {
       mockedGetOperationById.mockResolvedValue(makeOperation({ provider: 'github' }));
-      mockedInitRepo.mockRejectedValue(new FakeGithubOperationConflictError('key'));
+      mockedRetryGithub.mockRejectedValue(new FakeGithubOperationConflictError('key'));
 
       const response = await POST(request(), paramsFor('op-1'));
 
@@ -261,9 +268,19 @@ describe('POST /api/external-operations/:operationId/retry', () => {
       expect(body.error.code).toBe('REQUEST_CONFLICT');
     });
 
+    it('returns 409 TARGET_REQUIRED when a connection-backed retry has no GitHub owner', async () => {
+      mockedGetOperationById.mockResolvedValue(makeOperation({ provider: 'github' }));
+      mockedRetryGithub.mockRejectedValue(new FakeGithubTargetRequiredError('no owner'));
+
+      const response = await POST(request(), paramsFor('op-1'));
+
+      expect(response.status).toBe(409);
+      expect((await response.json()).error.code).toBe('TARGET_REQUIRED');
+    });
+
     it('KNOWN GAP: falls through to 500 INTERNAL_ERROR for a definitive provider failure', async () => {
       mockedGetOperationById.mockResolvedValue(makeOperation({ provider: 'github' }));
-      mockedInitRepo.mockRejectedValue(new Error('name_taken_by_other'));
+      mockedRetryGithub.mockRejectedValue(new Error('name_taken_by_other'));
 
       const response = await POST(request(), paramsFor('op-1'));
 

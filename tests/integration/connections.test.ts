@@ -34,6 +34,9 @@ beforeAll(async () => {
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
   process.env.NEXT_PUBLIC_SITE_URL = 'http://localhost:3000';
   process.env.CONNECTION_ENCRYPTION_KEY = KEY_B64;
+  process.env.OAUTH_STATE_SECRET = 'integration-oauth-state-secret';
+  process.env.GITHUB_OAUTH_CLIENT_ID = 'Iv1.integration-client';
+  process.env.GITHUB_OAUTH_CLIENT_SECRET = 'integration-client-secret';
   conn = await import('@/connections');
   crypto = await import('@/connections/crypto');
 });
@@ -379,5 +382,66 @@ describe('connections: Jira refresh with rotation (T52, R14)', () => {
       throw new Error('should not be called');
     });
     expect((await conn.getCredential(userId, 'jira')).accessToken).toBe(SENTINEL_ACCESS);
+  });
+});
+
+describe('connections: GitHub OAuth web flow (UC-S4 application half)', () => {
+  it('beginOAuth -> completeOAuth stores the OAuth-App token encrypted, records scopes and identity, and a reconnect revives the same row', async () => {
+    const userId = await fx.createAppUser(sql);
+    const OAUTH_TOKEN = 'gho_SENTINEL_oauth_app_token_0123456789';
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+      if (url.hostname === 'github.com' && url.pathname === '/login/oauth/access_token') {
+        return Response.json({
+          access_token: OAUTH_TOKEN,
+          scope: 'repo,read:org',
+          token_type: 'bearer',
+        });
+      }
+      if (url.hostname === 'api.github.com' && url.pathname === '/user') {
+        return Response.json({ id: 4242, login: 'octo' });
+      }
+      throw new Error(`unexpected fetch ${url.href}`);
+    }) as typeof fetch;
+
+    try {
+      const { authorizeUrl, pkceVerifier } = await conn.beginOAuth(userId, 'github', {
+        returnTo: '/projects/x/github',
+      });
+      const state = new URL(authorizeUrl).searchParams.get('state')!;
+      const done = await conn.completeOAuth(userId, 'github', {
+        code: 'the-code',
+        state,
+        pkceVerifier,
+      });
+      expect(done).toEqual({ returnTo: '/projects/x/github' });
+
+      const first = (await connectionRow(userId, 'github'))!;
+      expect(first.status).toBe('active');
+      expect(first.external_account_id).toBe('4242');
+      expect(first.refresh_token_enc).toBeNull();
+      expect(first.expires_at).toBeNull();
+      expect(first.access_token_enc).toMatch(/^v\d+:/);
+      expect(first.access_token_enc).not.toContain(OAUTH_TOKEN);
+      const listed = (await conn.listConnections(userId)).find((c) => c.provider === 'github');
+      expect(listed).toMatchObject({
+        status: 'active',
+        displayName: 'octo',
+        scopes: ['repo', 'read:org'],
+      });
+      expect((await conn.getCredential(userId, 'github')).accessToken).toBe(OAUTH_TOKEN);
+
+      // Reconnect: same row id, still one row.
+      const again = await conn.beginOAuth(userId, 'github', {});
+      await conn.completeOAuth(userId, 'github', {
+        code: 'code-2',
+        state: new URL(again.authorizeUrl).searchParams.get('state')!,
+        pkceVerifier: again.pkceVerifier,
+      });
+      expect((await connectionRow(userId, 'github'))!.id).toBe(first.id);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

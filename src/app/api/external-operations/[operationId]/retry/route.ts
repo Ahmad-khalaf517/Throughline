@@ -6,11 +6,11 @@ import {
   getRefsForVersion,
   type ExternalOperation,
 } from '@/external/operations';
+import { getProjectById } from '@/artifact-lifecycle';
 import {
-  initRepo,
-  GithubReconciliationRequiredError,
-  GithubOperationInFlightError,
+  retryOperation as retryGithubOperation,
   GithubOperationConflictError,
+  GithubTargetRequiredError,
 } from '@/external/github';
 import { exportBacklog } from '@/external/jira';
 import {
@@ -21,6 +21,7 @@ import {
 } from '@/external/stitch';
 import { ApiError } from '@/lib/errors';
 import { routeErrorResponse } from '@/app/api/_shared/connection-errors';
+import { toGithubCtx } from '@/app/api/_shared/github-ctx';
 import { serializeRefWithFreshDrift } from '@/app/api/_shared/external';
 
 interface RouteParams {
@@ -47,20 +48,20 @@ type RetryResult =
   | { status: 'completed'; ref: Awaited<ReturnType<typeof serializeRefWithFreshDrift>> }
   | { status: 'reconciliation_required' | 'pending' };
 
-async function retryGithub(op: ExternalOperation): Promise<RetryResult> {
-  const targetDescriptor = op.targetDescriptor as { repoName?: unknown };
-  if (typeof targetDescriptor.repoName !== 'string') {
-    throw new Error(`github external_operation ${op.id} has a malformed target_descriptor`);
-  }
+async function retryGithub(op: ExternalOperation, userId: string): Promise<RetryResult> {
+  // Round 14: the ctx (D1) carries the project's CURRENT owner, for the
+  // request-hash check; the credential is the one recorded on the operation.
+  const project = await getProjectById(op.projectId);
+  if (!project) throw new ApiError('NOT_FOUND', 'Project not found.');
   try {
-    const ref = await initRepo(op.sourceArtifactVersionId, targetDescriptor.repoName);
-    return { status: 'completed', ref: await serializeRefWithFreshDrift(ref) };
-  } catch (error) {
-    if (error instanceof GithubReconciliationRequiredError) {
-      return { status: 'reconciliation_required' };
+    const result = await retryGithubOperation(op.id, toGithubCtx(userId, project));
+    if (result.status === 'completed') {
+      return { status: 'completed', ref: await serializeRefWithFreshDrift(result.ref) };
     }
-    if (error instanceof GithubOperationInFlightError) {
-      return { status: 'pending' };
+    return result;
+  } catch (error) {
+    if (error instanceof GithubTargetRequiredError) {
+      throw new ApiError('TARGET_REQUIRED', error.message, { target: error.target });
     }
     if (error instanceof GithubOperationConflictError) {
       throw new ApiError(
@@ -180,7 +181,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     let result: RetryResult;
     switch (operation.provider) {
       case 'github':
-        result = await retryGithub(operation);
+        result = await retryGithub(operation, user.id);
         break;
       case 'jira':
         result = await retryJira(operation);

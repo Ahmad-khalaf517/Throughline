@@ -11,9 +11,12 @@ import {
   GithubOperationConflictError,
   GithubReconciliationRequiredError,
   GithubOperationInFlightError,
+  GithubTargetRequiredError,
 } from '@/external/github';
 import { getOperationsForVersion } from '@/external/operations';
-import { ApiError, errorResponse } from '@/lib/errors';
+import { ApiError } from '@/lib/errors';
+import { routeErrorResponse } from '@/app/api/_shared/connection-errors';
+import { toGithubCtx } from '@/app/api/_shared/github-ctx';
 import { toImpactRowDTOs, serializeRefWithFreshDrift } from '@/app/api/_shared/external';
 import { githubInitSchema } from '../schemas';
 
@@ -57,9 +60,12 @@ export async function POST(request: Request, { params }: RouteParams) {
       throw new ApiError('PREREQUISITE_NOT_APPROVED', 'Architecture has no approved version.');
     }
 
+    const ctx = toGithubCtx(user.id, project);
+
     let preview;
     try {
-      preview = await previewInit(architectureVersionId);
+      // No project name: the init route only wants the impact re-check, so this makes no network call.
+      preview = await previewInit(architectureVersionId, undefined, ctx);
     } catch (error) {
       if (
         error instanceof ArchitectureOptionNotSelectedError ||
@@ -77,9 +83,12 @@ export async function POST(request: Request, { params }: RouteParams) {
     }
 
     try {
-      const ref = await initRepo(architectureVersionId, parsed.data.repoName);
+      const ref = await initRepo(architectureVersionId, parsed.data.repoName, ctx);
       return NextResponse.json({ status: 'completed', ref: await serializeRefWithFreshDrift(ref) });
     } catch (error) {
+      if (error instanceof GithubTargetRequiredError) {
+        throw new ApiError('TARGET_REQUIRED', error.message, { target: error.target });
+      }
       if (error instanceof GithubOperationRefusedError) {
         // reason === 'github_operation_already_active' (the only reason this
         // module currently produces).
@@ -129,6 +138,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       throw error;
     }
   } catch (error) {
-    return errorResponse(error);
+    // ConnectionRequired / ReconnectRequired from initRepo -> 409 (nothing was written).
+    return routeErrorResponse(error);
   }
 }

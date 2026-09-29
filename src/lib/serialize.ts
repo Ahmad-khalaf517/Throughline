@@ -359,6 +359,34 @@ export interface ExternalOperationDTO {
   updatedAt: string;
 }
 
+// Round 14. Status and identity only - never a token, ciphertext or key (NFR-005).
+export interface ConnectionDTO {
+  provider: 'github' | 'jira' | 'stitch';
+  status: 'none' | 'active' | 'needs_reauth' | 'revoked';
+  displayName: string | null;
+  scopes: string[];
+  connectedAt: string | null;
+}
+
+/** Structural input: `connections.ConnectionStatus` (lib may not import layer 3b). */
+export interface ConnectionInput {
+  provider: string;
+  status: string;
+  displayName: string | null;
+  scopes: string[];
+  connectedAt: Date | null;
+}
+
+export function toConnectionDTO(connection: ConnectionInput): ConnectionDTO {
+  return {
+    provider: connection.provider as ConnectionDTO['provider'],
+    status: connection.status as ConnectionDTO['status'],
+    displayName: connection.displayName,
+    scopes: connection.scopes,
+    connectedAt: connection.connectedAt ? connection.connectedAt.toISOString() : null,
+  };
+}
+
 const RECONNECT_REASON = {
   needs_reauth: 'needs_reauth',
   revoked: 'revoked',

@@ -44,6 +44,30 @@ export class ConnectionConfigError extends Error {
   }
 }
 
+export type OAuthFlowErrorCode = 'invalid_state' | 'exchange_failed';
+
+/**
+ * The OAuth callback could not be completed: the signed `state` did not verify
+ * (`invalid_state`: tampered, expired, another user's, another provider's, or a
+ * PKCE verifier that does not belong to it) or the provider's token / identity
+ * endpoint refused or failed (`exchange_failed`). `code` is the only thing a
+ * route may surface - the message is fixed and never carries provider text, a
+ * code, a token or a secret (API Contracts 10A).
+ */
+export class OAuthFlowError extends Error {
+  readonly code: OAuthFlowErrorCode;
+
+  constructor(code: OAuthFlowErrorCode) {
+    super(
+      code === 'invalid_state'
+        ? 'The connection request could not be verified. Start again.'
+        : 'The provider did not complete the connection. Start again.',
+    );
+    this.name = 'OAuthFlowError';
+    this.code = code;
+  }
+}
+
 /** Caller passed input the module refuses (e.g. a provider_meta key outside the whitelist). */
 export class ConnectionInputError extends Error {
   constructor(message: string) {

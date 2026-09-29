@@ -7,8 +7,9 @@
 // (Module Boundaries section 7). Imports layer 0 (db, lib) only; importable by
 // layers 4-6 only.
 //
-// SCRUM-96/97: beginOAuth / completeOAuth and the provider token-endpoint
-// adapters are NOT here yet. The providers register their refresh / revoke
+// SCRUM-96: beginOAuth / completeOAuth for GitHub, with the GitHub provider HTTP
+// (authorize, token exchange, identity, revoke) in ./oauth-github. The Jira
+// branch arrives with SCRUM-97. Other providers register their refresh / revoke
 // HTTP calls through registerRefresher / registerRevoker.
 export type { Credential } from './credential';
 export {
@@ -17,8 +18,12 @@ export {
   InvalidGrantError,
   ConnectionConfigError,
   ConnectionInputError,
+  OAuthFlowError,
+  type OAuthFlowErrorCode,
   type ReconnectReason,
 } from './errors';
+export { beginOAuth, completeOAuth } from './oauth';
+export { sanitizeReturnTo } from './oauth-state';
 export {
   registerRefresher,
   registerRevoker,

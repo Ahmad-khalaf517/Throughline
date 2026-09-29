@@ -9,6 +9,13 @@ const { FakeArchitectureOptionNotSelectedError, FakeArchitectureVersionNotApprov
     return { FakeArchitectureOptionNotSelectedError, FakeArchitectureVersionNotApprovedError };
   });
 
+// The route's error translation imports `@/connections` (layer 3b), which is
+// built on `@/db`/`@/lib/env`; empty stand-ins are enough here.
+vi.mock('@/connections', () => ({
+  ConnectionRequiredError: class extends Error {},
+  ReconnectRequiredError: class extends Error {},
+}));
+
 vi.mock('@/auth', () => ({
   getVerifiedUser: vi.fn(),
   requireProjectOwner: vi.fn(),
@@ -49,6 +56,7 @@ const mockedPreviewInit = vi.mocked(previewInit);
 
 const user = { id: 'user-1', email: 'a@b.com', displayName: null };
 const now = new Date('2024-01-01T00:00:00.000Z');
+const CONNECTION = { status: 'active' as const, targetReady: true };
 
 function baseProject(architectureApproved: string | null = 'arch-v1') {
   const artifacts = emptyArtifactSummaries();
@@ -190,6 +198,7 @@ describe('POST /api/projects/:projectId/github/preview', () => {
       repoName: 'x',
       starter: null,
       impact: [],
+      connection: CONNECTION,
     });
 
     const response = await POST(postRequest({ repoName: 'x' }), paramsFor('project-1'));
@@ -217,6 +226,7 @@ describe('POST /api/projects/:projectId/github/preview', () => {
       repoName: 'throughline-project-project-1',
       starter: null,
       impact: [],
+      connection: CONNECTION,
     });
 
     const response = await POST(
@@ -231,8 +241,9 @@ describe('POST /api/projects/:projectId/github/preview', () => {
       repoName: 'throughline-project-project-1',
       starter: null,
       impact: [],
+      connection: CONNECTION,
     });
-    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1', 'x');
+    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1', 'x', { userId: 'user-1' });
   });
 
   it('returns the starter and its exact file list when a pinned starter matches (FR-030)', async () => {
@@ -248,6 +259,7 @@ describe('POST /api/projects/:projectId/github/preview', () => {
       repoName: 'x',
       starter,
       impact: [],
+      connection: CONNECTION,
     });
 
     const response = await POST(postRequest({ repoName: 'x' }), paramsFor('project-1'));
@@ -263,12 +275,15 @@ describe('POST /api/projects/:projectId/github/preview', () => {
       repoName: 'shiftswap-verify',
       starter: null,
       impact: [],
+      connection: CONNECTION,
     });
 
     const response = await POST(postRequest({ repoName: 'ignored' }), paramsFor('project-1'));
 
     expect(response.status).toBe(200);
     expect((await response.json()).repoName).toBe('shiftswap-verify');
-    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1', 'ShiftSwap Verify');
+    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1', 'ShiftSwap Verify', {
+      userId: 'user-1',
+    });
   });
 });
