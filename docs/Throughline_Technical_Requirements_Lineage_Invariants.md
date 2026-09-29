@@ -1,10 +1,14 @@
 # Throughline - Technical Requirements & Lineage Invariants
 
-**Document version:** 1.6  
+**Document version:** 1.7  
 **Project type:** AI-assisted software project initialization platform  
 **Delivery context:** Solo capstone project, 8 full-time development days  
-**Status:** Technical baseline aligned with Throughline BRD v2.4 and ERD/Data Model v1.9; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v1.5: added FR-003/FR-004 (BR-011) for the project dashboard overview and persistent navigation shell. v1.6: FR-032 now pins a small set of starters (Django, Next.js) instead of one, each a deterministic file set generated in scaffold mode (FR-031); BRD v2.4.  
+**Status:** Technical baseline aligned with Throughline BRD v2.5 and ERD/Data Model v1.11; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v1.5: added FR-003/FR-004 (BR-011) for the project dashboard overview and persistent navigation shell. v1.6: FR-032 now pins a small set of starters (Django, Next.js) instead of one, each a deterministic file set generated in scaffold mode (FR-031); BRD v2.4. v1.7: per-user provider connections (BR-012) - new section 16B (FR-086 through FR-090), NFR-005 amended, the shared-credential model reversed at the project owner request.  
 **Primary audience:** Developer, technical reviewers, and AI coding agents
+
+### Revision 1.7 alignment
+
+BRD v2.5 added **BR-012**: every signed-in user connects their own GitHub, Jira and Stitch accounts, and every external write is made with the acting user's own connected account. **Stated reason for reopening earlier positions: project owner request - users must act with their own provider accounts; this reverses the shared-credential model.** What this reopens, each in the same edit: NFR-005's "API credentials shall remain server-side" bullet (it still holds - tokens are now encrypted at rest and stay server-side - but the ERD no longer says provider credentials are "never a column"); the R9-4 accepted-risk note (users now spend their own GitHub, Jira and Stitch quota; only the LLM key stays shared and server-side); the "one configured Jira project" scope lines in section 5.1, FR-071, section 30.2 and section 36 (now one chosen Jira project per Throughline project, FR-088); and the section 9A shell rule that a settings screen is out of scope (exactly one settings-like screen, Connections, now has a backing FR - FR-087). New section 16B adds **FR-086 through FR-090**. ERD v1.11 adds table `provider_connection` (17th table), three nullable `project` columns and `external_operation.connection_id`; Module Boundaries adds the `connections` module.
 
 ### Revision 1.6 alignment
 
@@ -152,9 +156,9 @@ The capstone implementation has the following fixed constraints:
 | ORM / migrations | Drizzle ORM + drizzle-kit, SQL-first |
 | Object storage | Private Supabase Storage bucket for Stitch HTML/screenshots |
 | AI | One LLM provider |
-| External systems | GitHub (pinned starters: Django, Next.js), one configured Jira project, Google Stitch |
+| External systems | GitHub (pinned starters: Django, Next.js), one chosen Jira project per Throughline project, Google Stitch - each reached with the acting user's own connected account (section 16B) |
 
-Schema, triggers, the impact function, and connection and hardening rules are specified in the ERD/Data Model v1.9.
+Schema, triggers, the impact function, and connection and hardening rules are specified in the ERD/Data Model v1.11.
 
 ---
 
@@ -312,7 +316,7 @@ This screen reads; it does not write. It has no effect on approval gating (FR-08
 
 Every screen under a project (Overview, Requirements, Architecture, UI Requirements, Backlog, Warnings, Dependencies, Outputs) shall share one navigation shell: a header identifying the current project and a tab/link set reaching every screen listed above, plus a way back to the user's project list.
 
-Only screens that exist as a real FR belong in this shell. Cross-project chrome shown in the Stitch design reference with no backing FR anywhere in this document - a cross-project lineage map, a decisions register, an audit journal, a settings screen - is explicitly **out of scope for this shell** (P1, Jira Plan known-limitations, same treatment as FR-023). Do not add a nav entry that points at a screen this document doesn't define.
+Only screens that exist as a real FR belong in this shell. Cross-project chrome shown in the Stitch design reference with no backing FR anywhere in this document - a cross-project lineage map, a decisions register, an audit journal, a settings screen - is explicitly **out of scope for this shell** (P1, Jira Plan known-limitations, same treatment as FR-023). Do not add a nav entry that points at a screen this document doesn't define. **Round 14 exception (BR-012):** the Connections screen now has a backing FR (FR-087) and may be reached from the shell (in the user-level chrome, since connections belong to the user, not to a project). It is the only item from that out-of-scope list that is admitted; a general settings screen, a decisions register, an audit journal and a cross-project lineage map remain out of scope.
 
 ---
 
@@ -675,7 +679,7 @@ The MVP shall create:
 - Epics
 - Stories
 
-in one configured Jira project.
+in one Jira project chosen for the Throughline project (FR-088), in the Jira site the acting user has connected (FR-086).
 
 ### FR-072 - One-Way Integration Only
 
@@ -694,7 +698,7 @@ Canonical provenance must use `sourceItemVersionId`, not only the human display 
 
 ### FR-074 - Re-export Changed Story Behavior
 
-If a logical Epic or Story already has a Jira issue (in the configured project) created from an older ItemVersion and the item changes, Throughline must not silently duplicate, update, or skip the issue. This applies to **Epics as well as Stories**: an edited Epic title creates a new Epic ItemVersion, and re-exporting it without this choice would silently create a second Jira Epic.
+If a logical Epic or Story already has a Jira issue (in the project's chosen Jira project - the same Jira site and project key as recorded on the operation's target) created from an older ItemVersion and the item changes, Throughline must not silently duplicate, update, or skip the issue. This applies to **Epics as well as Stories**: an edited Epic title creates a new Epic ItemVersion, and re-exporting it without this choice would silently create a second Jira Epic.
 
 The user shall see a choice similar to:
 
@@ -762,6 +766,40 @@ The user may approve a blocked version with a **mandatory, non-empty note**. The
 ### FR-085 - Impact in External-Write Previews
 
 Every GitHub, Stitch and Jira preview shall show the current impact warnings for the items the write would be created from. Creating an external object from a flagged item requires an explicit confirmation; it is not blocked. The resulting external reference is flagged from the moment it exists, so nothing stale leaves Throughline silently.
+
+---
+
+## 16B. Provider Connections (per-user accounts)
+
+Added in v1.7 (BR-012, priority P0 - reopened scope, project owner request). Before this section, GitHub, Jira and Stitch were reached with one shared server credential per provider taken from environment variables. From now on each signed-in user connects their own accounts. The **LLM key stays shared and server-side**. Tokens still never reach the browser; they are encrypted at rest (NFR-005). The acting user of every external write is the project owner (every request is authorized by project ownership, NFR-005), so "the acting user's connection" is always the owner's.
+
+### FR-086 - Connect and Disconnect a Provider Account
+
+A signed-in user shall be able to connect, and later disconnect, one account per provider (GitHub, Jira, Stitch). GitHub connects through an OAuth App web flow (scope `repo`; a GitHub App is a documented later hardening step, not P0). Jira connects through Atlassian OAuth 2.0 (3LO) with scopes `read:jira-work write:jira-work offline_access`. Stitch connects by the user pasting an API key, which is validated by one cheap read-only call (list projects) before it is saved. Disconnecting revokes the credential at the provider where a revocation API exists, then deletes the connection row - or, when an `external_operation` still references it, keeps a secret-free tombstone of it (ERD 4.17); it never touches objects already created in the provider.
+
+- A new external operation always requires the acting user's active connection for that provider. Without one the write is refused before any operation row exists, with `CONNECTION_REQUIRED` (API Contracts).
+- Every operation records the connection it was created with (`external_operation.connection_id`). Reconcile, retry and drift checks for that operation use the recorded connection, never "whatever the user has connected today".
+- Operations created before this section existed carry no connection (NULL, "legacy"). They keep working with the optional legacy environment credential and only with it; new operations never fall back to it.
+- The OAuth flows use a signed `state` value plus PKCE, and redirect only to an allowlist derived from `NEXT_PUBLIC_SITE_URL`.
+
+### FR-087 - Connections Screen
+
+The system shall provide one Connections screen listing, for each provider, whether the user has an active connection, which account it is (display name only), and whether it needs to be reconnected, with connect, reconnect and disconnect actions. It shows status and identity only - never a token, key or secret, not even masked. This is the only screen admitted by the FR-004 exception.
+
+### FR-088 - Project Targets
+
+Each project shall record where its external outputs go, chosen by the owner: the GitHub owner (the user's own login or an organization the user can create repositories in) that new repositories are created under, and the Jira site and Jira project (picked from the sites and projects the user's connection can see). The Jira site and project key are set together or not at all. These replace the environment settings `GITHUB_OWNER` and `JIRA_PROJECT_KEY` for new operations.
+
+- The GitHub owner cannot be changed while a GitHub operation for the project is `pending`, `reconciliation_required` or `completed` (one repository per project, ERD section 4.15); to use another owner, no such operation may exist. A `failed` operation cannot be retried under a different owner with the same repository name (the request hash includes the owner, so that is a hash conflict); the user picks a new repository name, which is a new operation.
+- Changing the Jira target starts new operations (target-specific operation keys, ERD section 4.14); it never reuses or moves an existing Jira issue.
+
+### FR-089 - Connect-to-Continue Prompt
+
+The GitHub, Jira and Stitch screens shall show a connect-to-continue prompt, in place of their write action, whenever the user has no active connection for that provider (or, for Jira and GitHub, no chosen target). The preview stays readable (FR-030, FR-050, FR-070) - only the write is withheld - so planning is never blocked by a missing connection (NFR-006). The prompt links to the Connections screen and, after connecting, returns to the screen the user came from.
+
+### FR-090 - Reconnect-Required State
+
+When an operation's recorded connection is `needs_reauth` or `revoked`, or a provider rejects its credential as invalid, the system shall show a distinct **reconnect required** state and shall stop there. It must **never** turn the operation into `failed`, and it must **never** create or raise an impact warning or mark an `external_ref` stale: a lapsed credential says nothing about whether any planning work changed (BRD section 10 "never flag unchanged work", ERD section 1.1). The operation stays exactly as it was (`pending`, `reconciliation_required` or `completed`); once the user reconnects the same provider account the operation continues from where it stopped. The API reports it as `RECONNECT_REQUIRED` (API Contracts), distinct from `CONNECTION_REQUIRED` (no connection at all).
 
 ---
 
@@ -1268,7 +1306,7 @@ After an ambiguous failure:
 
 ### 30.2 Jira Reconciliation
 
-For Jira creation, Throughline shall use a deterministic Throughline source marker, or an equivalent queryable reconciliation mechanism, in the configured Jira project.
+For Jira creation, Throughline shall use a deterministic Throughline source marker, or an equivalent queryable reconciliation mechanism, in the Jira project recorded on the operation (the project's chosen target at the time of the write), searched with the connection recorded on that operation (FR-086, FR-090).
 
 After an ambiguous failure:
 
@@ -1276,7 +1314,7 @@ After an ambiguous failure:
 2. if an issue exists, reconcile the local ExternalRef
 3. if no issue exists, allow a retry that the user confirms explicitly
 
-The Jira marker mechanism is confirmed final: a label `tl-<item_version_id>` as the primary marker, repeated in the issue's description footer as a backup, reconciled by searching within the configured Jira project. Both paths must match the **complete** marker string - never a substring or truncated form; a partial marker matches zero results on either path. Validated live against a real Jira Cloud project (project SCRUM, issue SCRUM-75) during planning, and against `scripts/spike-jira-reconciliation.ts`'s (Jira Plan E4-T2) design.
+The Jira marker mechanism is confirmed final: a label `tl-<item_version_id>` as the primary marker, repeated in the issue's description footer as a backup, reconciled by searching within the Jira project recorded on the operation. Both paths must match the **complete** marker string - never a substring or truncated form; a partial marker matches zero results on either path. Validated live against a real Jira Cloud project (project SCRUM, issue SCRUM-75) during planning, and against `scripts/spike-jira-reconciliation.ts`'s (Jira Plan E4-T2) design.
 
 The MVP does not require an enterprise distributed transaction architecture, but it must not claim writes are safe if ambiguous failures can silently duplicate objects.
 
@@ -1392,11 +1430,12 @@ Where practical, generated ArtifactVersions should record:
 
 ### NFR-005 - Security
 
-- API credentials shall remain server-side.
+- API credentials shall remain server-side. Since v1.7 (BR-012) this covers two kinds: the **shared** LLM key and Supabase service-role key, which are server configuration only; and each user's **own** GitHub, Jira and Stitch credentials (FR-086), which are stored in the database **only as AES-256-GCM ciphertext** and decrypted server-side at the moment of a provider call. The encryption key (`CONNECTION_ENCRYPTION_KEY`) is server configuration and is never stored in the database.
+- Provider credentials shall never appear in a log line, an error message, an API response, `external_operation.target_descriptor`, `external_ref.metadata`, `provider_connection.provider_meta` or any other column. Requested scopes are minimal (GitHub `repo`; Jira `read:jira-work write:jira-work offline_access`). The OAuth flows are protected against CSRF with a signed `state` and PKCE and redirect only to an allowlisted origin. Disconnecting revokes the credential at the provider where a revocation API exists, then deletes the row, or keeps a secret-free tombstone when an `external_operation` references it.
 - Secrets shall not be stored in generated repositories.
 - Generated HTML shall be sandboxed for preview.
 - External writes shall require explicit user action after preview.
-- The hosted capstone instance shall be protected by at least a basic access gate: **email/password sign-up with mandatory email verification** (Supabase Auth, `mailer_autoconfirm` off) so an unverified or unauthenticated visitor cannot use stored GitHub, Jira, Stitch, or LLM credentials to trigger external actions or spend API budget. **Accepted risk (round 9):** public sign-up is open - any verified account, not only a pre-approved one, can create its own project and trigger generation/external-write actions on it. Project ownership (the next bullet) still stops one user from touching another's project or data; it does not cap how many verified users can spend the shared LLM/GitHub/Jira credentials. Revisit if API cost or abuse becomes a problem before the capstone demo.
+- The hosted capstone instance shall be protected by at least a basic access gate: **email/password sign-up with mandatory email verification** (Supabase Auth, `mailer_autoconfirm` off) so an unverified or unauthenticated visitor cannot use stored credentials to trigger external actions or spend API budget. **Accepted risk (round 9):** public sign-up is open - any verified account, not only a pre-approved one, can create its own project and trigger generation/external-write actions on it. Project ownership (the next bullet) still stops one user from touching another's project or data; it does not cap how many verified users can spend the shared LLM key. **Round 14 (R9-4 amended):** GitHub, Jira and Stitch are no longer shared - users spend their own accounts' quota there; only the LLM key stays shared and server-side. Revisit if LLM cost or abuse becomes a problem before the capstone demo.
 - Authentication uses Supabase Auth with public sign-up **enabled** and email verification required before a session is usable. The user's identity is taken only from verified session data (`auth.getUser()`, never `getSession()`). There is no server-side email allowlist - superseded by the above (was invite-only + allowlist through round 8; see ERD Appendix B round 9).
 - Every request is authorized by project ownership before any read or write.
 - The database is reachable only through the application server: the Supabase Data API is denied to its public roles for every table and function.
@@ -1440,6 +1479,7 @@ P0 is the minimum acceptable capstone.
 - immutable history
 - selected Architecture option, with approval-time materialization of its decisions
 - authentication with mandatory email verification (public sign-up); Data API closed to public roles
+- per-user provider connections: each user connects their own GitHub, Jira and Stitch accounts and external writes use them (BR-012, FR-086..FR-090)
 
 ### Lineage
 
@@ -1493,7 +1533,7 @@ P0 is the minimum acceptable capstone.
 ### Jira
 
 - preview
-- one configured project
+- one chosen project (per Throughline project)
 - Epics and Stories
 - ExternalRef mapping by ItemVersion
 - changed-Story re-export choice: Skip vs Create New
@@ -1551,6 +1591,8 @@ The MVP shall not implement:
 - GitHub-to-Throughline round-trip import
 - arbitrary repository-template generation
 - enterprise workflow customization
+- shared team or organization-level provider connections (a connection belongs to exactly one user; FR-086)
+- a GitHub App installation flow (documented later hardening for the GitHub connection, not P0)
 
 ---
 
@@ -1864,7 +1906,7 @@ Recommended next development documents:
 
 ## 45. Business-to-Technical Traceability
 
-This matrix connects the business requirements in **Throughline BRD v2.3** to the technical requirements and invariants in this document. It is intentionally high-level; the ERD and API contracts will provide the next level of implementation traceability.
+This matrix connects the business requirements in **Throughline BRD v2.5** to the technical requirements and invariants in this document. It is intentionally high-level; the ERD and API contracts will provide the next level of implementation traceability.
 
 | Business Requirement | Technical realization |
 |---|---|
@@ -1874,11 +1916,12 @@ This matrix connects the business requirements in **Throughline BRD v2.3** to th
 | **BR-004** - Specific direct/transitive change impact with inspectable reason | FR-083; INV-013, INV-020 through INV-026; Sections 25-27 |
 | **BR-005** - Honest GitHub initialization from approved architecture | FR-030 through FR-036; Sections 12, 29-31 |
 | **BR-006** - Stitch generation from approved UI Requirements without controlling backlog lineage | FR-040, FR-041, FR-050 through FR-054; Sections 13-14 |
-| **BR-007** - Preview/create Jira Epics and Stories with exact local provenance | FR-070 through FR-074; Sections 16 and 28-30 |
-| **BR-008** - Explicit, previewed, retry-aware external writes | FR-030, FR-050, FR-070, FR-085; Sections 29-31 |
+| **BR-007** - Preview/create Jira Epics and Stories with exact local provenance | FR-070 through FR-074, FR-088; Sections 16 and 28-30 |
+| **BR-008** - Explicit, previewed, retry-aware external writes | FR-030, FR-050, FR-070, FR-085, FR-089, FR-090; Sections 29-31 |
 | **BR-009** - AI for semantic work; deterministic code for state and integrity | Sections 23-24 and 32-33; all approval/lineage invariants |
 | **BR-010** - Protect core lineage when scope pressure occurs | Sections 36-38 and 41-44 |
 | **BR-011** - Per-project dashboard overview + shared navigation shell | FR-003, FR-004; Section 9A |
+| **BR-012** - Per-user provider connections; writes made with the acting user's own accounts | FR-086 through FR-090; Section 16B; NFR-005 |
 
 ### 45.1 Traceability Rule for Later Artifacts
 

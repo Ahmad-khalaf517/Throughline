@@ -1,7 +1,7 @@
 # Throughline - Project Setup & Configuration Plan
 
-**Document version:** 1.8
-**Status:** Slice 1 (steps 1-4) and the auth access gate are done and merged to `main`. Slice 2's schema is done and live (section 13). v1.8 records the forgot-password feature and the auth email templates switching to the `token_hash` link pattern (ERD Appendix B round 11) after a real cross-browser PKCE failure found while testing it live. v1.7 recorded pinning `search_path` on all 7 functions (ERD Appendix B round 10). v1.6 recorded the slice-2 schema. v1.5 changed the auth access gate to open sign-up + mandatory email verification (ERD Appendix B round 9). v1.4 recorded the auth-only schema cut. v1.1 added the house code-hygiene conventions. Derived from ERD/Data Model v1.8 (FROZEN), Technical Requirements & Lineage Invariants v1.4, and Module Boundaries v1.3.
+**Document version:** 1.9
+**Status:** Slice 1 (steps 1-4) and the auth access gate are done and merged to `main`. Slice 2's schema is done and live (section 13). v1.9 (ERD Appendix B round 14, per-user provider connections; reason: project owner request - users must act with their own provider accounts, reversing the shared-credential model) documents six new environment variables in section 7 (`CONNECTION_ENCRYPTION_KEY`, `OAUTH_STATE_SECRET`, `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `ATLASSIAN_CLIENT_ID`, `ATLASSIAN_CLIENT_SECRET`), demotes `GITHUB_TOKEN`/`GITHUB_OWNER`/`JIRA_*`/`STITCH_*` to optional legacy credentials, and notes the 17th table and migrations `0009`/`0010` in section 6; `.env.example` and `src/lib/env.ts` are code and are changed by story UC-S2, not by this document. v1.8 records the forgot-password feature and the auth email templates switching to the `token_hash` link pattern (ERD Appendix B round 11) after a real cross-browser PKCE failure found while testing it live. v1.7 recorded pinning `search_path` on all 7 functions (ERD Appendix B round 10). v1.6 recorded the slice-2 schema. v1.5 changed the auth access gate to open sign-up + mandatory email verification (ERD Appendix B round 9). v1.4 recorded the auth-only schema cut. v1.1 added the house code-hygiene conventions. Derived from ERD/Data Model v1.11 (FROZEN), Technical Requirements & Lineage Invariants v1.7, and Module Boundaries v1.17.
 **Primary audience:** Developer, AI coding agents doing slice 1.
 
 > **For AI agents:** this document decides *how the repository is set up*; it does not decide behavior. Every stack choice below traces to a decision already frozen in the ERD (section 15) or TR (section 5.1), or to a decision recorded in section 11 of this document. Do not add a dependency that is not in section 4 without recording it there first - NFR-008 (simplicity) is a requirement, not a preference.
@@ -84,7 +84,7 @@ Throughline/
     lib/                             # env.ts, errors.ts, serialize.ts - no domain logic
   tests/
     unit/                            # lineage core: hashing, matching, freshness (no DB)
-    integration/                     # Appendix C behaviour suite T1-T43 (container)
+    integration/                     # Appendix C behaviour suite T1-T52 (container)
     fixtures/                        # canonical flow fixtures (ERD Appendix C flow)
   .husky/
     pre-commit                       # pnpm exec lint-staged
@@ -171,7 +171,7 @@ Two different connection strings by design: **migrations** run over the session 
 
 This is the highest-value configuration file in the repo. `eslint-plugin-boundaries` encodes Module Boundaries §2 as a lint rule:
 
-- element types declared per folder: `layer0` (`db`, `auth`, `ai-client`), `layer1` (`lineage/*`), `layer2` (`artifact-lifecycle`, `architecture-materialization`), `layer3` (`artifact-types/*`), `layer4` (`external/operations`), `layer5` (`external/{github,jira,stitch}`), `layer6` (`app/api`)
+- element types declared per folder: `layer0` (`db`, `auth`, `ai-client`), `layer1` (`lineage/*`), `layer2` (`artifact-lifecycle`, `architecture-materialization`), `layer3` (`artifact-types/*`), `layer3b` (`connections`, round 14 - importable only by layers 4-6, never by 1-3), `layer4` (`external/operations`), `layer5` (`external/{github,jira,stitch}`), `layer6` (`app/api`)
 - rule: a layer may import strictly lower layers only; peers in the same layer are **disallowed** (this is what stops `backlog` importing `ui-requirements`, Module Boundaries §4.4)
 - documented exception: `architecture-materialization` -> `identity`
 - `no-restricted-imports`: `db/lock` (i.e. `withProjectLock`) importable **only** from `artifact-lifecycle` (Module Boundaries principle 3); `openai` importable only from `ai-client`; `@supabase/*` auth client only from `auth`
@@ -323,6 +323,8 @@ Slice 1's deliverable. The order is fixed by ERD Appendix A ("Apply it in this o
 | 0002 | `impact_function` | `--custom` | `impact()` from ERD section 6.3, verbatim |
 | 0003 | `supabase_hardening` | `--custom` | ERD A.3: revoke anon/authenticated grants, RLS enabled with **no policies** on all 16 tables, `EXECUTE` revoked |
 
+*This table is the slice-1 plan as first written; the numbering above is not the repo's final one (see section 13 and `drizzle/migrations`, which currently runs `0000`-`0008`). Round 14 adds `0009_provider_connection.sql` (generated: the 17th table, three `project` columns, `external_operation.connection_id`) and `0010_provider_connection_hardening.sql` (custom: `touch_updated_at` trigger, revoke, RLS) - ERD Appendix A.5. Story UC-S3 creates them.*
+
 **Workflow rules (ERD 2.1):**
 
 1. `drizzle-kit push` is never run. Only `generate` + `migrate`.
@@ -346,13 +348,18 @@ Slice 1's deliverable. The order is fixed by ERD Appendix A ("Apply it in this o
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | module 2 | public by design - A.3 is why this is safe |
 | `SUPABASE_SERVICE_ROLE_KEY` | module 2 (server only) | never imported from a client component |
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | module 3 | model id logged per run (NFR-004) |
-| `GITHUB_TOKEN`, `GITHUB_OWNER` | module 14 | server-side credential; never the Supabase `provider_token` (ERD 7.3) |
+| `NEXT_PUBLIC_SITE_URL` | module 2, module 18 | already in `.env.example`; since round 14 it also **derives the OAuth redirect allowlist** (`<site>/api/connections/<provider>/callback`) - it must equal the origin registered in the GitHub and Atlassian OAuth apps |
+| `CONNECTION_ENCRYPTION_KEY` | module 18 (server only) | **new, round 14, required.** 32 random bytes, base64 (`openssl rand -base64 32`). AES-256-GCM key for `provider_connection` (ERD 4.17). Losing or changing it makes every stored credential undecryptable - all users must reconnect (ERD known limitation 17). Never logged, never in a client bundle, not the same value in dev and prod |
+| `OAUTH_STATE_SECRET` | module 18 (server only) | **new, round 14, required.** HMAC key that signs the OAuth `state` (bound to user, provider, returnTo, expiry). Its own secret - do **not** reuse `GITHUB_MARKER_SECRET` (that one signs repository ownership markers, TR 30.1). Random, at least 32 bytes |
+| `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | module 18 | **new, round 14, required.** A GitHub *OAuth App* (scope `repo`); callback URL `<NEXT_PUBLIC_SITE_URL>/api/connections/github/callback`. A GitHub App is a documented later hardening, not P0 |
+| `ATLASSIAN_CLIENT_ID`, `ATLASSIAN_CLIENT_SECRET` | module 18 | **new, round 14, required.** An Atlassian OAuth 2.0 (3LO) app with scopes `read:jira-work write:jira-work offline_access`; callback URL `<NEXT_PUBLIC_SITE_URL>/api/connections/jira/callback` |
+| `GITHUB_TOKEN`, `GITHUB_OWNER` | module 14 | **optional legacy since round 14.** Used only to continue operations created before per-user connections (`external_operation.connection_id IS NULL`); a new operation never uses it. `GITHUB_OWNER` is superseded by `project.github_owner`. Never the Supabase `provider_token` (ERD 7.3) |
 | `GITHUB_MARKER_SECRET` | module 14 | HMAC repo marker (TR 30.1) |
-| `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` | module 15 | one configured Jira project per instance |
-| `STITCH_*` | module 16 | pending Spike; manual-fallback path must work without it |
+| `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` | module 15 | **optional legacy since round 14** (was: one configured Jira project per instance). Used only for legacy operations; `JIRA_PROJECT_KEY` is superseded by `project.jira_cloud_id` + `project.jira_project_key` |
+| `STITCH_*` (e.g. `STITCH_API_KEY`) | module 16 | **optional legacy since round 14**; each user now pastes their own key. Legacy operations only. The manual-fallback path still works without any Stitch credential |
 | `SUPABASE_STORAGE_BUCKET` | module 16 | private bucket, signed URLs only |
 
-No credential is ever a database column, and `metadata`/`target_descriptor` carry whitelisted fields only (ERD section 2).
+The variables above are the **shared** server configuration. Since round 14 each user's own GitHub, Jira and Stitch credentials are stored in `provider_connection`, but **only as AES-256-GCM ciphertext** written by module 18 with `CONNECTION_ENCRYPTION_KEY`; no plaintext credential is ever a database column, and `metadata`/`target_descriptor`/`provider_meta` carry whitelisted fields only (ERD sections 2 and 4.17). The LLM key stays shared and server-side.
 
 ---
 
@@ -410,10 +417,10 @@ Ordered so that each step is verifiable before the next one depends on it:
 3. Create the 17 empty module folders with stub `index.ts` files, then **verify the boundary lint fails on a deliberate bad import** before writing any real code. A boundary rule you never saw fail is a boundary rule you do not have.
 4. `.env.example` + `src/lib/env.ts` (Zod-parsed, throws at boot).
 5. Supabase project provisioning (section 6, manual steps).
-6. Drizzle schema for all 16 tables -> `db:generate` -> `db:verify` diff against Appendix A -> fix the schema until the diff is clean.
+6. Drizzle schema for all 16 tables (17 from round 14, story UC-S3) -> `db:generate` -> `db:verify` diff against Appendix A -> fix the schema until the diff is clean.
 7. The three custom migrations (triggers, `impact()`, A.3), pasted verbatim from the ERD.
 8. `db:migrate` against the Supabase project **and** against a container.
-9. Port ERD Appendix C (T1-T43) into `tests/integration` as the first integration test. **T14, T27, T28, T34 first** (ERD section 14, slice 1 notes).
+9. Port ERD Appendix C (T1-T52) into `tests/integration` as the first integration test. **T14, T27, T28, T34 first** (ERD section 14, slice 1 notes).
 10. `auth` module: `getVerifiedUser`, `upsertAppUser`, `requireProjectOwner`; verify T35 (re-created user, idempotent upsert).
 11. CI workflow; confirm it goes red on a deliberately broken test before trusting it green.
 12. Vercel project + env vars; deploy once, confirm the access gate blocks an unauthenticated visitor (NFR-005).
