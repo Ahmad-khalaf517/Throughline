@@ -27,8 +27,9 @@ const envMock = vi.hoisted((): EnvMock => ({
 
 vi.mock('@/lib/env', () => ({ env: envMock }));
 
-const { parseMock, openAIConstructorMock } = vi.hoisted(() => ({
+const { parseMock, streamMock, openAIConstructorMock } = vi.hoisted(() => ({
   parseMock: vi.fn(),
+  streamMock: vi.fn(),
   openAIConstructorMock: vi.fn(),
 }));
 
@@ -36,7 +37,7 @@ const { parseMock, openAIConstructorMock } = vi.hoisted(() => ({
 // `chat.completions.parse` is the one call this module ever makes.
 vi.mock('openai', () => ({
   default: class {
-    chat = { completions: { parse: parseMock } };
+    chat = { completions: { parse: parseMock, stream: streamMock } };
     constructor(opts: unknown) {
       openAIConstructorMock(opts);
     }
@@ -76,6 +77,7 @@ describe('generateStructured', () => {
     envMock.OPENAI_API_KEY = 'test-api-key';
     envMock.OPENAI_MODEL = 'test-model';
     parseMock.mockReset();
+    streamMock.mockReset();
     openAIConstructorMock.mockReset();
     withTxMock.mockReset();
   });
@@ -111,6 +113,36 @@ describe('generateStructured', () => {
       }),
     );
     expect(tx.returning).toHaveBeenCalledWith({ id: schema.aiGenerationRun.id });
+  });
+
+  it('forwards real provider content deltas and persists the parsed final completion', async () => {
+    const listeners: Record<string, (event: { delta: string }) => void> = {};
+    streamMock.mockReturnValue({
+      on: vi.fn((event: string, listener: (event: { delta: string }) => void) => {
+        listeners[event] = listener;
+      }),
+      finalChatCompletion: vi.fn(async () => {
+        listeners['content.delta']?.({ delta: '{"foo":' });
+        listeners['content.delta']?.({ delta: '"bar"}' });
+        return okCompletion({ foo: 'bar' });
+      }),
+    });
+    const tx = makeInsertChain([{ id: 'run-stream' }]);
+    withTxMock.mockImplementation((fn: (tx: unknown) => unknown) => fn(tx));
+    const onDelta = vi.fn();
+
+    const result = await generateStructured({
+      projectId: 'project-1',
+      purpose: 'generation',
+      prompt: 'p',
+      schema: ResultSchema,
+      onDelta,
+    });
+
+    expect(onDelta.mock.calls.map(([delta]) => delta)).toEqual(['{"foo":', '"bar"}']);
+    expect(result).toEqual({ data: { foo: 'bar' }, runId: 'run-stream' });
+    expect(parseMock).not.toHaveBeenCalled();
+    expect(tx.values).toHaveBeenCalledWith(expect.objectContaining({ status: 'succeeded' }));
   });
 
   it('logs exactly one failed row with error_message and rethrows on Zod validation failure', async () => {

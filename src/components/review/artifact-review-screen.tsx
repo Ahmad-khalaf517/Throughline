@@ -20,6 +20,7 @@ import { ItemEditConfirmationRequired } from './item-edit-model';
 import { BacklogReviewLayout } from './backlog-review-layout';
 import { UiRequirementsReviewLayout } from './ui-requirements-review-layout';
 import { GenerationSkeleton } from './generation-skeleton';
+import { readGenerationResponse } from './read-generation-stream';
 
 interface ArtifactReviewScreenProps {
   /** The project this version belongs to - needed for the manual-revise call (`POST /api/projects/:projectId/artifacts/:type/revise`). */
@@ -186,6 +187,7 @@ export function ArtifactReviewScreen({
   const [aiRevisePending, setAiRevisePending] = useState(false);
   const [aiRevisionOpen, setAiRevisionOpen] = useState(false);
   const [aiRevisionFeedback, setAiRevisionFeedback] = useState('');
+  const [generationPreview, setGenerationPreview] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [staleReason, setStaleReason] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -233,35 +235,42 @@ export function ArtifactReviewScreen({
     setPending(true);
     setErrorMessage(null);
     setStaleReason(null);
+    setGenerationPreview('');
     try {
       const response = await fetch(
         `/api/projects/${projectId}/artifacts/${artifactType}/generate`,
         {
           method: 'POST',
+          headers: { Accept: 'text/event-stream' },
         },
       );
-      const body = await response.json().catch(() => null);
-      if (!response.ok) {
-        // 409 PREREQUISITE_NOT_APPROVED's message is already a complete
-        // sentence ("Approve requirements before generating architecture.") -
-        // surfaced verbatim, same as every other mutation on this screen.
-        setErrorMessage(body?.error?.message ?? 'Something went wrong. Please try again.');
-        return;
-      }
+      const body = await readGenerationResponse(response, (delta) =>
+        setGenerationPreview((current) => current + delta),
+      );
       if (body?.status === 'stale') {
         setStaleReason(body.reason ?? 'base_changed');
         return;
       }
       router.refresh();
-    } catch {
-      setErrorMessage('Could not reach the server. Check your connection and try again.');
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : 'Could not reach the server. Check your connection and try again.',
+      );
     } finally {
       setPending(false);
     }
   }
 
   if (pending || aiRevisePending) {
-    return <GenerationSkeleton artifactTypeName={artifactTypeName} />;
+    return (
+      <GenerationSkeleton
+        artifactType={artifactType}
+        artifactTypeName={artifactTypeName}
+        preview={generationPreview}
+      />
+    );
   }
 
   // A version-less artifact still needs a first-generation action.
@@ -468,21 +477,20 @@ export function ArtifactReviewScreen({
     setAiRevisePending(true);
     setErrorMessage(null);
     setStaleReason(null);
+    setGenerationPreview('');
     try {
       const trimmedFeedback = aiRevisionFeedback.trim();
       const response = await fetch(
         `/api/projects/${projectId}/artifacts/${artifactType}/generate`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
           body: JSON.stringify(trimmedFeedback ? { feedback: trimmedFeedback } : {}),
         },
       );
-      const body = await response.json().catch(() => null);
-      if (!response.ok) {
-        setErrorMessage(body?.error?.message ?? 'Something went wrong. Please try again.');
-        return;
-      }
+      const body = await readGenerationResponse(response, (delta) =>
+        setGenerationPreview((current) => current + delta),
+      );
       if (body?.status === 'stale') {
         setStaleReason(body.reason ?? 'base_changed');
         setAiRevisionOpen(false);
@@ -491,8 +499,12 @@ export function ArtifactReviewScreen({
       setAiRevisionOpen(false);
       setAiRevisionFeedback('');
       router.refresh();
-    } catch {
-      setErrorMessage('Could not reach the server. Check your connection and try again.');
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : 'Could not reach the server. Check your connection and try again.',
+      );
     } finally {
       setAiRevisePending(false);
     }

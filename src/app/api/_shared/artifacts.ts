@@ -183,6 +183,7 @@ interface GenerateContext {
   feedback?: string | undefined;
   contextSourceVersionIds?: string[] | undefined;
   baseVersionId?: string | null | undefined;
+  onDelta?: (delta: string) => void;
 }
 
 interface ArtifactTypeDispatch {
