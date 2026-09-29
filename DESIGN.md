@@ -25,7 +25,6 @@ rounded:
   md: '0.625rem'
   lg: '0.875rem'
 spacing:
-  page-max: '75rem'
   card-gap: '1rem'
 components:
   shell: {}
@@ -63,7 +62,7 @@ Inter remains the body and control face. Georgia is restricted to major page and
 
 ## Layout
 
-The product shell uses a slim top bar, a persistent desktop project rail, and a content width of 75rem. Major pages use a header, then cards or review surfaces on a consistent 1rem gap. At narrow widths, the rail disappears and project links remain horizontally scrollable; no action is hidden only in hover. Avoid fixed-height panels for long forms and review content.
+The product shell uses a slim full-width top bar and a persistent desktop project rail. The project header and overview fill the remaining width with aligned page gutters; long text and forms retain readable local widths. Major pages use a header, then cards or review surfaces on a consistent 1rem gap. At narrow widths, the rail disappears and project links remain horizontally scrollable; no action is hidden only in hover. Avoid fixed-height panels for long forms and review content.
 
 ## Elevation & Depth
 

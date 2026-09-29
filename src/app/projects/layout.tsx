@@ -18,7 +18,7 @@ export default async function ProjectsLayout({ children }: LayoutProps<'/project
   return (
     <div className="app-shell bg-surface text-on-surface min-h-screen">
       <header className="border-surface-dim bg-surface-container-lowest sticky top-0 z-40 border-b">
-        <div className="mx-auto flex min-h-16 max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-6">
+        <div className="flex min-h-16 w-full items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
           <Link
             href="/projects"
             className="text-on-surface focus-visible:ring-primary flex items-center gap-4 rounded-md focus-visible:ring-2 focus-visible:outline-none"
@@ -44,7 +44,7 @@ export default async function ProjectsLayout({ children }: LayoutProps<'/project
           </div>
         </div>
       </header>
-      <div className="mx-auto flex w-full max-w-[1440px]">
+      <div className="flex w-full">
         <ProjectSidebar />
         <div className="min-w-0 flex-1">{children}</div>
       </div>

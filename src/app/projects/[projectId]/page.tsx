@@ -146,7 +146,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
   const itemsInShownVersions = dashboard.tiles.reduce((count, tile) => count + tile.itemCount, 0);
 
   return (
-    <main className="mx-auto flex w-full max-w-[1200px] flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
+    <main className="flex w-full flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
       <header className="flex flex-wrap items-end justify-between gap-4 pb-1">
         <div>
           <p className="app-kicker">Overview / {project.name}</p>

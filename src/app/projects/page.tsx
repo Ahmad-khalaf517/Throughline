@@ -21,7 +21,7 @@ export default async function ProjectsPage() {
   const projects = await listProjectsForOwner(user.id);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-[1200px] flex-col gap-9 px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
+    <main className="flex min-h-screen w-full flex-col gap-9 px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
       <header className="flex flex-wrap items-end justify-between gap-5">
         <div>
           <p className="app-kicker">Your workspace</p>
@@ -42,7 +42,7 @@ export default async function ProjectsPage() {
       </header>
 
       {projects.length === 0 ? (
-        <div className="app-card flex flex-col items-start p-8 sm:p-12">
+        <div className="app-card flex max-w-2xl flex-col items-start p-8 sm:p-12">
           <span className="app-accent-soft flex size-11 items-center justify-center rounded-xl">
             <FolderKanban className="size-5" aria-hidden="true" />
           </span>
@@ -68,7 +68,7 @@ export default async function ProjectsPage() {
             </span>
             <span>Open a project to continue</span>
           </div>
-          <ul className="grid gap-4 md:grid-cols-2">
+          <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {projects.map((project) => (
               <li key={project.id}>
                 <Link
