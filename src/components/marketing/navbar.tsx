@@ -25,7 +25,7 @@ export function Navbar({ userEmail, displayName, onSignOut }: NavbarProps) {
     <header className="border-surface-dim bg-surface-container-lowest/90 sticky top-0 z-40 w-full border-b backdrop-blur-md">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
         <Link href="/" className="flex items-center gap-2.5">
-          <LogoMark />
+          <LogoMark className="h-5 sm:h-6" />
         </Link>
 
         <nav className="text-on-surface-variant hidden items-center gap-1 text-[13px] font-medium md:flex">

@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { getAppUserById, getVerifiedUser } from '@/auth';
 import { ProjectSidebar } from '@/components/projects/project-sidebar';
 import { UserMenu } from '@/components/projects/user-menu';
+import { LogoMark } from '@/components/icons/logo-mark';
 import { signOutAction, updateDisplayNameAction } from '../actions';
 
 export default async function ProjectsLayout({ children }: LayoutProps<'/projects'>) {
@@ -20,9 +21,9 @@ export default async function ProjectsLayout({ children }: LayoutProps<'/project
         <div className="mx-auto flex min-h-10 max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-6">
           <Link
             href="/projects"
-            className="text-on-surface focus-visible:ring-primary rounded-md text-xs font-semibold tracking-tight focus-visible:ring-2 focus-visible:outline-none"
+            className="text-on-surface focus-visible:ring-primary rounded-md focus-visible:ring-2 focus-visible:outline-none"
           >
-            THROUGHLINE
+            <LogoMark className="h-5" />
           </Link>
           <div className="flex items-center gap-4">
             <UserMenu
