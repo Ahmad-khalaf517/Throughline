@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
 import { getProjectById } from '@/artifact-lifecycle';
 import { previewPrompt, UiRequirementsVersionNotApprovedError } from '@/external/stitch';
-import { ApiError, errorResponse } from '@/lib/errors';
+import { ApiError } from '@/lib/errors';
+import { routeErrorResponse } from '@/app/api/_shared/connection-errors';
 import { toImpactRowDTOs } from '@/app/api/_shared/external';
 
 interface RouteParams {
@@ -31,7 +32,7 @@ export async function GET(request: Request, { params }: RouteParams) {
 
     let preview;
     try {
-      preview = await previewPrompt(uiRequirementsVersionId);
+      preview = await previewPrompt(uiRequirementsVersionId, { userId: user.id });
     } catch (error) {
       if (error instanceof UiRequirementsVersionNotApprovedError) {
         throw new ApiError('PREREQUISITE_NOT_APPROVED', error.message);
@@ -42,8 +43,11 @@ export async function GET(request: Request, { params }: RouteParams) {
     return NextResponse.json({
       prompt: preview.prompt,
       impact: await toImpactRowDTOs(preview.impact),
+      // Round 14 (FR-089): the preview stays readable without a connection; this block lets the
+      // screen show the connect-to-continue prompt.
+      connection: preview.connection,
     });
   } catch (error) {
-    return errorResponse(error);
+    return routeErrorResponse(error);
   }
 }

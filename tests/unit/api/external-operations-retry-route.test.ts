@@ -87,7 +87,7 @@ vi.mock('@/external/jira', () => ({
 }));
 
 vi.mock('@/external/stitch', () => ({
-  generate: vi.fn(),
+  retryOperation: vi.fn(),
   checkDrift: vi.fn(),
   StitchReconciliationRequiredError: FakeStitchReconciliationRequiredError,
   StitchOperationInFlightError: FakeStitchOperationInFlightError,
@@ -103,7 +103,7 @@ import {
 import { getProjectById } from '@/artifact-lifecycle';
 import { retryOperation, checkDrift as checkGithubDrift } from '@/external/github';
 import { retryOperation as retryJira, checkDrift as checkJiraDrift } from '@/external/jira';
-import { generate, checkDrift as checkStitchDrift } from '@/external/stitch';
+import { retryOperation as retryStitch, checkDrift as checkStitchDrift } from '@/external/stitch';
 import { POST } from '@/app/api/external-operations/[operationId]/retry/route';
 import { ApiError } from '@/lib/errors';
 
@@ -115,7 +115,7 @@ const mockedGetDisplayKeys = vi.mocked(getDisplayKeysForItemVersions);
 const mockedRetryGithub = vi.mocked(retryOperation);
 const mockedGetProjectById = vi.mocked(getProjectById);
 const mockedRetryJira = vi.mocked(retryJira);
-const mockedGenerate = vi.mocked(generate);
+const mockedRetryStitch = vi.mocked(retryStitch);
 const mockedCheckGithubDrift = vi.mocked(checkGithubDrift);
 const mockedCheckJiraDrift = vi.mocked(checkJiraDrift);
 const mockedCheckStitchDrift = vi.mocked(checkStitchDrift);
@@ -179,7 +179,7 @@ describe('POST /api/external-operations/:operationId/retry', () => {
     mockedRetryGithub.mockReset();
     mockedGetProjectById.mockReset().mockResolvedValue({ githubOwner: 'acme' } as never);
     mockedRetryJira.mockReset();
-    mockedGenerate.mockReset();
+    mockedRetryStitch.mockReset();
     mockedCheckGithubDrift.mockReset().mockResolvedValue(null);
     mockedCheckJiraDrift.mockReset().mockResolvedValue(null);
     mockedCheckStitchDrift.mockReset().mockResolvedValue(null);
@@ -310,12 +310,12 @@ describe('POST /api/external-operations/:operationId/retry', () => {
       });
     }
 
-    it('returns 200 { status: completed, ref } when generate completes', async () => {
+    it('returns 200 { status: completed, ref } and retries that operation with the caller as ctx', async () => {
       mockedGetOperationById.mockResolvedValue(stitchOperation());
-      mockedGenerate.mockResolvedValue({ id: 'stitch-1', mode: 'api' } as never);
-      mockedGetRefsForVersion.mockResolvedValue([
-        makeRef({ id: 'ref-stitch', provider: 'stitch' }),
-      ]);
+      mockedRetryStitch.mockResolvedValue({
+        status: 'completed',
+        ref: makeRef({ id: 'ref-stitch', provider: 'stitch' }) as never,
+      });
 
       const response = await POST(request(), paramsFor('op-1'));
 
@@ -325,15 +325,12 @@ describe('POST /api/external-operations/:operationId/retry', () => {
         status: 'completed',
         ref: { id: 'ref-stitch', provider: 'stitch' },
       });
+      expect(mockedRetryStitch).toHaveBeenCalledWith('op-1', { userId: 'user-1' });
     });
 
-    it('KNOWN GAP: falls through to 500 when the retry ends in mode=manual_fallback (definitive failure)', async () => {
+    it('KNOWN GAP: falls through to 500 when the retry ends in a definitive failure', async () => {
       mockedGetOperationById.mockResolvedValue(stitchOperation());
-      mockedGenerate.mockResolvedValue({
-        id: 'stitch-1',
-        mode: 'manual_fallback',
-        promptText: 'x',
-      } as never);
+      mockedRetryStitch.mockRejectedValue(new Error('ended in mode=manual_fallback'));
 
       const response = await POST(request(), paramsFor('op-1'));
 
@@ -342,35 +339,44 @@ describe('POST /api/external-operations/:operationId/retry', () => {
 
     it('returns 200 { status: reconciliation_required }', async () => {
       mockedGetOperationById.mockResolvedValue(stitchOperation());
-      mockedGenerate.mockRejectedValue(new FakeStitchReconciliationRequiredError('key'));
+      mockedRetryStitch.mockResolvedValue({ status: 'reconciliation_required' });
 
       const response = await POST(request(), paramsFor('op-1'));
 
       expect(response.status).toBe(200);
-      const body = await response.json();
-      expect(body).toEqual({ status: 'reconciliation_required' });
+      expect(await response.json()).toEqual({ status: 'reconciliation_required' });
     });
 
     it('returns 200 { status: pending }', async () => {
       mockedGetOperationById.mockResolvedValue(stitchOperation());
-      mockedGenerate.mockRejectedValue(new FakeStitchOperationInFlightError('key'));
+      mockedRetryStitch.mockResolvedValue({ status: 'pending' });
 
       const response = await POST(request(), paramsFor('op-1'));
 
       expect(response.status).toBe(200);
-      const body = await response.json();
-      expect(body).toEqual({ status: 'pending' });
+      expect(await response.json()).toEqual({ status: 'pending' });
     });
 
     it('returns 409 REQUEST_CONFLICT', async () => {
       mockedGetOperationById.mockResolvedValue(stitchOperation());
-      mockedGenerate.mockRejectedValue(new FakeStitchOperationConflictError('key'));
+      mockedRetryStitch.mockRejectedValue(new FakeStitchOperationConflictError('key'));
 
       const response = await POST(request(), paramsFor('op-1'));
 
       expect(response.status).toBe(409);
       const body = await response.json();
       expect(body.error.code).toBe('REQUEST_CONFLICT');
+    });
+
+    it('returns 409 RECONNECT_REQUIRED when the recorded connection lapsed', async () => {
+      mockedGetOperationById.mockResolvedValue(stitchOperation());
+      mockedRetryStitch.mockRejectedValue(new FakeReconnectRequiredError('lapsed'));
+
+      const response = await POST(request(), paramsFor('op-1'));
+
+      expect(response.status).toBe(409);
+      const body = await response.json();
+      expect(body.error.code).toBe('RECONNECT_REQUIRED');
     });
   });
 

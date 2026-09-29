@@ -39,6 +39,18 @@
 // generation can time out client-side after the screen really was created -
 // Spike B, TR 42). Stitch cannot enumerate screens (verified live 2026-09-28),
 // so reconcile falls back to regenerating once - see its own doc comment.
+//
+// Round 14 (SCRUM-98, ERD 7.5 / 7.6, FR-086): a NEW generate uses the acting
+// user's own Stitch API key (`connections.getCredential(ctx.userId, 'stitch')`,
+// resolved BEFORE `runOperation`, so a missing connection leaves no operation
+// row and never degrades into `manual_fallback`). Anything that touches an
+// EXISTING operation (its send, its reconcile, a retry) takes its key from the
+// connection recorded on that row (`getCredentialForOperation`); only
+// `{ kind: 'legacy' }` (no recorded connection) reads the optional
+// STITCH_API_KEY environment credential, exactly as before round 14. An
+// AUTH_FAILED from the SDK on a user credential marks the connection
+// `needs_reauth` and stops with `ReconnectRequiredError` - never a `failed`
+// operation or a fallback. The key is never logged, echoed or put in an error.
 import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { Stitch, StitchError, StitchToolClient, type Screen } from '@google/stitch-sdk';
@@ -46,8 +58,19 @@ import { env } from '@/lib/env';
 import { db, schema } from '@/db';
 import { getStorageServiceClient } from '@/auth';
 import {
+  getCredential,
+  getCredentialForOperation,
+  listConnections,
+  reportAuthFailure,
+  ReconnectRequiredError,
+  type ConnectionStatus,
+  type Credential,
+} from '@/connections';
+import {
   runOperation,
   getRefById,
+  getRefsForVersion,
+  getOperationById,
   getOperationsForVersion,
   DefinitiveProviderError,
   type ExternalRef,
@@ -59,6 +82,18 @@ import {
 } from '@/artifact-types/ui-requirements';
 
 export type StitchOutput = typeof schema.stitchOutput.$inferSelect;
+
+/** Module Boundaries D1: the verified caller. The Stitch key is theirs, resolved inside this module. */
+export type StitchCtx = { userId: string };
+
+/**
+ * Round 14 (API Contracts `PreviewConnectionDTO`, FR-089): whether the caller
+ * can generate right now. `targetReady` is always true - Stitch has no chosen target.
+ */
+export interface PreviewConnection {
+  status: ConnectionStatus['status'];
+  targetReady: true;
+}
 
 // ---------------------------------------------------------------------------
 // Errors - mirrors github/jira's own named-Error-subclass convention.
@@ -181,9 +216,16 @@ async function resolveApprovedVersion(uiRequirementsVersionId: string) {
 // FR-050 - preview.
 // ---------------------------------------------------------------------------
 
+/**
+ * Round 14 (FR-089): built from local state only - no Stitch call, no
+ * credential - so it never throws `ConnectionRequiredError` /
+ * `ReconnectRequiredError`; `connection` tells the screen whether to show the
+ * connect-to-continue prompt.
+ */
 export async function previewPrompt(
   uiRequirementsVersionId: string,
-): Promise<{ prompt: string; impact: ImpactRow[] }> {
+  ctx: StitchCtx,
+): Promise<{ prompt: string; impact: ImpactRow[]; connection: PreviewConnection }> {
   const version = await resolveApprovedVersion(uiRequirementsVersionId);
   const prompt = buildPrompt(version.items);
 
@@ -196,7 +238,11 @@ export async function previewPrompt(
     (row) => row.subjectKind === 'item_version' && itemVersionIdSet.has(row.subjectId),
   );
 
-  return { prompt, impact };
+  // Read last, as the other providers' previews do, so the status is as current as it can be.
+  const stitch = (await listConnections(ctx.userId)).find((c) => c.provider === 'stitch');
+  const connection: PreviewConnection = { status: stitch?.status ?? 'none', targetReady: true };
+
+  return { prompt, impact, connection };
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +254,7 @@ function projectTitle(uiRequirementsVersionId: string): string {
   return `throughline:stitch:generate:${uiRequirementsVersionId}`;
 }
 
+/** The legacy environment credential - used only for an operation with no recorded connection. */
 function requireStitchApiKey(): string {
   if (!env.STITCH_API_KEY) {
     throw new Error('Stitch is not configured - missing STITCH_API_KEY (ERD 7.5, real mode).');
@@ -215,17 +262,95 @@ function requireStitchApiKey(): string {
   return env.STITCH_API_KEY;
 }
 
+/** The key one send/reconcile runs with, and the connection behind it (`null` = legacy env key). */
+interface StitchAuth {
+  apiKey: string;
+  credential: Credential | null;
+}
+
+/**
+ * An operation always takes its key from the row itself, so a retry never
+ * silently switches account. Throws `ReconnectRequiredError` when the recorded
+ * connection is unusable or belongs to a different key.
+ */
+async function authForOperation(operationId: string): Promise<StitchAuth> {
+  const recorded = await getCredentialForOperation(operationId);
+  if ('kind' in recorded) return { apiKey: requireStitchApiKey(), credential: null };
+  return { apiKey: recorded.accessToken, credential: recorded };
+}
+
+/** The SDK rejected the user's key: the credential is dead, not the operation. */
+function isUserAuthFailure(error: unknown, credential: Credential | null): boolean {
+  return credential !== null && error instanceof StitchError && error.code === 'AUTH_FAILED';
+}
+
 /**
  * Runs `fn` against a fresh SDK client and always closes it. `baseUrl` is
- * deliberately left to the SDK default.
+ * deliberately left to the SDK default. AUTH_FAILED on a user credential marks
+ * the connection `needs_reauth` and becomes `ReconnectRequiredError` (ERD 7.6) -
+ * the SDK's own message is dropped. The legacy env key keeps its old handling.
  */
-async function withStitch<T>(apiKey: string, fn: (client: Stitch) => Promise<T>): Promise<T> {
-  const toolClient = new StitchToolClient({ apiKey });
+async function withStitch<T>(auth: StitchAuth, fn: (client: Stitch) => Promise<T>): Promise<T> {
+  const toolClient = new StitchToolClient({ apiKey: auth.apiKey });
   try {
     return await fn(new Stitch(toolClient));
+  } catch (error) {
+    if (auth.credential && isUserAuthFailure(error, auth.credential)) {
+      await reportAuthFailure(auth.credential.connectionId);
+      throw new ReconnectRequiredError('stitch', 'needs_reauth', auth.credential.connectionId);
+    }
+    throw error;
   } finally {
     await toolClient.close().catch(() => undefined);
   }
+}
+
+// ---------------------------------------------------------------------------
+// FR-086 - validate a pasted API key (Module Boundaries 4.6). One cheap
+// read-only SDK call; persists nothing (the route then calls
+// `connections.saveConnection`). Never throws, and the result never carries the
+// key or any SDK text.
+// ---------------------------------------------------------------------------
+
+export type ValidateApiKeyResult =
+  | { ok: true; accountId: string; label: string }
+  | { ok: false; reason: 'rejected' | 'unavailable' };
+
+const VALIDATE_TIMEOUT_MS = 15_000;
+
+/**
+ * The SDK exposes no account identity, so the stable non-secret account id is a
+ * truncated SHA-256 fingerprint of the key (`key:` + 16 hex chars). It reveals no
+ * part of the key. Consequence: pasting a different key is a different account
+ * (operations recorded with the old one resolve as `account_mismatch`).
+ */
+function keyFingerprint(apiKey: string): string {
+  return `key:${createHash('sha256').update(apiKey).digest('hex').slice(0, 16)}`;
+}
+
+/**
+ * The SDK has no `limit` on list_projects; a valid key answers quickly either
+ * way. AUTH_FAILED / PERMISSION_DENIED => `rejected`; network, rate limit,
+ * timeout and anything unknown => `unavailable` (the key is not judged).
+ */
+export async function validateApiKey(apiKey: string): Promise<ValidateApiKeyResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      withStitch({ apiKey, credential: null }, (client) => client.projects()),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), VALIDATE_TIMEOUT_MS);
+      }),
+    ]);
+  } catch (error) {
+    const rejected =
+      error instanceof StitchError &&
+      (error.code === 'AUTH_FAILED' || error.code === 'PERMISSION_DENIED');
+    return { ok: false, reason: rejected ? 'rejected' : 'unavailable' };
+  } finally {
+    clearTimeout(timer);
+  }
+  return { ok: true, accountId: keyFingerprint(apiKey), label: 'Stitch API key' };
 }
 
 // ERD 7.2: `failed` is reserved for DEFINITIVE provider rejections. These SDK
@@ -238,7 +363,10 @@ const DEFINITIVE_STITCH_CODES: ReadonlySet<string> = new Set([
   'NOT_FOUND',
 ]);
 
-function classifyStitchError(error: unknown): unknown {
+function classifyStitchError(error: unknown, credential: Credential | null): unknown {
+  // A user credential's AUTH_FAILED is never the operation's outcome: it passes
+  // through unchanged so `withStitch` can turn it into ReconnectRequiredError.
+  if (isUserAuthFailure(error, credential)) return error;
   if (error instanceof StitchError && DEFINITIVE_STITCH_CODES.has(error.code)) {
     return new DefinitiveProviderError(`stitch_generate_rejected:${error.code}`);
   }
@@ -340,19 +468,19 @@ async function persistScreen(args: {
  * (reconcile finds the screen instead).
  */
 async function sendGenerate(args: {
-  apiKey: string;
+  auth: StitchAuth;
   storage: StorageServiceClient;
   bucket: string;
   prompt: string;
   uiRequirementsVersionId: string;
 }): Promise<{ externalId: string; externalUrl: string; metadata: AssetMetadata }> {
-  return withStitch(args.apiKey, async (client) => {
+  return withStitch(args.auth, async (client) => {
     let screen: Screen;
     try {
       const project = await client.createProject(projectTitle(args.uiRequirementsVersionId));
       screen = await project.generate(args.prompt, 'DESKTOP');
     } catch (error) {
-      throw classifyStitchError(error);
+      throw classifyStitchError(error, args.auth.credential);
     }
     return persistScreen({
       screen,
@@ -387,7 +515,7 @@ async function sendGenerate(args: {
  * duplicate orphan screen/project on Stitch's side - harmless to Throughline.
  */
 async function reconcileGenerate(args: {
-  apiKey: string;
+  auth: StitchAuth;
   storage: StorageServiceClient;
   bucket: string;
   prompt: string;
@@ -397,7 +525,7 @@ async function reconcileGenerate(args: {
   | { found: false }
 > {
   const title = projectTitle(args.uiRequirementsVersionId);
-  return withStitch(args.apiKey, async (client) => {
+  return withStitch(args.auth, async (client) => {
     const persist = (screen: Screen) =>
       persistScreen({
         screen,
@@ -421,8 +549,9 @@ async function reconcileGenerate(args: {
       const project = projects[0] ?? (await client.createProject(title));
       screen = await project.generate(args.prompt, 'DESKTOP');
     } catch (error) {
-      const classified = classifyStitchError(error);
+      const classified = classifyStitchError(error, args.auth.credential);
       if (classified instanceof DefinitiveProviderError) throw classified;
+      if (isUserAuthFailure(error, args.auth.credential)) throw error; // -> ReconnectRequiredError
       // Ambiguous: the regenerate itself is inconclusive, so report
       // "not found" -> reconciliation_required (retryable, 409 at the route).
       return { found: false as const };
@@ -526,7 +655,32 @@ function assetMetadataFromRef(ref: ExternalRef): AssetMetadata {
 // FR-051/052/054 + ERD 7.5/4.16 - generate.
 // ---------------------------------------------------------------------------
 
-export async function generate(uiRequirementsVersionId: string): Promise<StitchOutput> {
+export async function generate(
+  uiRequirementsVersionId: string,
+  ctx: StitchCtx,
+): Promise<StitchOutput> {
+  // Round 14 (ERD 7.2 step 0): the caller's own key, resolved BEFORE any
+  // operation row or stitch_output write - `ConnectionRequiredError` /
+  // `ReconnectRequiredError` therefore leave nothing behind and never become a
+  // manual_fallback (that is for a failed generation, FR-054). The approval
+  // and already-generated checks come first so they keep their own answers.
+  await resolveApprovedVersion(uiRequirementsVersionId);
+  const existing = await findExistingStitchOutput(uiRequirementsVersionId);
+  if (existing?.mode === 'api') {
+    throw new AlreadyGeneratedError(uiRequirementsVersionId);
+  }
+  const credential = await getCredential(ctx.userId, 'stitch');
+  return generateWith(uiRequirementsVersionId, credential);
+}
+
+/**
+ * The shared body of `generate` (a NEW operation, the user's own credential) and
+ * `retryOperation` (the credential recorded on the operation, or `legacy`).
+ */
+async function generateWith(
+  uiRequirementsVersionId: string,
+  recorded: Credential | { kind: 'legacy' },
+): Promise<StitchOutput> {
   const version = await resolveApprovedVersion(uiRequirementsVersionId);
   const prompt = buildPrompt(version.items);
 
@@ -535,7 +689,9 @@ export async function generate(uiRequirementsVersionId: string): Promise<StitchO
     throw new AlreadyGeneratedError(uiRequirementsVersionId);
   }
 
-  const apiKey = requireStitchApiKey();
+  // A legacy operation still needs the environment key: fail before any row is touched.
+  if ('kind' in recorded) requireStitchApiKey();
+  const credential = 'kind' in recorded ? null : recorded;
   const bucket = requireStorageBucket();
   const storage = getStorageServiceClient();
 
@@ -552,12 +708,24 @@ export async function generate(uiRequirementsVersionId: string): Promise<StitchO
     requestHash,
     targetDescriptor: { uiRequirementsVersionId },
     sourceArtifactVersionId: uiRequirementsVersionId,
-    // Legacy environment-credential path (SCRUM-96 part A keeps today's behaviour):
-    // per-user connections arrive with the provider stories (UC-S4 part B / UC-S5 / UC-S6).
-    connectionId: null,
-    send: () => sendGenerate({ apiKey, storage, bucket, prompt, uiRequirementsVersionId }),
-    reconcile: () =>
-      reconcileGenerate({ apiKey, storage, bucket, prompt, uiRequirementsVersionId }),
+    connectionId: credential?.connectionId ?? null,
+    accountId: credential?.accountId ?? null,
+    send: async ({ operationId }) =>
+      sendGenerate({
+        auth: await authForOperation(operationId),
+        storage,
+        bucket,
+        prompt,
+        uiRequirementsVersionId,
+      }),
+    reconcile: async ({ operationId }) =>
+      reconcileGenerate({
+        auth: await authForOperation(operationId),
+        storage,
+        bucket,
+        prompt,
+        uiRequirementsVersionId,
+      }),
   });
 
   switch (result.status) {
@@ -598,6 +766,59 @@ export async function generate(uiRequirementsVersionId: string): Promise<StitchO
       // Kept only so this switch stays exhaustive against
       // `RunOperationResult`'s real 6-variant union.
       throw new Error(`unexpected 'refused' status for Stitch operation ${operationKey}`);
+  }
+}
+
+/**
+ * Round 14: the retry route's entry point for ONE existing Stitch operation. The
+ * request is rebuilt from current inputs (so the request-hash check still
+ * catches a changed prompt), but the CREDENTIAL is the one recorded on the
+ * operation (`getCredentialForOperation`), never the user's current connection.
+ * A recorded connection that is not usable, or whose key is no longer the one
+ * the operation used, throws `ReconnectRequiredError` before any network call
+ * and leaves the operation exactly as it was; an operation with no recorded
+ * connection retries with the optional environment key. `ctx` is accepted for
+ * signature parity with the other providers; Stitch has no target to re-check.
+ */
+export async function retryOperation(
+  operationId: string,
+  _ctx: StitchCtx,
+): Promise<
+  { status: 'completed'; ref: ExternalRef } | { status: 'reconciliation_required' | 'pending' }
+> {
+  const operation = await getOperationById(operationId);
+  if (!operation || operation.provider !== 'stitch') {
+    throw new Error(`external_operation ${operationId} is not a Stitch operation`);
+  }
+  const uiRequirementsVersionId = operation.sourceArtifactVersionId;
+  const recorded = await getCredentialForOperation(operationId);
+
+  try {
+    const output = await generateWith(uiRequirementsVersionId, recorded);
+    if (output.mode === 'manual_fallback') {
+      // Unlike GitHub/Jira, a Stitch definitive failure does not throw -
+      // `generate` swallows it and returns normally with
+      // `mode: 'manual_fallback'` (Module Boundaries 4.6). Reporting that as
+      // `completed` would misreport the outcome (no `external_ref` was
+      // created), so this throws and reaches the retry route's known
+      // contract-gap 500 (API Contracts section 7), like GitHub/Jira failures.
+      throw new Error(
+        `stitch retry for external_operation ${operationId} ended in mode='manual_fallback' ` +
+          '(definitive failure) - see GET /api/external-operations/:operationId for the durable record',
+      );
+    }
+    const refs = await getRefsForVersion(uiRequirementsVersionId);
+    const ref = refs.find((candidate) => candidate.provider === 'stitch');
+    if (!ref) {
+      throw new Error(`stitch_output ${output.id} is mode='api' but no stitch external_ref exists`);
+    }
+    return { status: 'completed', ref };
+  } catch (error) {
+    if (error instanceof StitchReconciliationRequiredError) {
+      return { status: 'reconciliation_required' };
+    }
+    if (error instanceof StitchOperationInFlightError) return { status: 'pending' };
+    throw error;
   }
 }
 

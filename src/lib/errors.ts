@@ -44,7 +44,8 @@ export type ErrorCode =
   | 'RECONNECT_REQUIRED'
   | 'TARGET_REQUIRED'
   | 'TARGET_LOCKED'
-  | 'TARGET_NOT_ACCESSIBLE';
+  | 'TARGET_NOT_ACCESSIBLE'
+  | 'PROVIDER_KEY_REJECTED';
 
 const STATUS_BY_CODE: Record<ErrorCode, number> = {
   VALIDATION_ERROR: 400,
@@ -74,6 +75,7 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   TARGET_REQUIRED: 409,
   TARGET_LOCKED: 409,
   TARGET_NOT_ACCESSIBLE: 422,
+  PROVIDER_KEY_REJECTED: 422,
 };
 
 // The one error shape every route handler throws and every response maps

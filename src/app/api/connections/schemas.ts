@@ -23,3 +23,10 @@ export const jiraProjectsQuerySchema = z.object({
 
 // Only these three provider segments exist (API Contracts 10A); anything else is 404.
 export const providerParamSchema = z.enum(['github', 'jira', 'stitch']);
+
+// `POST /api/connections/stitch` (API Contracts 10A): the one request in the API
+// that carries a provider secret. Trimmed (a pasted key often has a trailing
+// newline); the upper bound only rejects absurd input before it reaches the SDK.
+export const stitchConnectSchema = z.object({
+  apiKey: z.string().trim().min(1).max(2048),
+});

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
-import { getOperationById, getRefsForVersion, type ExternalOperation } from '@/external/operations';
+import { getOperationById, type ExternalOperation } from '@/external/operations';
 import { getProjectById } from '@/artifact-lifecycle';
 import {
   retryOperation as retryGithubOperation,
@@ -9,9 +9,7 @@ import {
 } from '@/external/github';
 import { retryOperation as retryJiraOperation, JiraOperationConflictError } from '@/external/jira';
 import {
-  generate,
-  StitchReconciliationRequiredError,
-  StitchOperationInFlightError,
+  retryOperation as retryStitchOperation,
   StitchOperationConflictError,
 } from '@/external/stitch';
 import { ApiError } from '@/lib/errors';
@@ -71,40 +69,22 @@ async function retryGithub(op: ExternalOperation, userId: string): Promise<Retry
   }
 }
 
-async function retryStitch(op: ExternalOperation): Promise<RetryResult> {
+async function retryStitch(op: ExternalOperation, userId: string): Promise<RetryResult> {
+  // Round 14: the credential is the one recorded on the operation; `ctx` is only the caller.
   try {
-    const output = await generate(op.sourceArtifactVersionId);
-    if (output.mode === 'manual_fallback') {
-      // Unlike GitHub/Jira, a Stitch definitive failure does not throw -
-      // `stitch.generate` swallows it and returns normally with
-      // `mode: 'manual_fallback'` (Module Boundaries 4.6's own doc comment).
-      // Surfacing that here as `completed` would misreport the outcome (no
-      // `external_ref` was created) - this deliberately throws instead, so
-      // it reaches the same known-gap 500 as GitHub/Jira's failure case.
-      throw new Error(
-        `stitch retry for external_operation ${op.id} ended in mode='manual_fallback' ` +
-          '(definitive failure) - see GET /api/external-operations/:operationId for the durable record',
-      );
+    const result = await retryStitchOperation(op.id, { userId });
+    if (result.status === 'completed') {
+      return { status: 'completed', ref: await serializeRefWithFreshDrift(result.ref) };
     }
-    const refs = await getRefsForVersion(op.sourceArtifactVersionId);
-    const ref = refs.find((candidate) => candidate.provider === 'stitch');
-    if (!ref) {
-      throw new Error(`stitch_output ${output.id} is mode='api' but no stitch external_ref exists`);
-    }
-    return { status: 'completed', ref: await serializeRefWithFreshDrift(ref) };
+    return result;
   } catch (error) {
-    if (error instanceof StitchReconciliationRequiredError) {
-      return { status: 'reconciliation_required' };
-    }
-    if (error instanceof StitchOperationInFlightError) {
-      return { status: 'pending' };
-    }
     if (error instanceof StitchOperationConflictError) {
       throw new ApiError(
         'REQUEST_CONFLICT',
         "This retry's inputs no longer match the original request.",
       );
     }
+    // A definitive failure (manual_fallback): the known contract gap above - falls through to 500.
     throw error;
   }
 }
@@ -162,7 +142,7 @@ export async function POST(request: Request, { params }: RouteParams) {
         result = await retryJira(operation, user.id);
         break;
       case 'stitch':
-        result = await retryStitch(operation);
+        result = await retryStitch(operation, user.id);
         break;
       default:
         // external_operation_provider_check guarantees one of the three above.

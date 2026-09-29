@@ -8,18 +8,29 @@ const {
   FakeStitchReconciliationRequiredError,
   FakeStitchOperationInFlightError,
   FakeStitchOperationConflictError,
+  FakeConnectionRequiredError,
+  FakeReconnectRequiredError,
 } = vi.hoisted(() => {
   class FakeUiRequirementsVersionNotApprovedError extends Error {}
   class FakeAlreadyGeneratedError extends Error {}
   class FakeStitchReconciliationRequiredError extends Error {}
   class FakeStitchOperationInFlightError extends Error {}
   class FakeStitchOperationConflictError extends Error {}
+  class FakeConnectionRequiredError extends Error {
+    provider = 'stitch';
+  }
+  class FakeReconnectRequiredError extends Error {
+    provider = 'stitch';
+    reason = 'needs_reauth';
+  }
   return {
     FakeUiRequirementsVersionNotApprovedError,
     FakeAlreadyGeneratedError,
     FakeStitchReconciliationRequiredError,
     FakeStitchOperationInFlightError,
     FakeStitchOperationConflictError,
+    FakeConnectionRequiredError,
+    FakeReconnectRequiredError,
   };
 });
 
@@ -48,6 +59,10 @@ vi.mock('@/external/stitch', () => ({
   StitchReconciliationRequiredError: FakeStitchReconciliationRequiredError,
   StitchOperationInFlightError: FakeStitchOperationInFlightError,
   StitchOperationConflictError: FakeStitchOperationConflictError,
+}));
+vi.mock('@/connections', () => ({
+  ConnectionRequiredError: FakeConnectionRequiredError,
+  ReconnectRequiredError: FakeReconnectRequiredError,
 }));
 vi.mock('@/external/github', () => ({ checkDrift: vi.fn() }));
 vi.mock('@/external/jira', () => ({ checkDrift: vi.fn() }));
@@ -129,7 +144,11 @@ describe('POST /api/projects/:projectId/stitch/generate', () => {
     mockedGetVerifiedUser.mockResolvedValue(user);
     mockedRequireProjectOwner.mockResolvedValue(undefined);
     mockedGetProjectById.mockResolvedValue(baseProject());
-    mockedPreviewPrompt.mockResolvedValue({ prompt: 'Generate...', impact: [] });
+    mockedPreviewPrompt.mockResolvedValue({
+      prompt: 'Generate...',
+      impact: [],
+      connection: { status: 'active', targetReady: true },
+    });
   });
 
   it('returns 401 UNAUTHENTICATED when there is no verified user', async () => {
@@ -169,6 +188,7 @@ describe('POST /api/projects/:projectId/stitch/generate', () => {
   it('returns 409 IMPACT_NOT_ACKNOWLEDGED with details.impact when impact is unacknowledged', async () => {
     mockedPreviewPrompt.mockResolvedValue({
       prompt: 'Generate...',
+      connection: { status: 'active', targetReady: true },
       impact: [
         {
           subjectKind: 'item_version',
@@ -269,6 +289,41 @@ describe('POST /api/projects/:projectId/stitch/generate', () => {
     expect(response.status).toBe(202);
     const body = await response.json();
     expect(body).toEqual({ status: 'reconciliation_required', operationId: 'op-active' });
+  });
+
+  it('passes the verified user as the stitch ctx to previewPrompt and generate', async () => {
+    mockedGenerate.mockResolvedValue({
+      id: 'stitch-1',
+      mode: 'manual_fallback',
+      promptText: 'p',
+    } as never);
+
+    await POST(postRequest({ impactAcknowledged: true }), paramsFor('project-1'));
+
+    expect(mockedPreviewPrompt).toHaveBeenCalledWith('ui-v1', { userId: 'user-1' });
+    expect(mockedGenerate).toHaveBeenCalledWith('ui-v1', { userId: 'user-1' });
+  });
+
+  it('returns 409 CONNECTION_REQUIRED { provider: stitch } when the caller has no Stitch connection', async () => {
+    mockedGenerate.mockRejectedValue(new FakeConnectionRequiredError('no connection'));
+
+    const response = await POST(postRequest({ impactAcknowledged: true }), paramsFor('project-1'));
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error.code).toBe('CONNECTION_REQUIRED');
+    expect(body.error.details).toEqual({ provider: 'stitch' });
+  });
+
+  it('returns 409 RECONNECT_REQUIRED { provider, reason } when the key was rejected', async () => {
+    mockedGenerate.mockRejectedValue(new FakeReconnectRequiredError('lapsed'));
+
+    const response = await POST(postRequest({ impactAcknowledged: true }), paramsFor('project-1'));
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error.code).toBe('RECONNECT_REQUIRED');
+    expect(body.error.details).toEqual({ provider: 'stitch', reason: 'needs_reauth' });
   });
 
   it('returns 202 { status: pending, operationId }', async () => {
