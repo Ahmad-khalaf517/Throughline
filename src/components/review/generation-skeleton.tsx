@@ -6,6 +6,7 @@ interface GenerationSkeletonProps {
   artifactType: ArtifactType;
   artifactTypeName: string;
   preview?: string;
+  finalizing?: boolean;
 }
 
 const SHAPES: Record<ArtifactType, { rows: number; columns: number }> = {
@@ -19,17 +20,21 @@ export function GenerationSkeleton({
   artifactType,
   artifactTypeName,
   preview,
+  finalizing = false,
 }: GenerationSkeletonProps) {
   const shape = SHAPES[artifactType];
   return (
     <div className="flex flex-col gap-6">
       <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
         <p role="status" className="text-on-surface text-sm font-medium">
-          Generating {artifactTypeName}…
+          {finalizing
+            ? `Opening saved ${artifactTypeName} draft…`
+            : `Generating ${artifactTypeName}…`}
         </p>
         <p className="text-on-surface-variant mt-1 text-xs">
-          Draft text appears below as the model responds. The draft is ready after validation and
-          saving.
+          {finalizing
+            ? 'The draft was saved. Loading it for review now.'
+            : 'Draft text appears below as the model responds. The draft is ready after validation and saving.'}
         </p>
         {preview ? (
           <pre

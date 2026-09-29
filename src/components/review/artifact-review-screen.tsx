@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CircleAlert, CircleCheck, Loader2, SquarePen } from 'lucide-react';
 import type {
@@ -188,6 +188,9 @@ export function ArtifactReviewScreen({
   const [aiRevisionOpen, setAiRevisionOpen] = useState(false);
   const [aiRevisionFeedback, setAiRevisionFeedback] = useState('');
   const [generationPreview, setGenerationPreview] = useState('');
+  const [generationFinalizing, setGenerationFinalizing] = useState(false);
+  const [refreshTimedOut, setRefreshTimedOut] = useState(false);
+  const refreshTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [staleReason, setStaleReason] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -223,6 +226,26 @@ export function ArtifactReviewScreen({
     [upstreamDisplayKeysByItemVersionId, upstreamOverrides],
   );
 
+  // The page keys this component by version id. A successful refresh remounts
+  // it with the saved version; only a delayed refresh needs local recovery.
+  useEffect(
+    () => () => {
+      if (refreshTimeout.current) clearTimeout(refreshTimeout.current);
+    },
+    [],
+  );
+
+  function waitForSavedVersion(releasePending: () => void) {
+    setGenerationFinalizing(true);
+    router.refresh();
+    refreshTimeout.current = setTimeout(() => {
+      setGenerationFinalizing(false);
+      setRefreshTimedOut(true);
+      setErrorMessage('The draft was saved, but this page did not update. Reload to see it.');
+      releasePending();
+    }, 15_000);
+  }
+
   /**
    * `POST /api/projects/:projectId/artifacts/:type/generate` with no body -
    * the first-generation path (SCRUM-86 follow-up: a brand-new project's
@@ -236,6 +259,8 @@ export function ArtifactReviewScreen({
     setErrorMessage(null);
     setStaleReason(null);
     setGenerationPreview('');
+    setRefreshTimedOut(false);
+    let saved = false;
     try {
       const response = await fetch(
         `/api/projects/${projectId}/artifacts/${artifactType}/generate`,
@@ -251,15 +276,17 @@ export function ArtifactReviewScreen({
         setStaleReason(body.reason ?? 'base_changed');
         return;
       }
-      router.refresh();
+      waitForSavedVersion(() => setPending(false));
+      saved = true;
     } catch (error) {
+      setGenerationFinalizing(false);
       setErrorMessage(
         error instanceof Error
           ? error.message
           : 'Could not reach the server. Check your connection and try again.',
       );
     } finally {
-      setPending(false);
+      if (!saved) setPending(false);
     }
   }
 
@@ -269,6 +296,7 @@ export function ArtifactReviewScreen({
         artifactType={artifactType}
         artifactTypeName={artifactTypeName}
         preview={generationPreview}
+        finalizing={generationFinalizing}
       />
     );
   }
@@ -290,6 +318,15 @@ export function ArtifactReviewScreen({
           >
             <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>{errorMessage}</span>
+            {refreshTimedOut && (
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="ml-1 underline focus-visible:outline-2"
+              >
+                Reload page
+              </button>
+            )}
           </p>
         )}
         {staleReason && (
@@ -478,6 +515,8 @@ export function ArtifactReviewScreen({
     setErrorMessage(null);
     setStaleReason(null);
     setGenerationPreview('');
+    setRefreshTimedOut(false);
+    let saved = false;
     try {
       const trimmedFeedback = aiRevisionFeedback.trim();
       const response = await fetch(
@@ -498,15 +537,17 @@ export function ArtifactReviewScreen({
       }
       setAiRevisionOpen(false);
       setAiRevisionFeedback('');
-      router.refresh();
+      waitForSavedVersion(() => setAiRevisePending(false));
+      saved = true;
     } catch (error) {
+      setGenerationFinalizing(false);
       setErrorMessage(
         error instanceof Error
           ? error.message
           : 'Could not reach the server. Check your connection and try again.',
       );
     } finally {
-      setAiRevisePending(false);
+      if (!saved) setAiRevisePending(false);
     }
   }
 
@@ -1000,6 +1041,15 @@ export function ArtifactReviewScreen({
           >
             <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>{errorMessage}</span>
+            {refreshTimedOut && (
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="ml-1 underline focus-visible:outline-2"
+              >
+                Reload page
+              </button>
+            )}
           </p>
         )}
         <button
