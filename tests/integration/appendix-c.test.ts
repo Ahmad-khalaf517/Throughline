@@ -4604,16 +4604,6 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
           }),
         ).rejects.toThrow('socket hang up');
 
-        // Success.
-        const done = await ops.runOperation({
-          ...base,
-          operationKey: `${provider}:scan:ok:${randomUUID()}`,
-          requestHash: 'h-scan-ok',
-          send: async () => ({ externalId: `${provider}-ext-${randomUUID()}` }),
-          reconcile: async () => ({ found: false }),
-        });
-        expect(done.status).toBe('completed');
-
         // Reconnect required: the recorded connection needs re-authorization.
         await sql`UPDATE provider_connection SET status = 'needs_reauth' WHERE id = ${credential.connectionId}`;
         const failure = await ops
@@ -4633,6 +4623,21 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
         const response = routeErrorResponse(failure);
         expect(response.status).toBe(409);
         responses.push(JSON.stringify(await response.json()));
+
+        // Success. Runs AFTER the reconnect step on purpose: once a GitHub operation
+        // of the project is `completed`, `runOperation` refuses (ERD 4.15, "one
+        // repository per project") a re-run of the earlier FAILED key before it ever
+        // reaches the recorded-connection check. A NEW operation never consults the
+        // connection's status (its caller resolved the credential first), and this
+        // send closure uses no credential, so the flow's outcome is unchanged.
+        const done = await ops.runOperation({
+          ...base,
+          operationKey: `${provider}:scan:ok:${randomUUID()}`,
+          requestHash: 'h-scan-ok',
+          send: async () => ({ externalId: `${provider}-ext-${randomUUID()}` }),
+          reconcile: async () => ({ found: false }),
+        });
+        expect(done.status).toBe('completed');
 
         const opRows = await sql<{ id: string }[]>`
           SELECT id FROM external_operation WHERE project_id = ${projectId}
