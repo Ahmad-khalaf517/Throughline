@@ -471,6 +471,60 @@ function mockAuthAsOwner(userId: string): void {
   });
 }
 
+// Round 14 (SCRUM-96/97): a NEW GitHub/Jira operation needs the acting user's own
+// connection and the project's target (the routes answer 409 CONNECTION_REQUIRED /
+// TARGET_REQUIRED otherwise, before any operation row). Same fixtures the
+// module-level tests in tests/integration/external/{github,jira}.test.ts use:
+// a connection saved through the real `connections.saveConnection` and the
+// project's target columns set directly.
+const TEST_GITHUB_TOKEN = 'gho_e4t3_test_user_token';
+const JIRA_CLOUD_ID = 'cloud-e4t3-1';
+const JIRA_SITE_URL = 'https://fake-jira-e4t3.example.test';
+const TEST_JIRA_ACCESS_TOKEN = 'atl_e4t3_test_user_token';
+
+/** The owner's GitHub connection (login = the fake GitHub's owner) + the project's `github_owner`. */
+async function connectGithubForProject(userId: string, projectId: string): Promise<void> {
+  await connectionsModule.saveConnection({
+    userId,
+    provider: 'github',
+    externalAccountId: `gh-${userId}`,
+    displayName: FAKE_GITHUB_OWNER,
+    accessToken: TEST_GITHUB_TOKEN,
+    scopes: ['repo', 'read:org'],
+    providerMeta: { login: FAKE_GITHUB_OWNER },
+  });
+  await sql`UPDATE project SET github_owner = ${FAKE_GITHUB_OWNER} WHERE id = ${projectId}`;
+}
+
+/** Points the project at a (possibly different) Jira project on the connected site. */
+async function setJiraTarget(projectId: string, jiraProjectKey: string): Promise<void> {
+  await sql`
+    UPDATE project SET jira_cloud_id = ${JIRA_CLOUD_ID}, jira_project_key = ${jiraProjectKey}
+    WHERE id = ${projectId}
+  `;
+}
+
+/** The owner's Jira connection (default site = the fake site) + the project's Jira target. */
+async function connectJiraForProject(
+  userId: string,
+  projectId: string,
+  jiraProjectKey: string = DEFAULT_JIRA_PROJECT_KEY,
+): Promise<void> {
+  await connectionsModule.saveConnection({
+    userId,
+    provider: 'jira',
+    externalAccountId: `atl-${userId}`,
+    displayName: 'E4-T3 Test User',
+    accessToken: TEST_JIRA_ACCESS_TOKEN,
+    refreshToken: 'atl_e4t3_test_refresh_token',
+    // Comfortably valid: these tests never reach the refresh path.
+    expiresAt: new Date(Date.now() + 3_600_000),
+    scopes: ['read:jira-work', 'write:jira-work', 'offline_access'],
+    providerMeta: { cloudId: JIRA_CLOUD_ID, siteUrl: JIRA_SITE_URL, siteName: 'Fake' },
+  });
+  await setJiraTarget(projectId, jiraProjectKey);
+}
+
 function jsonRequest(url: string, body: unknown): Request {
   return new Request(url, {
     method: 'POST',
@@ -812,8 +866,21 @@ function createFakeJiraProvider() {
     });
 
   async function fetchImpl(url: string | URL, init?: RequestInit): Promise<Response> {
-    const { pathname } = new URL(url);
+    const parsed = new URL(url);
     const method = (init?.method ?? 'GET').toUpperCase();
+    // Round 14: only the Atlassian gateway path, only with the user's Bearer token.
+    if (
+      parsed.host !== 'api.atlassian.com' ||
+      !parsed.pathname.startsWith(`/ex/jira/${JIRA_CLOUD_ID}/`)
+    ) {
+      throw new Error(
+        `fake Jira fetch (E4-T3): unexpected target ${parsed.host}${parsed.pathname}`,
+      );
+    }
+    if (new Headers(init?.headers).get('authorization') !== `Bearer ${TEST_JIRA_ACCESS_TOKEN}`) {
+      return jsonResponse(401, { message: 'Unauthorized' });
+    }
+    const pathname = parsed.pathname.slice(`/ex/jira/${JIRA_CLOUD_ID}`.length);
 
     if (method === 'POST' && pathname === '/rest/api/3/issue') {
       const body = init?.body
@@ -838,7 +905,7 @@ function createFakeJiraProvider() {
         parentKey: body.fields.parent?.key ?? null,
       };
       issuesByKey.set(key, issue);
-      return jsonResponse(201, { id, key, self: `${JIRA_BASE_URL}/rest/api/3/issue/${id}` });
+      return jsonResponse(201, { id, key, self: `${JIRA_SITE_URL}/rest/api/3/issue/${id}` });
     }
 
     if (method === 'POST' && pathname === '/rest/api/3/search/jql') {
@@ -2221,6 +2288,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('a lost create response reconciles via marker match on the next POST - one operation row, marker-verified adoption, never a bare name match', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T11a' });
       mockAuthAsOwner(userId);
+      await connectGithubForProject(userId, projectId);
       const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
       const adr = await fx.createLogicalItemWithVersion(sql, {
         projectId,
@@ -2278,6 +2346,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('a lost response over a pre-existing FOREIGN repo reconciles to failed (409 NAME_TAKEN_BY_OTHER), never adopted', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T11c' });
       mockAuthAsOwner(userId);
+      await connectGithubForProject(userId, projectId);
       const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
       const adr = await fx.createLogicalItemWithVersion(sql, {
         projectId,
@@ -2326,6 +2395,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('a concurrent double-click while the original is still within T is rejected as still in flight (202 pending) - reconcile before any resend', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T11d' });
       mockAuthAsOwner(userId);
+      await connectGithubForProject(userId, projectId);
       const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
       const adr = await fx.createLogicalItemWithVersion(sql, {
         projectId,
@@ -2380,6 +2450,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('GET .../jira/preview surfaces the Skip/Create-New prompt; POST .../jira/export refuses without a decision (400), never a silent update or a silent duplicate', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T12' });
       mockAuthAsOwner(userId);
+      await connectJiraForProject(userId, projectId);
       const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
       const epic = await fx.createLogicalItemWithVersion(sql, {
         projectId,
@@ -2914,6 +2985,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('first attempt ends 409 NAME_TAKEN_BY_OTHER; a different name starts a fresh operation (200); a second concurrent GitHub operation is refused (409)', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T18' });
       mockAuthAsOwner(userId);
+      await connectGithubForProject(userId, projectId);
       const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
       const adr = await fx.createLogicalItemWithVersion(sql, {
         projectId,
@@ -3407,12 +3479,9 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // E4-S3 (SCRUM-52) already proves this at the module level - see
   // tests/integration/external/jira.test.ts's own T26 describe block. E4-T3
   // closes it here for real, through `POST /api/projects/:projectId/jira/
-  // export`, reconfiguring `JIRA_PROJECT_KEY` + `vi.resetModules()` between
-  // calls exactly as jira.test.ts's own T26 already does for its module-level
-  // proof - the route handler (and its own transitive `@/auth`/`@/external/
-  // jira`/`@/lib/env` imports) must be re-imported fresh too, since `@/lib/
-  // env` is a module-level singleton captured once per module instance (this
-  // file's own top-of-file gotcha comment).
+  // export`. Round 14: the Jira project is the PROJECT's own target (`project.
+  // jira_project_key`, read by the route), not an environment variable, so the
+  // test just changes that column between the two exports.
   describe('T26 - export the same Backlog twice with a different configured Jira project in between (through the real API route)', () => {
     it('second export creates new, target-specific operations; no completed operation is reused for the new target', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T26' });
@@ -3426,54 +3495,34 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
         { logicalItemId: epic.logicalItemId, itemVersionId: epic.itemVersionId },
       ]);
 
+      await connectJiraForProject(userId, projectId, 'E4T3ALPHA');
+      mockAuthAsOwner(userId);
+
       const fake = createFakeJiraProvider();
       const exportUrl = `http://localhost/api/projects/${projectId}/jira/export`;
 
-      async function freshExportRoute(jiraProjectKey: string): Promise<typeof jiraExportRoute> {
-        process.env.JIRA_PROJECT_KEY = jiraProjectKey;
-        vi.resetModules();
-        const freshAuth = await import('@/auth');
-        vi.mocked(freshAuth.getVerifiedUser).mockResolvedValue({
-          id: userId,
-          email: `${userId}@example.test`,
-          displayName: null,
-        });
-        return (await import('@/app/api/projects/[projectId]/jira/export/route')).POST;
-      }
+      const alphaResponse = await withFakeFetch(fake.fetch, () =>
+        jiraExportRoute(
+          jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
+          routeParams(projectId),
+        ),
+      );
+      expect(alphaResponse.status).toBe(200);
+      expect((await alphaResponse.json()).created).toHaveLength(1);
 
-      try {
-        const exportAlpha = await freshExportRoute('E4T3ALPHA');
-        const alphaResponse = await withFakeFetch(fake.fetch, () =>
-          exportAlpha(
-            jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
-            routeParams(projectId),
-          ),
-        );
-        expect(alphaResponse.status).toBe(200);
-        expect((await alphaResponse.json()).created).toHaveLength(1);
-
-        // Reconfigure to a DIFFERENT Jira project - switching the configured
-        // project alone must not resurface an unnecessary Skip/Create-New
-        // prompt (FR-074 is scoped to the CONFIGURED project); nothing has
-        // been exported to BETA yet, so this is a plain, undecided-free export.
-        const exportBeta = await freshExportRoute('E4T3BETA');
-        const betaResponse = await withFakeFetch(fake.fetch, () =>
-          exportBeta(
-            jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
-            routeParams(projectId),
-          ),
-        );
-        expect(betaResponse.status).toBe(200);
-        expect((await betaResponse.json()).created).toHaveLength(1);
-      } finally {
-        // Defensive cleanup - every OTHER test in this file uses the outer,
-        // once-imported route handlers (closed over whatever JIRA_PROJECT_KEY
-        // was current before this file's top-level beforeAll ran, frozen in
-        // their own module instance regardless of what this test does to
-        // process.env afterward) - this restore is hygiene, not correctness,
-        // for them.
-        process.env.JIRA_PROJECT_KEY = DEFAULT_JIRA_PROJECT_KEY;
-      }
+      // Reconfigure to a DIFFERENT Jira project - switching the configured
+      // project alone must not resurface an unnecessary Skip/Create-New
+      // prompt (FR-074 is scoped to the CONFIGURED project); nothing has
+      // been exported to BETA yet, so this is a plain, undecided-free export.
+      await setJiraTarget(projectId, 'E4T3BETA');
+      const betaResponse = await withFakeFetch(fake.fetch, () =>
+        jiraExportRoute(
+          jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
+          routeParams(projectId),
+        ),
+      );
+      expect(betaResponse.status).toBe(200);
+      expect((await betaResponse.json()).created).toHaveLength(1);
 
       const operations = await jiraOperationRows(projectId);
       expect(operations).toHaveLength(2); // target-specific keys, never one row reused
@@ -4028,6 +4077,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('GET .../jira/preview shows the Skip/Create-New prompt for the Epic; POST .../jira/export with skip creates no second Jira Epic; the Story is parented to the existing Jira Epic of E-01', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T41' });
       mockAuthAsOwner(userId);
+      await connectJiraForProject(userId, projectId);
       const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
       const epic = await fx.createLogicalItemWithVersion(sql, {
         projectId,
@@ -4129,6 +4179,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('GET .../jira/preview lists the impact row; POST .../jira/export requires impactAcknowledged (409 otherwise, 200 once acknowledged); the resulting ref is flagged immediately', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T42' });
       mockAuthAsOwner(userId);
+      await connectJiraForProject(userId, projectId);
       const requirementsArtifactId = await fx.createArtifact(sql, projectId, 'requirements');
       const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
 
@@ -4525,10 +4576,25 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
         });
         expect(failed.status).toBe('failed');
 
-        // Ambiguous failure: propagates, the row stays pending.
+        // Ambiguous failure: propagates, the row stays pending. A pending GitHub
+        // operation would make `runOperation` refuse the next GitHub operation of
+        // the SAME project (ERD 4.15: one repository per project), so the GitHub
+        // flow runs this step against a second project.
+        let ambiguousBase = base;
+        if (provider === 'github') {
+          const other = await fx.createProjectWithOwner(sql, {
+            name: 'appendix-c: UC-S8 scan github ambiguous',
+          });
+          const otherDraft = await draftArtifactVersion(other.projectId, 'architecture');
+          ambiguousBase = {
+            ...base,
+            projectId: other.projectId,
+            sourceArtifactVersionId: otherDraft.versionId,
+          };
+        }
         await expect(
           ops.runOperation({
-            ...base,
+            ...ambiguousBase,
             operationKey: `${provider}:scan:ambiguous:${randomUUID()}`,
             requestHash: 'h-scan-ambiguous',
             send: async () => {
@@ -4559,7 +4625,11 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
             reconcile: async () => ({ found: false }),
           })
           .catch((e: unknown) => e);
-        expect(failure).toBeInstanceOf(connectionsModule.ReconnectRequiredError);
+        expect(failure).toMatchObject({
+          name: 'ReconnectRequiredError',
+          provider,
+          reason: 'needs_reauth',
+        });
         const response = routeErrorResponse(failure);
         expect(response.status).toBe(409);
         responses.push(JSON.stringify(await response.json()));
@@ -4639,8 +4709,8 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     delete env.JIRA_API_TOKEN;
     try {
       const failure = await jiraModule.retryOperation(opId, { userId }).catch((e: unknown) => e);
-      expect(failure).toBeInstanceOf(connectionsModule.ReconnectRequiredError);
       expect(failure).toMatchObject({
+        name: 'ReconnectRequiredError',
         provider: 'jira',
         reason: 'legacy_credential_missing',
         connectionId: null,
@@ -5121,13 +5191,16 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   it('T50: a legacy operation (connection_id NULL) still reconciles through runOperation with no connection lookup, and stays NULL', async () => {
     // UC-S8: a legacy operation reads as "needs reconnect" only when its optional
     // environment credential is gone; this test is about the case where it is there.
+    // `env` is parsed once at import and read at call time by
+    // `legacyCredentialAvailable`, so the test mutates that object (the same
+    // instance `ops` uses - no test in this file resets the module registry).
     const { env } = await import('@/lib/env');
     const savedStitchKey = env.STITCH_API_KEY;
-    env.STITCH_API_KEY = 'legacy-stitch-key-for-t50';
     onTestFinished(() => {
       if (savedStitchKey === undefined) delete env.STITCH_API_KEY;
       else env.STITCH_API_KEY = savedStitchKey;
     });
+    delete env.STITCH_API_KEY;
     const { projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T50 legacy' });
     const { versionId } = await draftArtifactVersion(projectId);
     const operationKey = `stitch:generate:${randomUUID()}`;
@@ -5139,6 +5212,10 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
       status: 'reconciliation_required',
       sourceArtifactVersionId: versionId,
     });
+    // Credential gone -> the legacy operation reads as needing a reconnect...
+    expect((await ops.getOperationDTOState(opId))?.connection).toBe('legacy_credential_missing');
+    // ...and with the optional environment credential configured it is plain legacy.
+    env.STITCH_API_KEY = 'legacy-stitch-key-for-t50';
     expect((await ops.getOperationDTOState(opId))?.connection).toBe('legacy');
 
     const seen: string[] = [];
