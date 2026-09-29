@@ -49,7 +49,7 @@ export default async function ProjectDependenciesPage({ params }: ProjectDepende
   const warnings = await getImpactWarningsResolved(projectId);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-4 py-12 sm:px-6">
+    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-10">
       <Link
         href={`/projects/${projectId}`}
         className="text-on-surface-variant hover:text-on-surface text-sm font-medium"
@@ -57,8 +57,11 @@ export default async function ProjectDependenciesPage({ params }: ProjectDepende
         ← {project.name}
       </Link>
 
-      <header className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
-        <h1 className="text-on-surface text-display-sm font-semibold">Dependencies</h1>
+      <header className="app-card px-6 py-7 sm:px-8 sm:py-9">
+        <p className="app-kicker">Lineage / Dependency map</p>
+        <h1 className="app-display text-on-surface mt-2 text-[clamp(2rem,4vw,3.25rem)] leading-tight">
+          Dependencies
+        </h1>
         <p className="text-on-surface-variant mt-1 text-sm">
           How this project&apos;s versions and items connect, and what a recent change reaches.
         </p>
@@ -67,7 +70,7 @@ export default async function ProjectDependenciesPage({ params }: ProjectDepende
       {reviewData ? (
         <DependencyGraph version={reviewData.version} warnings={warnings} />
       ) : (
-        <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-8 text-center">
+        <div className="app-card p-8 text-center">
           <p className="text-on-surface text-sm font-medium">
             The dependency view isn&apos;t available yet.
           </p>
