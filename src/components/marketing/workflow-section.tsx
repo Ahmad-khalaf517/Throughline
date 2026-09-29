@@ -1,107 +1,80 @@
-'use client';
-
-import { motion, type Variants } from 'framer-motion';
-import { ClipboardList, FileText, Layers, LayoutTemplate, ListTree } from 'lucide-react';
+import { ArrowUpRight, CheckCheck, GitCompareArrows, WandSparkles } from 'lucide-react';
 import { Reveal } from './motion/reveal';
+import { StaggerGroup, StaggerItem } from './motion/stagger';
 
-const STAGES = [
+const MOMENTS = [
   {
-    icon: FileText,
-    id: 'BRIEF',
-    label: 'Project brief',
-    body: 'The starting intent — goals, constraints, users.',
+    number: '01',
+    icon: WandSparkles,
+    title: 'Start with the intent',
+    body: 'Write the brief once. Throughline turns it into connected requirements, architecture, UI specifications, and backlog stories.',
+    note: 'From an idea to a plan',
   },
   {
-    icon: ClipboardList,
-    id: 'REQ',
-    label: 'Requirements',
-    body: 'What the product must do, generated and reviewed.',
+    number: '02',
+    icon: CheckCheck,
+    title: 'Keep people in control',
+    body: 'Review every draft, compare revisions, and approve the decisions that should become the source of truth.',
+    note: 'AI drafts · you decide',
   },
   {
-    icon: Layers,
-    id: 'ARCH',
-    label: 'Architecture',
-    body: 'How it’s built — decisions traced to requirements.',
+    number: '03',
+    icon: GitCompareArrows,
+    title: 'Change without losing the why',
+    body: 'When an upstream item changes, follow its impact through the plan before you send work to your tools.',
+    note: 'Every dependency stays visible',
   },
-  {
-    icon: LayoutTemplate,
-    id: 'UI',
-    label: 'UI specification',
-    body: 'Screens and flows traced to the architecture.',
-  },
-  {
-    icon: ListTree,
-    id: 'BACKLOG',
-    label: 'Backlog',
-    body: 'Stories traced to every artifact above them.',
-  },
-];
-
-const EASE = [0.16, 1, 0.3, 1] as const;
-const STEP = 0.12;
-
-const containerVariants: Variants = {
-  hidden: {},
-  show: { transition: { staggerChildren: STEP, delayChildren: 0.05 } },
-};
-
-const stageVariants: Variants = {
-  hidden: { opacity: 0, y: 12 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: EASE } },
-};
+] as const;
 
 export function WorkflowSection() {
   return (
-    <section id="workflow" className="border-surface-dim bg-surface border-b">
-      <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
-        <Reveal className="max-w-2xl">
-          <h2 className="text-display-sm text-on-surface">
-            One connected pipeline, not five documents.
-          </h2>
-          <p className="text-on-surface-variant mt-3 text-base leading-relaxed">
-            Each stage is generated from the one before it, and every artifact keeps a pointer back
-            to its source. Nothing here is a static export — the links stay live.
+    <section id="workflow" className="border-surface-dim bg-surface scroll-mt-16 border-b">
+      <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 sm:py-24 lg:px-8 lg:py-28">
+        <Reveal className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.55fr)] lg:items-end lg:gap-16">
+          <div>
+            <p className="font-mono-code text-primary mb-4 text-[11px] font-semibold tracking-[0.16em] uppercase">
+              The workflow
+            </p>
+            <h2 className="text-on-surface max-w-2xl text-[clamp(2.25rem,4vw,3.8rem)] leading-[1.06] font-semibold tracking-[-0.05em] text-balance">
+              Move fast. Keep the thread.
+            </h2>
+          </div>
+          <p className="text-on-surface-variant max-w-md text-base leading-relaxed">
+            Planning is rarely a straight line. Throughline makes it safe to generate, review, and
+            revise without losing what each decision depends on.
           </p>
         </Reveal>
 
-        <motion.div
-          className="mt-10 grid gap-0 sm:grid-cols-5"
-          initial="hidden"
-          whileInView="show"
-          viewport={{ once: true, margin: '-80px' }}
-          variants={containerVariants}
-        >
-          {STAGES.map((stage, index) => (
-            <motion.div
-              key={stage.id}
-              variants={stageVariants}
-              className="relative flex flex-col items-start gap-3 py-4 sm:items-center sm:px-3 sm:text-center"
+        <StaggerGroup className="mt-12 grid gap-4 md:grid-cols-3" as="ol">
+          {MOMENTS.map((moment) => (
+            <StaggerItem
+              key={moment.number}
+              as="li"
+              className="border-surface-dim bg-surface-container-lowest group hover:border-outline flex min-h-77 flex-col rounded-xl border p-6 transition-colors sm:p-7"
             >
-              {index < STAGES.length - 1 && (
-                <motion.span
-                  aria-hidden="true"
-                  initial={{ opacity: 0 }}
-                  whileInView={{ opacity: 1 }}
-                  viewport={{ once: true, margin: '-80px' }}
-                  transition={{ duration: 0.4, delay: (index + 1) * STEP + 0.15 }}
-                  className="border-outline absolute top-9 left-5 h-[calc(100%-2.25rem)] w-px border-l-2 border-dashed sm:top-6 sm:left-1/2 sm:h-px sm:w-[calc(100%-2.5rem)] sm:border-t-2 sm:border-l-0"
-                />
-              )}
-              <span className="border-surface-dim bg-surface-container-lowest text-primary-container relative z-10 flex size-10 shrink-0 items-center justify-center rounded-full border shadow-sm">
-                <stage.icon className="size-5" aria-hidden="true" strokeWidth={2} />
-              </span>
-              <div className="flex flex-col gap-1">
-                <span className="font-mono-code text-on-surface-variant text-[10px] font-semibold tracking-wider uppercase">
-                  {stage.id}
+              <div className="flex items-start justify-between">
+                <span className="font-mono-code text-primary text-xs font-semibold">
+                  /{moment.number}
                 </span>
-                <h3 className="text-on-surface text-sm font-semibold">{stage.label}</h3>
-                <p className="text-on-surface-variant text-xs leading-relaxed sm:max-w-[10rem]">
-                  {stage.body}
+                <moment.icon
+                  className="text-primary-container size-6"
+                  strokeWidth={1.6}
+                  aria-hidden="true"
+                />
+              </div>
+              <div className="mt-auto pt-12">
+                <h3 className="text-on-surface text-xl font-semibold tracking-[-0.035em]">
+                  {moment.title}
+                </h3>
+                <p className="text-on-surface-variant mt-3 text-sm leading-[1.65]">{moment.body}</p>
+                <p className="border-surface-dim font-mono-code text-on-surface-variant mt-7 flex items-center justify-between border-t pt-4 text-[10px] font-medium tracking-[0.04em] uppercase">
+                  {moment.note}
+                  <ArrowUpRight className="text-primary-container size-4" aria-hidden="true" />
                 </p>
               </div>
-            </motion.div>
+            </StaggerItem>
           ))}
-        </motion.div>
+        </StaggerGroup>
       </div>
     </section>
   );

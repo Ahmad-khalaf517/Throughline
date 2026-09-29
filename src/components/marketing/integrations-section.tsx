@@ -22,7 +22,10 @@ const INTEGRATIONS = [
 
 export function IntegrationsSection() {
   return (
-    <section id="integrations" className="border-surface-dim bg-surface-container-low border-b">
+    <section
+      id="integrations"
+      className="border-surface-dim bg-surface-container-low scroll-mt-16 border-b"
+    >
       <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
         <Reveal className="max-w-2xl">
           <h2 className="text-display-sm text-on-surface">Ships where you already work.</h2>

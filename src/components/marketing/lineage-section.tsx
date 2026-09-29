@@ -5,7 +5,10 @@ import { FlaggedGlyph, StatusBadge } from '@/components/status/status-badge';
 
 export function LineageSection() {
   return (
-    <section id="lineage" className="border-surface-dim bg-surface-container-low border-b">
+    <section
+      id="lineage"
+      className="border-surface-dim bg-surface-container-low scroll-mt-16 border-b"
+    >
       <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
         <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
           <div>
