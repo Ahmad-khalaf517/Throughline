@@ -12,7 +12,7 @@ const STATES: { status: ArtifactVersionStatus; body: string }[] = [
 
 export function ApprovalSection() {
   return (
-    <section id="approval" className="border-surface-dim bg-surface border-b">
+    <section id="approval" className="border-surface-dim bg-surface scroll-mt-16 border-b">
       <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
         <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
           <div>

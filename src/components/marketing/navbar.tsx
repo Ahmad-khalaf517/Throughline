@@ -24,8 +24,11 @@ export function Navbar({ userEmail, displayName, onSignOut }: NavbarProps) {
   return (
     <header className="border-surface-dim bg-surface-container-lowest/90 sticky top-0 z-40 w-full border-b backdrop-blur-md">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
-        <Link href="/" className="flex items-center gap-2.5">
-          <LogoMark />
+        <Link
+          href="/"
+          className="focus-visible:ring-primary flex items-center gap-2.5 rounded-md focus-visible:ring-2 focus-visible:outline-none"
+        >
+          <LogoMark className="h-5 sm:h-6" />
         </Link>
 
         <nav className="text-on-surface-variant hidden items-center gap-1 text-[13px] font-medium md:flex">
@@ -55,7 +58,7 @@ export function Navbar({ userEmail, displayName, onSignOut }: NavbarProps) {
                   {displayName ?? friendlyNameFromEmail(userEmail)}
                 </span>
               </span>
-              <form action={onSignOut}>
+              <form action={onSignOut} noValidate>
                 <button
                   type="submit"
                   className="border-surface-dim text-on-surface hover:bg-surface-container-low focus-visible:ring-primary rounded-md border px-3 py-1.5 text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"

@@ -1,9 +1,9 @@
 'use client';
 
-import { motion, type Variants } from 'framer-motion';
+import { motion, useReducedMotion, type Variants } from 'framer-motion';
 import type { ReactNode } from 'react';
 
-const EASE = [0.16, 1, 0.3, 1] as const;
+const EASE = [0.23, 1, 0.32, 1] as const;
 
 const containerVariants: Variants = {
   hidden: {},
@@ -11,8 +11,8 @@ const containerVariants: Variants = {
 };
 
 const itemVariants: Variants = {
-  hidden: { opacity: 0, y: 14 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.45, ease: EASE } },
+  hidden: { opacity: 0, transform: 'translateY(14px)' },
+  show: { opacity: 1, transform: 'translateY(0px)', transition: { duration: 0.45, ease: EASE } },
 };
 
 const GROUP_TAGS = { div: motion.div, ol: motion.ol, ul: motion.ul } as const;
@@ -26,11 +26,12 @@ interface StaggerGroupProps {
 
 /** Reveals its StaggerItem children one after another as the group scrolls into view. */
 export function StaggerGroup({ children, className, as = 'div' }: StaggerGroupProps) {
+  const reduceMotion = useReducedMotion();
   const Comp = GROUP_TAGS[as];
   return (
     <Comp
       className={className}
-      initial="hidden"
+      initial={reduceMotion ? false : 'hidden'}
       whileInView="show"
       viewport={{ once: true, margin: '-80px' }}
       variants={containerVariants}

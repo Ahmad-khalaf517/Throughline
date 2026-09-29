@@ -158,3 +158,92 @@ body {
 @utility font-mono-code {
   font-family: var(--font-mono), 'JetBrains Mono', monospace;
 }
+
+/* The marketing hero is a readable trace surface, distinct from app chrome. */
+.marketing-hero {
+  background: #fef8f4;
+}
+
+.marketing-hero-grid {
+  background-image:
+    linear-gradient(to right, rgb(139 113 106 / 8%) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(139 113 106 / 8%) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(to bottom, transparent, black 20%, black 80%, transparent);
+}
+
+.marketing-trace {
+  color: #f4f1ed;
+  background: #202522;
+  border: 1px solid #434841;
+}
+
+.marketing-trace-topbar {
+  border-bottom: 1px solid #414740;
+  background: #292e29;
+}
+
+.marketing-progress {
+  background: #f8aa82;
+  box-shadow: 0 0 16px rgb(248 170 130 / 55%);
+}
+
+.marketing-trace-beacon {
+  color: #f9b391;
+  background: #563a30;
+}
+
+.marketing-trace-muted {
+  color: #c0c6bd;
+}
+
+.marketing-trace-sync {
+  color: #d4f0da;
+  background: #315041;
+  border: 1px solid #5f806c;
+}
+
+.marketing-replay {
+  color: #e9ede6;
+}
+
+.marketing-replay:hover {
+  background: #3b423b;
+}
+
+.marketing-stage {
+  background: #2d332e;
+  border: 1px solid #4b544b;
+}
+
+.marketing-stage-icon {
+  color: #fac3a8;
+  background: #604334;
+}
+
+.marketing-connector {
+  background: #f8aa82;
+  box-shadow: 0 0 10px #f8aa82;
+}
+
+.marketing-impact {
+  color: #f7ebe1;
+  background: #604031;
+  border: 1px solid #a76b50;
+}
+
+.marketing-impact-mark {
+  color: #442c22;
+  background: #ffd3b9;
+}
+
+.marketing-impact-pill {
+  color: #422b20;
+  background: #ffdbc5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marketing-hero-grid {
+    background-image: none;
+  }
+}

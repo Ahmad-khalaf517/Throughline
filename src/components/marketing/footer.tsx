@@ -18,7 +18,7 @@ export function Footer({ userEmail }: FooterProps) {
           href="/"
           className="focus-visible:ring-primary flex items-center gap-2.5 rounded-md opacity-80 focus-visible:ring-2 focus-visible:outline-none"
         >
-          <LogoMark />
+          <LogoMark className="h-6" />
         </Link>
         <div className="text-on-surface-variant flex items-center gap-5 text-xs">
           {!userEmail && (
