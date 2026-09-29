@@ -568,15 +568,62 @@ describe('legacy operations (connection_id NULL) keep the environment credential
     expect(mocks.reportAuthFailure).not.toHaveBeenCalled();
   });
 
-  it('a missing JIRA_* variable is a plain configuration error naming it (legacy only)', async () => {
-    mocks.getOperationById.mockResolvedValue(legacyOp);
-    mocks.getCredentialForOperation.mockResolvedValue({ kind: 'legacy' });
-    mocks.env.JIRA_API_TOKEN = undefined;
-    await expect(retryOperation('op-legacy', { userId: 'user-1' })).rejects.toThrow(
-      /JIRA_API_TOKEN/,
-    );
-    expect(mocks.runOperation).not.toHaveBeenCalled();
-  });
+  it.each([400, 403, 500, 503])(
+    'an Atlassian %i error body never reaches the thrown error (NFR-005), while 4xx stays definitive and 5xx ambiguous',
+    async (status) => {
+      const SENTINEL = 'SENTINEL-atlassian-body-echo-9f3a';
+      mocks.getOperationById.mockResolvedValue(legacyOp);
+      mocks.getCredentialForOperation.mockResolvedValue({ kind: 'legacy' });
+      let thrown: unknown;
+      mocks.runOperation.mockImplementation(async (opts) => {
+        thrown = await opts.send({ operationId: 'op-legacy' }).catch((e: unknown) => e);
+        return { status: 'failed', errorMessage: 'x' };
+      });
+      routes['POST legacy.atlassian.net/rest/api/3/issue'] = {
+        status,
+        body: { errorMessages: [SENTINEL], errors: { summary: SENTINEL } },
+      };
+
+      await retryOperation('op-legacy', { userId: 'user-1' }).catch(() => undefined);
+
+      expect(thrown).toBeInstanceOf(Error);
+      const error = thrown as Error;
+      expect(error.message).not.toContain(SENTINEL);
+      expect(String(error.stack)).not.toContain(SENTINEL);
+      if (status < 500) {
+        expect(error).toBeInstanceOf(mocks.DefinitiveProviderErrorFake);
+        expect(error.message).toBe(`jira_create_issue_rejected:${status}`);
+      } else {
+        expect(error).not.toBeInstanceOf(mocks.DefinitiveProviderErrorFake);
+        expect(error.message).toContain(String(status));
+      }
+    },
+  );
+
+  it.each(['JIRA_BASE_URL', 'JIRA_EMAIL', 'JIRA_API_TOKEN', 'JIRA_PROJECT_KEY'])(
+    'a missing %s is RECONNECT_REQUIRED legacy_credential_missing, before any operation is touched (legacy only)',
+    async (variable) => {
+      mocks.getOperationById.mockResolvedValue(legacyOp);
+      mocks.getCredentialForOperation.mockResolvedValue({ kind: 'legacy' });
+      mocks.env[variable] = '';
+
+      const thrown = await retryOperation('op-legacy', { userId: 'user-1' }).catch(
+        (e: unknown) => e,
+      );
+
+      expect(thrown).toBeInstanceOf(mocks.ReconnectRequiredErrorFake);
+      expect(thrown).toMatchObject({
+        provider: 'jira',
+        reason: 'legacy_credential_missing',
+        connectionId: null,
+      });
+      // The message names no variable and no value.
+      expect((thrown as Error).message).not.toContain(variable);
+      expect(mocks.runOperation).not.toHaveBeenCalled();
+      expect(mocks.reportAuthFailure).not.toHaveBeenCalled();
+      expect(seen).toHaveLength(0);
+    },
+  );
 });
 
 describe('previewExport - local state only', () => {

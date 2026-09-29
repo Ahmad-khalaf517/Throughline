@@ -25,6 +25,7 @@
 import { createHash, createHmac } from 'node:crypto';
 import { Octokit, RequestError } from 'octokit';
 import { env } from '@/lib/env';
+import { legacyCredentialAvailable } from '@/lib/legacy-credentials';
 import {
   getCredential,
   getCredentialForOperation,
@@ -193,11 +194,16 @@ export function normalizeRepoName(raw: string): string {
     .slice(0, 90);
 }
 
+/**
+ * The legacy environment credential's owner. Only a legacy operation
+ * (connection_id NULL) reads it; if GITHUB_TOKEN or GITHUB_OWNER is gone the
+ * operation cannot continue: RECONNECT_REQUIRED with the legacy hint, never a
+ * failed operation (ERD 7.6, Module Boundaries 4.9 rule 6). Checking the token
+ * here matters: an Octokit built without one would call GitHub unauthenticated.
+ */
 function requireOwner(): string {
-  if (!env.GITHUB_OWNER) {
-    throw new Error(
-      'GITHUB_OWNER is not configured - required to call the GitHub API (ERD 7.3, real mode).',
-    );
+  if (!legacyCredentialAvailable('github') || !env.GITHUB_OWNER) {
+    throw new ReconnectRequiredError('github', 'legacy_credential_missing', null);
   }
   return env.GITHUB_OWNER;
 }

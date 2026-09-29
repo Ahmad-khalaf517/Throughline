@@ -14,7 +14,7 @@ const { FakeConnectionRequiredError, FakeReconnectRequiredError } = vi.hoisted((
     constructor(
       readonly provider: string,
       readonly reason: string,
-      readonly connectionId: string,
+      readonly connectionId: string | null,
     ) {
       super(`The ${provider} connection must be reconnected (${reason}).`);
     }
@@ -50,6 +50,16 @@ describe('translateConnectionError', () => {
       status: 409,
       details: { provider: 'jira', reason: 'account_mismatch' },
     });
+  });
+
+  it('maps a legacy ReconnectRequiredError (no connection id) to 409 RECONNECT_REQUIRED with reason legacy_credential_missing', async () => {
+    const response = routeErrorResponse(
+      new FakeReconnectRequiredError('stitch', 'legacy_credential_missing', null),
+    );
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error.code).toBe('RECONNECT_REQUIRED');
+    expect(body.error.details).toEqual({ provider: 'stitch', reason: 'legacy_credential_missing' });
   });
 
   it('returns any other error unchanged', () => {

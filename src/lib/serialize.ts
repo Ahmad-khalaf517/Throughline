@@ -312,7 +312,13 @@ export interface ExternalOperationInput {
   updatedAt: Date;
   // Round 14 (FR-090): state of the connection recorded on the operation, from
   // `external-operations.getOperationDTOState`. Absent = no reconnect needed.
-  connection?: 'active' | 'needs_reauth' | 'revoked' | 'legacy' | 'account_mismatch';
+  connection?:
+    | 'active'
+    | 'needs_reauth'
+    | 'revoked'
+    | 'legacy'
+    | 'account_mismatch'
+    | 'legacy_credential_missing';
 }
 
 // Mirrors `lineage/impact.ImpactRow` exactly (that module's own comment:
@@ -391,6 +397,7 @@ const RECONNECT_REASON = {
   needs_reauth: 'needs_reauth',
   revoked: 'revoked',
   account_mismatch: 'different_account',
+  legacy_credential_missing: 'legacy_credential_missing',
 } as const;
 
 export function toExternalOperationDTO(op: ExternalOperationInput): ExternalOperationDTO {
@@ -401,12 +408,14 @@ export function toExternalOperationDTO(op: ExternalOperationInput): ExternalOper
     status: op.status as ExternalOperationDTO['status'],
     externalId: op.externalId,
     errorMessage: op.errorMessage,
-    // `legacy` (connection_id NULL) reads as null here; `legacy_credential_missing`
-    // needs the environment, which lib never reads (UC-S8).
+    // `legacy` (connection_id NULL, env credential present) reads as null here;
+    // `legacy_credential_missing` is decided by `external-operations`, which asks
+    // the environment - lib never reads it (UC-S8).
     needsReconnect:
       op.connection === 'needs_reauth' ||
       op.connection === 'revoked' ||
-      op.connection === 'account_mismatch'
+      op.connection === 'account_mismatch' ||
+      op.connection === 'legacy_credential_missing'
         ? {
             provider: op.provider as ExternalOperationDTO['provider'],
             reason: RECONNECT_REASON[op.connection],

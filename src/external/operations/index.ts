@@ -15,6 +15,7 @@
 // mechanics belong to their own provider modules in later stories.
 import { and, desc, eq, getTableColumns, inArray, ne, sql } from 'drizzle-orm';
 import { db, schema, withTx } from '@/db';
+import { legacyCredentialAvailable } from '@/lib/legacy-credentials';
 import {
   ReconnectRequiredError,
   getConnectionStatusForOperation,
@@ -786,19 +787,33 @@ export async function hasOperationsFor(
   return row !== undefined;
 }
 
+export type OperationDTOConnection = OperationConnectionStatus | 'legacy_credential_missing';
+
 /**
  * Round 14 (FR-090): the operation plus the state of the connection recorded on
  * it, for `ExternalOperationDTO.needsReconnect`. The `connection` part comes
  * from `connections.getConnectionStatusForOperation` - status only, it never
  * decrypts and never refreshes - so a GET poll cannot trigger a token refresh.
  * `null` when there is no such operation.
+ *
+ * A legacy operation (`connection` = `'legacy'`) whose optional environment
+ * credential is no longer configured reads `'legacy_credential_missing'`
+ * (`needsReconnect.reason`, FR-090). The environment is asked through the pure,
+ * env-only `legacyCredentialAvailable` (src/lib) - this layer sits below the
+ * provider modules that own the env readers and cannot call them, and the
+ * `connections` module must not read those variables (Module Boundaries 4.9
+ * rule 6). Presence only; no value is read into the result.
  */
 export async function getOperationDTOState(
   operationId: string,
-): Promise<(ExternalOperation & { connection: OperationConnectionStatus }) | null> {
+): Promise<(ExternalOperation & { connection: OperationDTOConnection }) | null> {
   const operation = await getOperationById(operationId);
   if (!operation) return null;
-  const connection = await getConnectionStatusForOperation(operationId);
+  const status = await getConnectionStatusForOperation(operationId);
+  const connection: OperationDTOConnection =
+    status === 'legacy' && !legacyCredentialAvailable(operation.provider as ExternalProvider)
+      ? 'legacy_credential_missing'
+      : status;
   return { ...operation, connection };
 }
 

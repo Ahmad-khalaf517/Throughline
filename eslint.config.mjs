@@ -28,6 +28,16 @@ const elementTypes = [
   'components',
 ];
 
+// `withProjectLock` is re-exported from src/db/index.ts, so importing it from
+// '@/db' would slip past the `**/db/lock` pattern below. Blocked by name here;
+// only src/artifact-lifecycle (whose override omits this entry) may import it.
+const withProjectLockPaths = ['@/db', '@/db/index'].map((name) => ({
+  name,
+  importNames: ['withProjectLock'],
+  message:
+    'withProjectLock is imported from src/artifact-lifecycle only (Module Boundaries principle 3).',
+}));
+
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
@@ -181,6 +191,7 @@ const eslintConfig = defineConfig([
               name: 'openai',
               message: 'Only src/ai-client may import the openai SDK (Module Boundaries 4.1).',
             },
+            ...withProjectLockPaths,
           ],
           patterns: [
             {
@@ -212,6 +223,7 @@ const eslintConfig = defineConfig([
       'no-restricted-imports': [
         'error',
         {
+          paths: withProjectLockPaths,
           patterns: [
             {
               group: ['**/db/lock', '**/db/lock.ts'],
@@ -229,11 +241,37 @@ const eslintConfig = defineConfig([
     },
   },
   {
+    // The unit under test is `withProjectLock` itself (src/db/lock.ts), imported
+    // through the db barrel. Everything else in the base rule still applies.
+    files: ['tests/unit/db/lock.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'openai',
+              message: 'Only src/ai-client may import the openai SDK (Module Boundaries 4.1).',
+            },
+          ],
+          patterns: [
+            {
+              group: ['@supabase/*'],
+              message:
+                'Only src/auth may import @supabase/* auth/SSR clients (Module Boundaries 4.1).',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['src/ai-client/**'],
     rules: {
       'no-restricted-imports': [
         'error',
         {
+          paths: withProjectLockPaths,
           patterns: [
             {
               group: ['**/db/lock', '**/db/lock.ts'],
@@ -272,6 +310,7 @@ const eslintConfig = defineConfig([
               name: 'openai',
               message: 'Only src/ai-client may import the openai SDK (Module Boundaries 4.1).',
             },
+            ...withProjectLockPaths,
           ],
           patterns: [
             {

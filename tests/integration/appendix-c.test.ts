@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it, onTestFinished, vi } from 'vitest';
 import { sql as drizzleSql } from 'drizzle-orm';
 import type postgres from 'postgres';
 import type { OptionInput } from '@/architecture-materialization';
@@ -4435,12 +4435,250 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     expect(hits).toBe(0);
   });
 
-  // T45's application half (storage, listing and error scan) is implemented in
-  // tests/integration/connections.test.ts. The connect-flow / route / log scan
-  // stays with the OAuth and route stories (SCRUM-96/97).
-  it.todo(
-    'T45 (application half, OAuth flows and API responses): connect flows and API responses never contain a sentinel token',
-  );
+  // T45's storage / listing / error scan is in tests/integration/connections.test.ts.
+  // UC-S8 (extends T34's secret-free scan): a planted-sentinel scan over ALL
+  // columns (cast to text, whatever their type) of ALL tables after a full
+  // connect + operation flow for the three providers - success, definitive
+  // failure, ambiguous failure and reconnect-required - plus every response body
+  // and every console line the flows produced. NOT EXECUTED when written (Docker
+  // was unavailable on the authoring machine).
+  it('T45/T34 (UC-S8): after connect + operation flows for github, jira and stitch, no sentinel token appears in any column of any table, any API body or any log line', async () => {
+    const SENTINEL = 'SENTINEL-UCS8';
+    const { inspect } = await import('node:util');
+    const { routeErrorResponse } = await import('@/app/api/_shared/connection-errors');
+    const { toExternalOperationDTO } = await import('@/lib/serialize');
+
+    const logged: string[] = [];
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((method) =>
+      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+        logged.push(
+          args.map((a) => (typeof a === 'string' ? a : inspect(a, { depth: 8 }))).join(' '),
+        );
+      }),
+    );
+    const responses: string[] = [];
+    try {
+      for (const provider of ['github', 'jira', 'stitch'] as const) {
+        const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+          name: `appendix-c: UC-S8 scan ${provider}`,
+        });
+        const artifactType = provider === 'jira' ? 'backlog' : 'architecture';
+        const { artifactId, versionId } = await draftArtifactVersion(projectId, artifactType);
+        let sourceItemVersionId: string | undefined;
+        if (provider === 'jira') {
+          const item = await fx.createLogicalItemWithVersion(sql, {
+            projectId,
+            artifactId,
+            itemType: 'epic',
+          });
+          await fx.createMembership(sql, {
+            artifactVersionId: versionId,
+            artifactId,
+            logicalItemId: item.logicalItemId,
+            itemVersionId: item.itemVersionId,
+          });
+          sourceItemVersionId = item.itemVersionId;
+        }
+
+        // Connect: sentinels as the access token, the refresh token and the
+        // display-only fields the flows never treat as secrets.
+        await connectionsModule.saveConnection({
+          userId,
+          provider,
+          externalAccountId: `acct-${provider}-${randomUUID()}`,
+          displayName: `name-${provider}`,
+          accessToken: `${SENTINEL}-ACCESS-${provider}-0123456789abcdef`,
+          refreshToken: `${SENTINEL}-REFRESH-${provider}-0123456789abcdef`,
+          expiresAt: new Date(Date.now() + 3_600_000),
+          scopes: ['repo'],
+          providerMeta:
+            provider === 'jira'
+              ? { cloudId: 'cloud-1', siteUrl: 'https://acme.atlassian.net', siteName: 'Acme' }
+              : provider === 'github'
+                ? { login: 'octo' }
+                : {},
+        });
+        const credential = await connectionsModule.getCredential(userId, provider);
+        const base = {
+          projectId,
+          provider,
+          operationType: 'scan',
+          targetDescriptor: { scan: provider },
+          sourceArtifactVersionId: versionId,
+          ...(sourceItemVersionId ? { sourceItemVersionId } : {}),
+          connectionId: credential.connectionId,
+          accountId: credential.accountId,
+        };
+
+        // Definitive failure: the operation records only the provider module's fixed text.
+        const failedKey = `${provider}:scan:failed:${randomUUID()}`;
+        const failed = await ops.runOperation({
+          ...base,
+          operationKey: failedKey,
+          requestHash: 'h-scan-failed',
+          send: async ({ operationId }) => {
+            const used = await connectionsModule.getCredentialForOperation(operationId);
+            expect('kind' in used).toBe(false); // the token was available to the closure...
+            throw new ops.DefinitiveProviderError(`${provider}_scan_rejected:422`); // ...and stays there
+          },
+          reconcile: async () => ({ found: false }),
+        });
+        expect(failed.status).toBe('failed');
+
+        // Ambiguous failure: propagates, the row stays pending.
+        await expect(
+          ops.runOperation({
+            ...base,
+            operationKey: `${provider}:scan:ambiguous:${randomUUID()}`,
+            requestHash: 'h-scan-ambiguous',
+            send: async () => {
+              throw new Error('socket hang up');
+            },
+            reconcile: async () => ({ found: false }),
+          }),
+        ).rejects.toThrow('socket hang up');
+
+        // Success.
+        const done = await ops.runOperation({
+          ...base,
+          operationKey: `${provider}:scan:ok:${randomUUID()}`,
+          requestHash: 'h-scan-ok',
+          send: async () => ({ externalId: `${provider}-ext-${randomUUID()}` }),
+          reconcile: async () => ({ found: false }),
+        });
+        expect(done.status).toBe('completed');
+
+        // Reconnect required: the recorded connection needs re-authorization.
+        await sql`UPDATE provider_connection SET status = 'needs_reauth' WHERE id = ${credential.connectionId}`;
+        const failure = await ops
+          .runOperation({
+            ...base,
+            operationKey: failedKey,
+            requestHash: 'h-scan-failed',
+            send: async () => ({ externalId: 'never' }),
+            reconcile: async () => ({ found: false }),
+          })
+          .catch((e: unknown) => e);
+        expect(failure).toBeInstanceOf(connectionsModule.ReconnectRequiredError);
+        const response = routeErrorResponse(failure);
+        expect(response.status).toBe(409);
+        responses.push(JSON.stringify(await response.json()));
+
+        const opRows = await sql<{ id: string }[]>`
+          SELECT id FROM external_operation WHERE project_id = ${projectId}
+        `;
+        for (const { id } of opRows) {
+          const state = await ops.getOperationDTOState(id);
+          responses.push(JSON.stringify(toExternalOperationDTO(state!)));
+        }
+        responses.push(JSON.stringify(await connectionsModule.listConnections(userId)));
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+
+    for (const body of responses) expect(body).not.toContain(SENTINEL);
+    for (const line of logged) expect(line).not.toContain(SENTINEL);
+
+    // ALL columns of ALL public base tables, cast to text whatever their type.
+    const columns = await sql<{ table_name: string; column_name: string }[]>`
+      SELECT c.table_name, c.column_name
+        FROM information_schema.columns c
+        JOIN information_schema.tables t
+          ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+       WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+    `;
+    expect(columns.length).toBeGreaterThan(0);
+    const hits: string[] = [];
+    for (const { table_name, column_name } of columns) {
+      const rows = await sql.unsafe<{ n: string }[]>(
+        `SELECT count(*)::text AS n FROM public."${table_name}" WHERE "${column_name}"::text LIKE '%${SENTINEL}%'`,
+      );
+      if (Number(rows[0]!.n) > 0) hits.push(`${table_name}.${column_name}`);
+    }
+    expect(hits).toEqual([]);
+  });
+
+  // UC-S8: a legacy operation (connection_id NULL) whose environment credential
+  // is gone is RECONNECT_REQUIRED (`legacy_credential_missing`) - never failed,
+  // never stale, no warning, the row byte-identical (same guarantee as T49).
+  it('UC-S8: a legacy Jira operation with no JIRA_* credential throws ReconnectRequiredError legacy_credential_missing from retryOperation; the operation, refs and impact() are byte-identical and the DTO reports the reason', async () => {
+    const { env } = await import('@/lib/env');
+    const jiraModule = await import('@/external/jira');
+    const { routeErrorResponse } = await import('@/app/api/_shared/connection-errors');
+    const { toExternalOperationDTO } = await import('@/lib/serialize');
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+      name: 'appendix-c: UC-S8 legacy missing',
+    });
+    const { artifactId, versionId } = await draftArtifactVersion(projectId, 'backlog');
+    const item = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId,
+      itemType: 'epic',
+    });
+    await fx.createMembership(sql, {
+      artifactVersionId: versionId,
+      artifactId,
+      logicalItemId: item.logicalItemId,
+      itemVersionId: item.itemVersionId,
+    });
+    const operationKey = `jira:create_issue:LEG:${item.itemVersionId}`;
+    const opId = await fx.createExternalOperation(sql, {
+      projectId,
+      provider: 'jira',
+      operationType: 'create_issue',
+      operationKey,
+      status: 'reconciliation_required',
+      requestHash: 'h-legacy-missing',
+      sourceArtifactVersionId: versionId,
+      sourceItemVersionId: item.itemVersionId,
+      targetDescriptor: { jiraProjectKey: 'LEG', itemType: 'epic' },
+    });
+    const before = await operationSnapshot(projectId);
+    const saved = env.JIRA_API_TOKEN;
+    delete env.JIRA_API_TOKEN;
+    try {
+      const failure = await jiraModule.retryOperation(opId, { userId }).catch((e: unknown) => e);
+      expect(failure).toBeInstanceOf(connectionsModule.ReconnectRequiredError);
+      expect(failure).toMatchObject({
+        provider: 'jira',
+        reason: 'legacy_credential_missing',
+        connectionId: null,
+      });
+      const response = routeErrorResponse(failure);
+      expect(response.status).toBe(409);
+      expect((await response.json()).error).toMatchObject({
+        code: 'RECONNECT_REQUIRED',
+        details: { provider: 'jira', reason: 'legacy_credential_missing' },
+      });
+
+      expect(await operationSnapshot(projectId)).toBe(before);
+      const state = await ops.getOperationDTOState(opId);
+      expect(state?.connection).toBe('legacy_credential_missing');
+      const dto = toExternalOperationDTO(state!);
+      expect(dto.needsReconnect).toEqual({ provider: 'jira', reason: 'legacy_credential_missing' });
+      expect(dto.status).toBe('reconciliation_required');
+    } finally {
+      if (saved !== undefined) env.JIRA_API_TOKEN = saved;
+    }
+    // With the credential back, the DTO reads as an ordinary legacy operation.
+    expect(
+      toExternalOperationDTO((await ops.getOperationDTOState(opId))!).needsReconnect,
+    ).toBeNull();
+  });
+
+  it('UC-S8: a NEW operation never falls back to environment credentials - no connection plus a configured JIRA_* credential -> ConnectionRequiredError and no row', async () => {
+    const { env } = await import('@/lib/env');
+    expect(env.JIRA_API_TOKEN).toBeTruthy(); // configured for this file
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+      name: 'appendix-c: UC-S8 no fallback',
+    });
+    await expect(connectionsModule.getCredential(userId, 'jira')).rejects.toBeInstanceOf(
+      connectionsModule.ConnectionRequiredError,
+    );
+    const rows = await sql`SELECT 1 FROM external_operation WHERE project_id = ${projectId}`;
+    expect(rows).toHaveLength(0);
+  });
 
   // T46
   it('T46: one connection per (user, provider); unknown provider/status/user refused; another user or all three providers are fine', async () => {
@@ -4881,6 +5119,15 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
 
   // T50 (application half)
   it('T50: a legacy operation (connection_id NULL) still reconciles through runOperation with no connection lookup, and stays NULL', async () => {
+    // UC-S8: a legacy operation reads as "needs reconnect" only when its optional
+    // environment credential is gone; this test is about the case where it is there.
+    const { env } = await import('@/lib/env');
+    const savedStitchKey = env.STITCH_API_KEY;
+    env.STITCH_API_KEY = 'legacy-stitch-key-for-t50';
+    onTestFinished(() => {
+      if (savedStitchKey === undefined) delete env.STITCH_API_KEY;
+      else env.STITCH_API_KEY = savedStitchKey;
+    });
     const { projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T50 legacy' });
     const { versionId } = await draftArtifactVersion(projectId);
     const operationKey = `stitch:generate:${randomUUID()}`;

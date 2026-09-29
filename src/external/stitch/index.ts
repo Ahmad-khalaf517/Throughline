@@ -55,6 +55,7 @@ import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { Stitch, StitchError, StitchToolClient, type Screen } from '@google/stitch-sdk';
 import { env } from '@/lib/env';
+import { legacyCredentialAvailable } from '@/lib/legacy-credentials';
 import { db, schema } from '@/db';
 import { getStorageServiceClient } from '@/auth';
 import {
@@ -256,8 +257,10 @@ function projectTitle(uiRequirementsVersionId: string): string {
 
 /** The legacy environment credential - used only for an operation with no recorded connection. */
 function requireStitchApiKey(): string {
-  if (!env.STITCH_API_KEY) {
-    throw new Error('Stitch is not configured - missing STITCH_API_KEY (ERD 7.5, real mode).');
+  // Missing legacy key: RECONNECT_REQUIRED with the legacy hint, never a failed
+  // operation (ERD 7.6, Module Boundaries 4.9 rule 6).
+  if (!legacyCredentialAvailable('stitch') || !env.STITCH_API_KEY) {
+    throw new ReconnectRequiredError('stitch', 'legacy_credential_missing', null);
   }
   return env.STITCH_API_KEY;
 }

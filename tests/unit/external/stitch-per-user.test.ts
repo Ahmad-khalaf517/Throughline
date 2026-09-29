@@ -434,13 +434,26 @@ describe('retryOperation (existing operations)', () => {
     );
   });
 
-  it('legacy without STITCH_API_KEY fails before any operation is touched', async () => {
-    mocks.getCredentialForOperation.mockResolvedValue({ kind: 'legacy' });
-    mocks.env.STITCH_API_KEY = undefined;
+  it.each([undefined, '', '   '])(
+    'legacy without STITCH_API_KEY (%j) is RECONNECT_REQUIRED legacy_credential_missing before any operation is touched',
+    async (blank) => {
+      mocks.getCredentialForOperation.mockResolvedValue({ kind: 'legacy' });
+      mocks.env.STITCH_API_KEY = blank;
 
-    await expect(retryOperation('op-1', CTX)).rejects.toThrow(/STITCH_API_KEY/);
-    expect(mocks.runOperation).not.toHaveBeenCalled();
-  });
+      const thrown = await retryOperation('op-1', CTX).catch((e: unknown) => e);
+
+      expect(thrown).toBeInstanceOf(mocks.ReconnectRequiredErrorFake);
+      expect(thrown).toMatchObject({
+        provider: 'stitch',
+        reason: 'legacy_credential_missing',
+        connectionId: null,
+      });
+      expect(mocks.runOperation).not.toHaveBeenCalled();
+      expect(mocks.reportAuthFailure).not.toHaveBeenCalled();
+      expect(mocks.sdk.apiKeysSeen).toHaveLength(0);
+      expect(mocks.db.inserted).toHaveLength(0);
+    },
+  );
 
   it('legacy AUTH_FAILED keeps the old handling: definitive -> manual_fallback (route: known-gap 500), no reportAuthFailure', async () => {
     mocks.getCredentialForOperation.mockResolvedValue({ kind: 'legacy' });

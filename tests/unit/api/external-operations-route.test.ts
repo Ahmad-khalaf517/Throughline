@@ -138,6 +138,7 @@ describe('GET /api/external-operations/:operationId', () => {
     ['needs_reauth', 'needs_reauth'],
     ['revoked', 'revoked'],
     ['account_mismatch', 'different_account'],
+    ['legacy_credential_missing', 'legacy_credential_missing'],
   ] as const)(
     'reports needsReconnect reason %s -> %s and leaves the operation fields as stored (FR-090)',
     async (connection, reason) => {

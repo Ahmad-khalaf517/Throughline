@@ -15,20 +15,31 @@ export class ConnectionRequiredError extends Error {
   }
 }
 
-export type ReconnectReason = 'needs_reauth' | 'revoked' | 'refresh_rejected' | 'account_mismatch';
+export type ReconnectReason =
+  | 'needs_reauth'
+  | 'revoked'
+  | 'refresh_rejected'
+  | 'account_mismatch'
+  | 'legacy_credential_missing';
 
 /**
  * The connection exists but cannot be used until the user reconnects
- * (needs_reauth / revoked / refresh rejected / connected account changed).
+ * (needs_reauth / revoked / refresh rejected / connected account changed), or a
+ * legacy operation (connection_id NULL) has no environment credential left
+ * (`legacy_credential_missing`, `connectionId` null - there is no connection).
  * -> API 409 RECONNECT_REQUIRED. Never changes an external_operation (ERD 7.6).
  */
 export class ReconnectRequiredError extends Error {
   readonly provider: ConnectionProvider;
   readonly reason: ReconnectReason;
-  readonly connectionId: string;
+  readonly connectionId: string | null;
 
-  constructor(provider: ConnectionProvider, reason: ReconnectReason, connectionId: string) {
-    super(`The ${provider} connection must be reconnected (${reason}).`);
+  constructor(provider: ConnectionProvider, reason: ReconnectReason, connectionId: string | null) {
+    super(
+      reason === 'legacy_credential_missing'
+        ? `This ${provider} operation was made with a server-side credential that is no longer configured (${reason}).`
+        : `The ${provider} connection must be reconnected (${reason}).`,
+    );
     this.name = 'ReconnectRequiredError';
     this.provider = provider;
     this.reason = reason;

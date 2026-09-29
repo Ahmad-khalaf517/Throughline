@@ -11,23 +11,25 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 //   - a ReconnectRequiredError never turns into failed/reconciliation_required
 //     and never reaches send()/reconcile() when the recorded connection is unusable;
 //   - hasOperationsFor counts every status except 'failed'.
-const { ReconnectRequiredErrorFake, dbMock, withTxMock, statusMock } = vi.hoisted(() => {
-  class ReconnectRequiredErrorFake extends Error {
-    constructor(
-      readonly provider: string,
-      readonly reason: string,
-      readonly connectionId: string,
-    ) {
-      super(`reconnect ${provider} (${reason})`);
+const { ReconnectRequiredErrorFake, dbMock, withTxMock, statusMock, legacyAvailableMock } =
+  vi.hoisted(() => {
+    class ReconnectRequiredErrorFake extends Error {
+      constructor(
+        readonly provider: string,
+        readonly reason: string,
+        readonly connectionId: string,
+      ) {
+        super(`reconnect ${provider} (${reason})`);
+      }
     }
-  }
-  return {
-    ReconnectRequiredErrorFake,
-    dbMock: { insert: vi.fn(), update: vi.fn(), select: vi.fn() },
-    withTxMock: vi.fn(),
-    statusMock: vi.fn(),
-  };
-});
+    return {
+      ReconnectRequiredErrorFake,
+      dbMock: { insert: vi.fn(), update: vi.fn(), select: vi.fn() },
+      withTxMock: vi.fn(),
+      statusMock: vi.fn(),
+      legacyAvailableMock: vi.fn(),
+    };
+  });
 
 vi.mock('@/db', async () => {
   const schema = await import('@/db/schema');
@@ -39,7 +41,15 @@ vi.mock('@/connections', () => ({
   getConnectionStatusForOperation: statusMock,
 }));
 
-import { DefinitiveProviderError, hasOperationsFor, runOperation } from '@/external/operations';
+vi.mock('@/lib/legacy-credentials', () => ({ legacyCredentialAvailable: legacyAvailableMock }));
+
+import {
+  DefinitiveProviderError,
+  getOperationDTOState,
+  hasOperationsFor,
+  runOperation,
+} from '@/external/operations';
+import { toExternalOperationDTO } from '@/lib/serialize';
 
 const base = {
   projectId: 'project-1',
@@ -100,6 +110,7 @@ beforeEach(() => {
   dbMock.select.mockReset();
   withTxMock.mockReset();
   statusMock.mockReset();
+  legacyAvailableMock.mockReset().mockReturnValue(true);
 });
 
 describe('runOperation - connection recording (ERD 7.2 step 0, 4.14)', () => {
@@ -278,6 +289,72 @@ describe('runOperation - existing row whose recorded connection is unusable (T49
     expect(result).toEqual({ status: 'reconciliation_required' });
     expect(statusMock).not.toHaveBeenCalled();
     expect(reconcile).toHaveBeenCalledWith({ operationId: 'op-1' });
+  });
+});
+
+describe('getOperationDTOState - legacy_credential_missing (FR-090, UC-S8)', () => {
+  const stored = (overrides: Record<string, unknown> = {}) => ({
+    id: 'op-1',
+    provider: 'stitch',
+    operationType: 'generate',
+    status: 'reconciliation_required',
+    externalId: null,
+    errorMessage: null,
+    connectionId: null,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+    ...overrides,
+  });
+  function mockGetById(row: Record<string, unknown> | undefined) {
+    dbMock.select.mockReturnValue({
+      from: () => ({ where: () => ({ limit: () => Promise.resolve(row ? [row] : []) }) }),
+    });
+  }
+
+  it('reports legacy_credential_missing for a legacy operation whose env credential is gone, and needsReconnect carries it without touching the status', async () => {
+    mockGetById(stored());
+    statusMock.mockResolvedValue('legacy');
+    legacyAvailableMock.mockReturnValue(false);
+
+    const state = await getOperationDTOState('op-1');
+
+    expect(legacyAvailableMock).toHaveBeenCalledWith('stitch');
+    expect(state?.connection).toBe('legacy_credential_missing');
+    const dto = toExternalOperationDTO(state!);
+    expect(dto.needsReconnect).toEqual({
+      provider: 'stitch',
+      reason: 'legacy_credential_missing',
+    });
+    expect(dto.status).toBe('reconciliation_required');
+  });
+
+  it('a legacy operation whose env credential is present reads as no reconnect needed', async () => {
+    mockGetById(stored());
+    statusMock.mockResolvedValue('legacy');
+
+    const state = await getOperationDTOState('op-1');
+
+    expect(state?.connection).toBe('legacy');
+    expect(toExternalOperationDTO(state!).needsReconnect).toBeNull();
+  });
+
+  it('never consults the environment for a connection-backed operation', async () => {
+    mockGetById(stored({ connectionId: 'conn-1' }));
+    statusMock.mockResolvedValue('revoked');
+    legacyAvailableMock.mockReturnValue(false);
+
+    const state = await getOperationDTOState('op-1');
+
+    expect(state?.connection).toBe('revoked');
+    expect(toExternalOperationDTO(state!).needsReconnect).toEqual({
+      provider: 'stitch',
+      reason: 'revoked',
+    });
+  });
+
+  it('is null for an unknown operation', async () => {
+    mockGetById(undefined);
+    await expect(getOperationDTOState('missing')).resolves.toBeNull();
   });
 });
 

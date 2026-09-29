@@ -45,6 +45,7 @@
 // auth against JIRA_BASE_URL), exactly as before round 14.
 import { createHash } from 'node:crypto';
 import { env } from '@/lib/env';
+import { legacyCredentialAvailable } from '@/lib/legacy-credentials';
 import {
   getCredential,
   getCredentialForOperation,
@@ -242,16 +243,19 @@ function projectKeyOf(auth: JiraAuth): string {
 }
 
 function requireJiraConfig(): JiraConfig {
-  // Combined guard (mirrors the spike's own `!a || !b || !c || !d` shape) so
-  // TypeScript's control-flow narrowing sees all four as defined strings
-  // past this point, with no non-null assertions needed below.
-  if (!env.JIRA_BASE_URL || !env.JIRA_EMAIL || !env.JIRA_API_TOKEN || !env.JIRA_PROJECT_KEY) {
-    const missing: string[] = [];
-    if (!env.JIRA_BASE_URL) missing.push('JIRA_BASE_URL');
-    if (!env.JIRA_EMAIL) missing.push('JIRA_EMAIL');
-    if (!env.JIRA_API_TOKEN) missing.push('JIRA_API_TOKEN');
-    if (!env.JIRA_PROJECT_KEY) missing.push('JIRA_PROJECT_KEY');
-    throw new Error(`Jira is not configured - missing ${missing.join(', ')} (ERD 7.4, real mode).`);
+  // A legacy operation (connection_id NULL) whose JIRA_* environment credential
+  // is gone cannot continue: RECONNECT_REQUIRED with the legacy hint, never a
+  // failed operation (ERD 7.6, Module Boundaries 4.9 rule 6). The error names no
+  // variable and carries no value. `legacyCredentialAvailable` (src/lib) is the
+  // one definition of "configured"; the combined guard below only narrows types.
+  if (
+    !legacyCredentialAvailable('jira') ||
+    !env.JIRA_BASE_URL ||
+    !env.JIRA_EMAIL ||
+    !env.JIRA_API_TOKEN ||
+    !env.JIRA_PROJECT_KEY
+  ) {
+    throw new ReconnectRequiredError('jira', 'legacy_credential_missing', null);
   }
   return {
     baseUrl: env.JIRA_BASE_URL,
@@ -306,7 +310,10 @@ async function requestJson<T>(args: {
     throw new ReconnectRequiredError('jira', 'needs_reauth', credential.connectionId);
   }
   if (!res.ok) {
-    throw new JiraHttpError(res.status, `Jira API ${args.label} -> ${res.status}: ${bodyText}`);
+    // Status + a fixed label only: Atlassian's error body can echo request
+    // content (issue text, JQL) and must never reach a log or a stored message
+    // (NFR-005). Classification reads `status` alone.
+    throw new JiraHttpError(res.status, `Jira API ${args.label} -> ${res.status}`);
   }
   return bodyText ? (JSON.parse(bodyText) as T) : ({} as T);
 }

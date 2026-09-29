@@ -384,6 +384,46 @@ describe('reconcile and retry of an existing operation', () => {
     expect(lookup.auth).not.toContain(USER_TOKEN);
   });
 
+  it.each(['GITHUB_TOKEN', 'GITHUB_OWNER'])(
+    'legacy without %s is RECONNECT_REQUIRED legacy_credential_missing: no operation touched, no GitHub call, not even unauthenticated',
+    async (variable) => {
+      runOperationReconciles();
+      mocks.getOperationById.mockResolvedValue({
+        id: 'op-1',
+        provider: 'github',
+        sourceArtifactVersionId: 'av-1',
+        targetDescriptor: { repoName: 'my-repo' },
+      });
+      mocks.getCredentialForOperation.mockResolvedValue({ kind: 'legacy' });
+      mocks.env[variable] = undefined;
+
+      const thrown = await retryOperation('op-1', { userId: 'user-1' }).catch((e: unknown) => e);
+
+      expect(thrown).toBeInstanceOf(mocks.ReconnectRequiredErrorFake);
+      expect(thrown).toMatchObject({
+        provider: 'github',
+        reason: 'legacy_credential_missing',
+        connectionId: null,
+      });
+      expect(mocks.runOperation).not.toHaveBeenCalled();
+      expect(mocks.reportAuthFailure).not.toHaveBeenCalled();
+      expect(seen).toHaveLength(0);
+    },
+  );
+
+  it('a NEW operation never falls back to the environment credential: no connection + env token present -> the connection error, no row, no GitHub call', async () => {
+    expect(mocks.env.GITHUB_TOKEN).toBe('legacy-env-token');
+    mocks.getCredential.mockRejectedValue(new Error('ConnectionRequired'));
+
+    await expect(
+      initRepo('av-1', 'my-repo', { userId: 'user-1', githubOwner: 'legacy-owner' }),
+    ).rejects.toThrow('ConnectionRequired');
+
+    expect(mocks.runOperation).not.toHaveBeenCalled();
+    expect(mocks.getCredentialForOperation).not.toHaveBeenCalled();
+    expect(seen).toHaveLength(0);
+  });
+
   it('retryOperation on a connection-backed operation requires the ctx owner and reports pending / reconciliation_required as statuses', async () => {
     mocks.getOperationById.mockResolvedValue({
       id: 'op-1',
