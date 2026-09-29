@@ -16,12 +16,21 @@ import {
   type ExistingRepository,
   type RepoNameAvailability,
 } from '@/lib/external-preview';
+import { ConnectionPrompt } from '@/components/connection-prompt';
+import {
+  connectionAfterWriteError,
+  isWriteWithheld,
+  type PreviewConnection,
+} from '@/lib/connections-ui';
 import { PreviewShell, type PreviewState } from './preview-shell';
+import { GithubOwnerPicker, type ProjectTargets } from './target-pickers';
 import { ImpactGate } from './impact-gate';
 import { OperationStatus } from './operation-status';
 
 interface GithubInitPanelProps {
   projectId: string;
+  /** The project's saved GitHub owner (FR-088), `null` until one is picked. */
+  githubOwner: string | null;
 }
 
 interface GithubPreviewData {
@@ -30,6 +39,8 @@ interface GithubPreviewData {
   /** The pinned starter whose files will be added, or `null` (docs-only). */
   starter: { id: string; label: string; files: string[]; notScaffolded: string[] } | null;
   impact: ImpactRowDTO[];
+  /** FR-089: connection status + whether the owner target is set. */
+  connection?: PreviewConnection;
 }
 
 type GithubWriteResult =
@@ -70,7 +81,7 @@ const SUBMIT_CLASSNAME =
  * `min(1)`, then the field is populated from the response's `repoName`, not
  * the other way around. This is surprising, hence spelled out here.
  */
-export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
+export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps) {
   const router = useRouter();
   const [state, setState] = useState<PreviewState>({ status: 'loading' });
   const [preview, setPreview] = useState<GithubPreviewData | null>(null);
@@ -83,6 +94,7 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
   // Set when the project already has a repository (409 GITHUB_ALREADY_INITIALIZED
   // with a link) - the screen then shows that repository instead of a form.
   const [existing, setExisting] = useState<ExistingRepository | null>(null);
+  const [connection, setConnection] = useState<PreviewConnection | null>(null);
   const typedName = repoName.trim();
 
   useEffect(() => {
@@ -138,6 +150,7 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
 
         const data = body as GithubPreviewData;
         setPreview(data);
+        setConnection(data.connection ?? null);
         setRepoName(data.repoName);
         setState({ status: 'ready' });
       } catch {
@@ -264,6 +277,14 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
           // re-enabling submit.
         }
 
+        // FR-089: a 409 CONNECTION_REQUIRED / RECONNECT_REQUIRED / TARGET_REQUIRED
+        // is answered with the connect prompt, not a dead-end error.
+        const nextConnection = connectionAfterWriteError(errorBody.error?.code, connection);
+        if (nextConnection) {
+          setConnection(nextConnection);
+          return;
+        }
+
         // NAME_TAKEN_BY_OTHER (and every other error here) leaves `repoName`
         // untouched and the field editable - the user can immediately try a
         // different name (API Contracts section 8).
@@ -286,100 +307,123 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
 
   if (existing) return <ExistingRepositoryCard repository={existing} />;
 
+  function handleTargetSaved(targets: ProjectTargets) {
+    setConnection((current) =>
+      current ? { ...current, targetReady: targets.githubOwner !== null } : current,
+    );
+  }
+
   return (
-    <PreviewShell state={state}>
-      {preview &&
-        (result ? (
-          <GithubResultView result={result} />
-        ) : (
-          <form onSubmit={handleSubmit} className="flex flex-col gap-6">
-            <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
-              <p className="text-on-surface text-sm font-medium">
-                Mode: <span className="font-mono-code">{preview.mode}</span>
-                <span className="text-outline mx-2" aria-hidden="true">
-                  ·
-                </span>
-                Visibility: <span className="font-mono-code">public</span>
-              </p>
-              <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
-                {preview.starter
-                  ? `Adds a ${preview.starter.label} starter generated from the approved stack (${preview.starter.files.length} files), plus a README with the stack and trade-offs and one ADR per approved decision.`
-                  : 'No pinned starter matches this stack, so the repository is created with documentation only - a README with the stack and trade-offs, and one ADR per approved decision.'}
-              </p>
-              {preview.starter && (
-                <>
-                  <details className="text-on-surface-variant mt-2 text-sm">
-                    <summary className="text-on-surface cursor-pointer font-medium">
-                      Starter files ({preview.starter.files.length})
-                    </summary>
-                    <ul className="font-mono-code mt-2 columns-1 gap-6 text-xs leading-relaxed sm:columns-2">
-                      {preview.starter.files.map((path) => (
-                        <li key={path}>{path}</li>
-                      ))}
-                    </ul>
-                  </details>
-                  {preview.starter.notScaffolded.length > 0 && (
-                    <p className="text-on-surface-variant mt-2 text-sm leading-relaxed">
-                      Not generated (documentation only): {preview.starter.notScaffolded.join('; ')}
-                      .
-                    </p>
-                  )}
-                </>
-              )}
-              <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
-                The repository is created <strong className="font-medium">public</strong> - anyone
-                on GitHub can read its README and ADRs.
-              </p>
-            </div>
-
-            <FieldShell id="github-repo-name" label="Repository name">
-              <input
-                id="github-repo-name"
-                value={repoName}
-                onChange={(event) => setRepoName(event.target.value)}
-                aria-describedby="github-repo-name-availability"
-                aria-invalid={isRepoNameBlocked(availability, typedName) || undefined}
-                autoComplete="off"
-                spellCheck={false}
-                className={INPUT_CLASSNAME}
-              />
-              <p
-                id="github-repo-name-availability"
-                role="status"
-                aria-live="polite"
-                className={`flex min-h-4 items-start gap-1.5 text-xs ${availabilityTone?.className ?? ''}`}
-              >
-                {AvailabilityIcon && (
-                  <AvailabilityIcon className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+    <div className="flex flex-col gap-6">
+      {connection && (
+        <GithubOwnerPicker
+          projectId={projectId}
+          current={githubOwner}
+          connection={connection}
+          onSaved={handleTargetSaved}
+        />
+      )}
+      <PreviewShell state={state}>
+        {preview &&
+          (result ? (
+            <GithubResultView result={result} />
+          ) : (
+            <form onSubmit={handleSubmit} className="flex flex-col gap-6">
+              <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
+                <p className="text-on-surface text-sm font-medium">
+                  Mode: <span className="font-mono-code">{preview.mode}</span>
+                  <span className="text-outline mx-2" aria-hidden="true">
+                    ·
+                  </span>
+                  Visibility: <span className="font-mono-code">public</span>
+                </p>
+                <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
+                  {preview.starter
+                    ? `Adds a ${preview.starter.label} starter generated from the approved stack (${preview.starter.files.length} files), plus a README with the stack and trade-offs and one ADR per approved decision.`
+                    : 'No pinned starter matches this stack, so the repository is created with documentation only - a README with the stack and trade-offs, and one ADR per approved decision.'}
+                </p>
+                {preview.starter && (
+                  <>
+                    <details className="text-on-surface-variant mt-2 text-sm">
+                      <summary className="text-on-surface cursor-pointer font-medium">
+                        Starter files ({preview.starter.files.length})
+                      </summary>
+                      <ul className="font-mono-code mt-2 columns-1 gap-6 text-xs leading-relaxed sm:columns-2">
+                        {preview.starter.files.map((path) => (
+                          <li key={path}>{path}</li>
+                        ))}
+                      </ul>
+                    </details>
+                    {preview.starter.notScaffolded.length > 0 && (
+                      <p className="text-on-surface-variant mt-2 text-sm leading-relaxed">
+                        Not generated (documentation only):{' '}
+                        {preview.starter.notScaffolded.join('; ')}.
+                      </p>
+                    )}
+                  </>
                 )}
-                <span>{availabilityCopy?.text}</span>
-              </p>
-            </FieldShell>
+                <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
+                  The repository is created <strong className="font-medium">public</strong> - anyone
+                  on GitHub can read its README and ADRs.
+                </p>
+              </div>
 
-            <ImpactGate
-              impact={preview.impact}
-              acknowledged={acknowledged}
-              onAcknowledgedChange={setAcknowledged}
-              idPrefix="github-init"
-            />
+              <FieldShell id="github-repo-name" label="Repository name">
+                <input
+                  id="github-repo-name"
+                  value={repoName}
+                  onChange={(event) => setRepoName(event.target.value)}
+                  aria-describedby="github-repo-name-availability"
+                  aria-invalid={isRepoNameBlocked(availability, typedName) || undefined}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className={INPUT_CLASSNAME}
+                />
+                <p
+                  id="github-repo-name-availability"
+                  role="status"
+                  aria-live="polite"
+                  className={`flex min-h-4 items-start gap-1.5 text-xs ${availabilityTone?.className ?? ''}`}
+                >
+                  {AvailabilityIcon && (
+                    <AvailabilityIcon className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+                  )}
+                  <span>{availabilityCopy?.text}</span>
+                </p>
+              </FieldShell>
 
-            {submitError && <FormMessage variant="error">{submitError}</FormMessage>}
+              <ImpactGate
+                impact={preview.impact}
+                acknowledged={acknowledged}
+                onAcknowledgedChange={setAcknowledged}
+                idPrefix="github-init"
+              />
 
-            <button
-              type="submit"
-              disabled={
-                submitting ||
-                typedName.length === 0 ||
-                isRepoNameBlocked(availability, typedName) ||
-                isExternalWriteBlocked(preview.impact, acknowledged)
-              }
-              className={SUBMIT_CLASSNAME}
-            >
-              {submitting ? 'Creating repository…' : 'Create repository'}
-            </button>
-          </form>
-        ))}
-    </PreviewShell>
+              <ConnectionPrompt
+                provider="github"
+                connection={connection}
+                returnTo={`/projects/${projectId}/outputs/github`}
+              />
+
+              {submitError && <FormMessage variant="error">{submitError}</FormMessage>}
+
+              <button
+                type="submit"
+                disabled={
+                  submitting ||
+                  isWriteWithheld('github', connection) ||
+                  typedName.length === 0 ||
+                  isRepoNameBlocked(availability, typedName) ||
+                  isExternalWriteBlocked(preview.impact, acknowledged)
+                }
+                className={SUBMIT_CLASSNAME}
+              >
+                {submitting ? 'Creating repository…' : 'Create repository'}
+              </button>
+            </form>
+          ))}
+      </PreviewShell>
+    </div>
   );
 }
 

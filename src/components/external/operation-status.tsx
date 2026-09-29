@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ExternalOperationDTO } from '@/lib/serialize';
 import { describeOperationStatus } from '@/lib/external-preview';
+import { ReconnectBadge } from './reconnect-badge';
 
 interface OperationStatusProps {
   operationId: string;
@@ -126,6 +127,7 @@ export function OperationStatus({ operationId, onSettled }: OperationStatusProps
     <div className="border-surface-dim bg-surface-container-low flex flex-col gap-2 rounded-xl border p-4">
       <p className="text-on-surface text-sm font-medium">{copy.label}</p>
       <p className="text-on-surface-variant text-sm leading-relaxed">{copy.detail}</p>
+      <ReconnectBadge needsReconnect={operation.needsReconnect} />
       {operation.errorMessage && (
         <p className="text-on-surface-variant text-xs">{operation.errorMessage}</p>
       )}

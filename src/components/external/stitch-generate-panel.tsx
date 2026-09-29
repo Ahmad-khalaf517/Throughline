@@ -11,6 +11,12 @@ import {
   readImpactFromError,
   stitchProjectUrl,
 } from '@/lib/external-preview';
+import { ConnectionPrompt } from '@/components/connection-prompt';
+import {
+  connectionAfterWriteError,
+  isWriteWithheld,
+  type PreviewConnection,
+} from '@/lib/connections-ui';
 import { PreviewShell, type PreviewState } from './preview-shell';
 import { ImpactGate } from './impact-gate';
 import { OperationStatus } from './operation-status';
@@ -23,6 +29,8 @@ interface StitchGeneratePanelProps {
 interface StitchPreviewData {
   prompt: string;
   impact: ImpactRowDTO[];
+  /** FR-089: Stitch connection status (`targetReady` is always true for Stitch). */
+  connection?: PreviewConnection;
 }
 
 type StitchResult =
@@ -62,6 +70,7 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
   const [result, setResult] = useState<StitchResult | null>(null);
   const [copied, setCopied] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [connection, setConnection] = useState<PreviewConnection | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,6 +116,7 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
         }
 
         setPreview(body as StitchPreviewData);
+        setConnection((body as StitchPreviewData).connection ?? null);
         setState({ status: 'ready' });
       } catch {
         if (!cancelled) {
@@ -185,6 +195,14 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
           return;
         }
 
+        // FR-089: a 409 CONNECTION_REQUIRED / RECONNECT_REQUIRED is answered
+        // with the connect prompt, not a dead-end error.
+        const nextConnection = connectionAfterWriteError(errorBody.error?.code, connection);
+        if (nextConnection) {
+          setConnection(nextConnection);
+          return;
+        }
+
         setSubmitError(
           describeExternalError(
             errorBody.error?.code,
@@ -250,12 +268,22 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
               idPrefix="stitch-generate"
             />
 
+            <ConnectionPrompt
+              provider="stitch"
+              connection={connection}
+              returnTo={`/projects/${projectId}/outputs/stitch`}
+            />
+
             {submitError && <FormMessage variant="error">{submitError}</FormMessage>}
 
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={submitting || isExternalWriteBlocked(preview.impact, acknowledged)}
+              disabled={
+                submitting ||
+                isWriteWithheld('stitch', connection) ||
+                isExternalWriteBlocked(preview.impact, acknowledged)
+              }
               className={SUBMIT_CLASSNAME}
             >
               {submitting

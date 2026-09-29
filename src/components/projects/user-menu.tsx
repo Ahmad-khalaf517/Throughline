@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { LogOut, Pencil } from 'lucide-react';
+import Link from 'next/link';
+import { Link2, LogOut, Pencil } from 'lucide-react';
 import { friendlyNameFromEmail } from '@/lib/utils';
 import { EditProfileDialog, type UpdateDisplayNameState } from './edit-profile-dialog';
 
@@ -102,6 +103,16 @@ export function UserMenu({
             <p className="text-on-surface-variant truncate text-xs">{email}</p>
           </div>
           <div className="p-1">
+            {/* FR-004 round 14 exception: the one user-level entry admitted to the shell. */}
+            <Link
+              href="/connections"
+              role="menuitem"
+              onClick={() => setOpen(false)}
+              className="text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface focus-visible:ring-primary flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
+            >
+              <Link2 className="size-4" aria-hidden="true" />
+              Connections
+            </Link>
             <button
               type="button"
               role="menuitem"
