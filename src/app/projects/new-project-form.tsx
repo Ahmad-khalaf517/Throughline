@@ -68,20 +68,22 @@ export function NewProjectForm() {
   }
 
   return (
-    <div className="bg-surface-container-lowest border-surface-dim rounded-xl border p-6">
-      <h2 className="text-on-surface text-lg font-semibold">New project</h2>
+    <div className="app-card p-6 sm:p-8">
+      <p className="app-kicker">Project details</p>
+      <h2 className="text-on-surface mt-2 text-xl font-semibold tracking-tight">
+        Tell us what you&apos;re building
+      </h2>
       <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
-        Give it a name and a brief describing what you&apos;re building. You can keep refining the
-        brief until Requirements generation starts.
+        A name helps you find it later. The brief gives every later artifact its starting context.
       </p>
 
-      <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-4" noValidate>
+      <form onSubmit={handleSubmit} className="mt-7 flex flex-col gap-5" noValidate>
         <TextField
           id="name"
           name="name"
           label="Project name"
           required
-          placeholder="Acme Checkout Revamp"
+          placeholder="e.g. Customer portal refresh"
         />
 
         <TextAreaField
@@ -90,7 +92,7 @@ export function NewProjectForm() {
           label="Brief"
           required
           rows={6}
-          placeholder="Describe the problem, the users, and what success looks like..."
+          placeholder="What problem are you solving? Who is it for? What should success look like?"
         />
 
         {error && <FormMessage variant="error">{error}</FormMessage>}

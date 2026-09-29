@@ -247,3 +247,104 @@ body {
     background-image: none;
   }
 }
+
+/* Authenticated workspace: promotion palette, applied without changing the public page. */
+.app-shell {
+  --app-rust-tint: #fbede6;
+  --surface: #f8f6f2;
+  --surface-dim: #e5dfd7;
+  --surface-container-lowest: #fffdfb;
+  --surface-container-low: #f4f0eb;
+  --surface-container: #eee8e1;
+  --surface-container-high: #e8e1d9;
+  --surface-container-highest: #e0d8cf;
+  --on-surface: #1c1b19;
+  --on-surface-variant: #575751;
+  --outline: #81766e;
+  --outline-variant: #d8cfc5;
+  --primary: #9f381c;
+  --primary-container: #b94726;
+  --primary-container-hover: #a43d20;
+  --on-primary-container: #fffdfb;
+  --status-approved-bg: #e7f4eb;
+  --status-approved-text: #176b43;
+  background: var(--surface);
+  scrollbar-color: #b9afa6 #f4f0eb;
+  scrollbar-width: thin;
+}
+
+.app-display {
+  font-family: Georgia, 'Times New Roman', ui-serif, serif;
+  font-weight: 600;
+  letter-spacing: -0.045em;
+}
+
+.app-kicker {
+  color: var(--primary);
+  font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.app-card {
+  background: var(--surface-container-lowest);
+  border: 1px solid var(--surface-dim);
+  border-radius: 0.875rem;
+}
+
+.app-card-link {
+  transition:
+    border-color 180ms cubic-bezier(0.23, 1, 0.32, 1),
+    box-shadow 180ms cubic-bezier(0.23, 1, 0.32, 1),
+    transform 180ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-card-link:hover {
+    border-color: var(--outline-variant);
+    box-shadow: 0 12px 30px -22px rgb(54 35 24 / 35%);
+    transform: translateY(-2px);
+  }
+}
+
+.app-card-link:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.app-rail-active {
+  color: var(--primary);
+  background: var(--app-rust-tint);
+  box-shadow: inset 3px 0 var(--primary-container);
+}
+
+.app-accent-soft {
+  color: var(--primary);
+  background: var(--app-rust-tint);
+}
+
+.app-journey-track {
+  background: var(--surface-container);
+}
+
+.app-journey-fill {
+  background: var(--primary-container);
+}
+
+@media (forced-colors: active) {
+  .app-shell {
+    scrollbar-color: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-card-link {
+    transition: none;
+  }
+
+  .app-card-link:hover {
+    transform: none;
+  }
+}

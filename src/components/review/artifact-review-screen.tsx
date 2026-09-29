@@ -515,7 +515,7 @@ export function ArtifactReviewScreen({
       )}
       <header
         className={cn(
-          'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
+          'app-card p-6 sm:p-8',
           isRequirements && 'px-5 py-4 sm:px-6 lg:col-span-2',
           version.options && 'border-l-primary border-l-4',
         )}
@@ -533,7 +533,7 @@ export function ArtifactReviewScreen({
               </p>
             )}
             <div className="flex flex-wrap items-center gap-2.5">
-              <h1 className="text-on-surface text-display-sm font-semibold">
+              <h1 className="app-display text-on-surface text-[clamp(2rem,4vw,3rem)] leading-tight">
                 {version.artifactType === 'backlog'
                   ? 'Backlog Review'
                   : version.options
@@ -1065,7 +1065,7 @@ export function ArtifactReviewScreen({
               }}
               rows={2}
               placeholder="What should the AI change or focus on? (leave blank to just regenerate)"
-              className="border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus-visible:ring-primary mt-2 w-full resize-y rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+              className="border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus-visible:ring-primary mt-2 min-h-28 w-full resize-none rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
             />
             <div className="mt-2 flex items-center gap-2">
               <button
