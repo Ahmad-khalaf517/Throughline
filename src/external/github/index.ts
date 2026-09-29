@@ -25,6 +25,7 @@
 import { createHash, createHmac } from 'node:crypto';
 import { Octokit, RequestError } from 'octokit';
 import { env } from '@/lib/env';
+import { getCredential, reportAuthFailure, ReconnectRequiredError } from '@/connections';
 import {
   runOperation,
   getRefById,
@@ -197,9 +198,9 @@ function requireServerSecret(): string {
   return env.GITHUB_MARKER_SECRET;
 }
 
-function createOctokitClient(): Octokit {
+function createOctokitClient(token: string | undefined = env.GITHUB_TOKEN): Octokit {
   return new Octokit({
-    auth: env.GITHUB_TOKEN,
+    auth: token,
     // No explicit `request.fetch` override here. @octokit/request's own
     // fetchWrapper resolves `requestOptions.request?.fetch || globalThis.fetch`
     // freshly on EVERY call (confirmed in
@@ -339,6 +340,58 @@ export async function checkRepoName(repoName: string): Promise<RepoNameCheck> {
     }
     if (isDefinitiveRejection(error)) {
       throw new GithubLookupRejectedError(describeRejection(error, 'check the repository name'));
+    }
+    throw error;
+  }
+}
+
+/**
+ * Round 14 (Module Boundaries 4.6): what a layer-6 route passes in - the
+ * verified project owner and the project's chosen GitHub owner. This module
+ * cannot read `project` or resolve users itself.
+ */
+export type GithubCtx = { userId: string; githubOwner?: string };
+
+/**
+ * Round 14 (D2, FR-088): can the caller's own GitHub connection create
+ * repositories under `owner`? Read-only provider calls with the user's
+ * credential (never the environment token); no table is touched. Used by
+ * `PATCH .../targets` BEFORE any project lock is taken.
+ *
+ * `true` when `owner` is the connected account's own login, or an organization
+ * in which the connection holds an active membership. `false` for an unknown
+ * owner, another user, or an organization the account is not an active member
+ * of. `ConnectionRequiredError` (no connection) and `ReconnectRequiredError`
+ * (GitHub rejected the credential; the connection is marked `needs_reauth`)
+ * propagate.
+ *
+ * SCRUM-96 part B: the org branch relies on `GET /user/memberships/orgs/{org}`,
+ * which GitHub answers 404 when the token lacks `read:org`; part B revisits the
+ * requested OAuth scope and the listOwners picker that shares this logic.
+ */
+export async function checkOwnerAccessible(ctx: GithubCtx, owner: string): Promise<boolean> {
+  const credential = await getCredential(ctx.userId, 'github');
+  const octokit = createOctokitClient(credential.accessToken);
+
+  try {
+    const { data: me } = await octokit.rest.users.getAuthenticated();
+    if (me.login.toLowerCase() === owner.toLowerCase()) return true;
+
+    try {
+      const { data: membership } = await octokit.request('GET /user/memberships/orgs/{org}', {
+        org: owner,
+      });
+      return membership.state === 'active';
+    } catch (error) {
+      if (error instanceof RequestError && (error.status === 404 || error.status === 403)) {
+        return false;
+      }
+      throw error;
+    }
+  } catch (error) {
+    if (error instanceof RequestError && error.status === 401) {
+      await reportAuthFailure(credential.connectionId);
+      throw new ReconnectRequiredError('github', 'needs_reauth', credential.connectionId);
     }
     throw error;
   }
@@ -736,6 +789,9 @@ export async function initRepo(
     requestHash,
     targetDescriptor: { repoName: normalizedRepoName, mode },
     sourceArtifactVersionId: architectureVersionId,
+    // Legacy environment-credential path (SCRUM-96 part A keeps today's behaviour):
+    // per-user connections arrive with the provider stories (UC-S4 part B / UC-S5 / UC-S6).
+    connectionId: null,
     send: () =>
       sendCreateRepo({
         octokit,

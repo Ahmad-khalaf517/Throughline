@@ -623,6 +623,7 @@ async function main() {
         requestHash: requestHash1,
         targetDescriptor: { repoName: repoName1, marker: marker1 },
         sourceArtifactVersionId: chain1.artifactVersionId,
+        connectionId: null,
         send: send1,
         reconcile: reconcileShouldNotBeCalled,
       });
@@ -670,6 +671,7 @@ async function main() {
       requestHash: requestHash1,
       targetDescriptor: { repoName: repoName1, marker: marker1 },
       sourceArtifactVersionId: chain1.artifactVersionId,
+      connectionId: null,
       send: sendShouldNotBeCalled,
       reconcile: reconcile1,
     });
@@ -822,6 +824,7 @@ async function main() {
         requestHash: requestHash2,
         targetDescriptor: { repoName: repoName2, marker: marker2 },
         sourceArtifactVersionId: chain2.artifactVersionId,
+        connectionId: null,
         send: send2,
         reconcile: reconcileShouldNotBeCalled,
       });
@@ -869,6 +872,7 @@ async function main() {
       requestHash: requestHash2,
       targetDescriptor: { repoName: repoName2, marker: marker2 },
       sourceArtifactVersionId: chain2.artifactVersionId,
+      connectionId: null,
       send: sendShouldNotBeCalled,
       reconcile: reconcile2,
     });

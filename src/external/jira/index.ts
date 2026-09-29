@@ -561,6 +561,9 @@ async function exportOneItem(args: {
       targetDescriptor,
       sourceArtifactVersionId: member.sourceVersionId,
       sourceItemVersionId: member.itemVersionId,
+      // Legacy environment-credential path (SCRUM-96 part A keeps today's behaviour):
+      // per-user connections arrive with the provider stories (UC-S4 part B / UC-S5 / UC-S6).
+      connectionId: null,
       send: () => sendCreateIssue({ config, member, itemType, displayKey, marker, parentKey }),
       reconcile: () => reconcileIssue({ config, marker }),
     });

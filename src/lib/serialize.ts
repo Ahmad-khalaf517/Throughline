@@ -28,6 +28,11 @@ export interface ProjectDTO {
   inputContext: unknown | null;
   createdAt: string;
   artifacts: Record<ArtifactType, ArtifactSummaryDTO>;
+  // Round 14 (FR-088, API Contracts 3): where this project's external outputs go.
+  targets: {
+    githubOwner: string | null;
+    jira: { cloudId: string; projectKey: string } | null; // both or neither
+  };
 }
 
 // Structural input shape - deliberately not imported from artifact-lifecycle
@@ -40,6 +45,11 @@ export interface ProjectWithArtifactsInput {
   inputContext: unknown;
   createdAt: Date;
   artifacts: Record<ArtifactType, ArtifactSummaryDTO>;
+  // Optional so a caller that has not read the target columns still type-checks;
+  // absent reads as "not set".
+  githubOwner?: string | null;
+  jiraCloudId?: string | null;
+  jiraProjectKey?: string | null;
 }
 
 // Every artifact type with no version of either kind yet - the only possible
@@ -59,6 +69,13 @@ export function toProjectDTO(project: ProjectWithArtifactsInput): ProjectDTO {
     inputContext: project.inputContext ?? null,
     createdAt: project.createdAt.toISOString(),
     artifacts: project.artifacts,
+    targets: {
+      githubOwner: project.githubOwner ?? null,
+      jira:
+        project.jiraCloudId && project.jiraProjectKey
+          ? { cloudId: project.jiraCloudId, projectKey: project.jiraProjectKey }
+          : null,
+    },
   };
 }
 
@@ -293,6 +310,9 @@ export interface ExternalOperationInput {
   errorMessage: string | null;
   createdAt: Date;
   updatedAt: Date;
+  // Round 14 (FR-090): state of the connection recorded on the operation, from
+  // `external-operations.getOperationDTOState`. Absent = no reconnect needed.
+  connection?: 'active' | 'needs_reauth' | 'revoked' | 'legacy' | 'account_mismatch';
 }
 
 // Mirrors `lineage/impact.ImpactRow` exactly (that module's own comment:
@@ -330,9 +350,20 @@ export interface ExternalOperationDTO {
   status: 'pending' | 'completed' | 'failed' | 'reconciliation_required';
   externalId: string | null;
   errorMessage: string | null;
+  // Round 14 (FR-090): the recorded connection cannot be used; the operation itself is unchanged.
+  needsReconnect: {
+    provider: 'github' | 'jira' | 'stitch';
+    reason: 'needs_reauth' | 'revoked' | 'different_account' | 'legacy_credential_missing';
+  } | null;
   createdAt: string;
   updatedAt: string;
 }
+
+const RECONNECT_REASON = {
+  needs_reauth: 'needs_reauth',
+  revoked: 'revoked',
+  account_mismatch: 'different_account',
+} as const;
 
 export function toExternalOperationDTO(op: ExternalOperationInput): ExternalOperationDTO {
   return {
@@ -342,6 +373,17 @@ export function toExternalOperationDTO(op: ExternalOperationInput): ExternalOper
     status: op.status as ExternalOperationDTO['status'],
     externalId: op.externalId,
     errorMessage: op.errorMessage,
+    // `legacy` (connection_id NULL) reads as null here; `legacy_credential_missing`
+    // needs the environment, which lib never reads (UC-S8).
+    needsReconnect:
+      op.connection === 'needs_reauth' ||
+      op.connection === 'revoked' ||
+      op.connection === 'account_mismatch'
+        ? {
+            provider: op.provider as ExternalOperationDTO['provider'],
+            reason: RECONNECT_REASON[op.connection],
+          }
+        : null,
     createdAt: op.createdAt.toISOString(),
     updatedAt: op.updatedAt.toISOString(),
   };

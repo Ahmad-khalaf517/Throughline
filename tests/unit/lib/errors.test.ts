@@ -24,6 +24,11 @@ describe('ApiError', () => {
     ['OPTION_NOT_SELECTED', 422],
     ['OPTION_COUNT_INVALID', 422],
     ['NOT_CURRENTLY_FLAGGED', 409],
+    ['CONNECTION_REQUIRED', 409],
+    ['RECONNECT_REQUIRED', 409],
+    ['TARGET_REQUIRED', 409],
+    ['TARGET_LOCKED', 409],
+    ['TARGET_NOT_ACCESSIBLE', 422],
   ] as const)('maps %s to status %i', (code, status) => {
     const error = new ApiError(code, 'message');
     expect(error.code).toBe(code);

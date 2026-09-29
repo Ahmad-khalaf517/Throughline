@@ -19,7 +19,8 @@ import {
   StitchOperationInFlightError,
   StitchOperationConflictError,
 } from '@/external/stitch';
-import { ApiError, errorResponse } from '@/lib/errors';
+import { ApiError } from '@/lib/errors';
+import { routeErrorResponse } from '@/app/api/_shared/connection-errors';
 import { serializeRefWithFreshDrift } from '@/app/api/_shared/external';
 
 interface RouteParams {
@@ -194,6 +195,8 @@ export async function POST(request: Request, { params }: RouteParams) {
 
     return NextResponse.json(result);
   } catch (error) {
-    return errorResponse(error);
+    // A `ReconnectRequiredError` from the recorded connection (ERD 7.6, T49)
+    // leaves the operation untouched and answers 409 RECONNECT_REQUIRED.
+    return routeErrorResponse(error);
   }
 }

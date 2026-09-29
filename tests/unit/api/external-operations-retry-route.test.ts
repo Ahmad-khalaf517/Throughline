@@ -13,6 +13,8 @@ const {
   FakeStitchReconciliationRequiredError,
   FakeStitchOperationInFlightError,
   FakeStitchOperationConflictError,
+  FakeConnectionRequiredError,
+  FakeReconnectRequiredError,
 } = vi.hoisted(() => {
   class FakeGithubReconciliationRequiredError extends Error {}
   class FakeGithubOperationInFlightError extends Error {}
@@ -20,6 +22,13 @@ const {
   class FakeStitchReconciliationRequiredError extends Error {}
   class FakeStitchOperationInFlightError extends Error {}
   class FakeStitchOperationConflictError extends Error {}
+  class FakeConnectionRequiredError extends Error {
+    provider = 'github';
+  }
+  class FakeReconnectRequiredError extends Error {
+    provider = 'github';
+    reason = 'revoked';
+  }
   return {
     FakeGithubReconciliationRequiredError,
     FakeGithubOperationInFlightError,
@@ -27,8 +36,17 @@ const {
     FakeStitchReconciliationRequiredError,
     FakeStitchOperationInFlightError,
     FakeStitchOperationConflictError,
+    FakeConnectionRequiredError,
+    FakeReconnectRequiredError,
   };
 });
+
+// The route's error translation imports `@/connections` (layer 3b), which is
+// built on `@/db`/`@/lib/env`; stand-in error classes are enough for `instanceof`.
+vi.mock('@/connections', () => ({
+  ConnectionRequiredError: FakeConnectionRequiredError,
+  ReconnectRequiredError: FakeReconnectRequiredError,
+}));
 
 vi.mock('@/auth', () => ({
   getVerifiedUser: vi.fn(),
@@ -183,6 +201,18 @@ describe('POST /api/external-operations/:operationId/retry', () => {
     expect(response.status).toBe(404);
     const body = await response.json();
     expect(body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('answers 409 RECONNECT_REQUIRED when the recorded connection cannot be used (T49 route half)', async () => {
+    mockedGetOperationById.mockResolvedValue(makeOperation({ provider: 'github' }));
+    mockedInitRepo.mockRejectedValue(new FakeReconnectRequiredError('reconnect github'));
+
+    const response = await POST(request(), paramsFor('op-1'));
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error.code).toBe('RECONNECT_REQUIRED');
+    expect(body.error.details).toEqual({ provider: 'github', reason: 'revoked' });
   });
 
   describe('github', () => {

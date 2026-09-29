@@ -198,6 +198,11 @@ let reviseRoute: typeof import('@/app/api/projects/[projectId]/artifacts/[type]/
 let approveRoute: typeof import('@/app/api/artifact-versions/[versionId]/approve/route').POST;
 let itemEditPreviewRoute: typeof import('@/app/api/artifact-versions/[versionId]/items/[logicalItemId]/edit/preview/route').POST;
 let commitItemEditRoute: typeof import('@/app/api/artifact-versions/[versionId]/items/[logicalItemId]/route').PUT;
+// SCRUM-96 (UC-S4 part A): external-operations' round-14 behaviour (T49/T50
+// application halves) - `runOperation` recording connection_id, the reconnect-
+// required no-op, the legacy NULL path - and the connections module it consults.
+let ops: typeof import('@/external/operations');
+let connectionsModule: typeof import('@/connections');
 
 // E4-T3 provider config constants - same shape as
 // tests/integration/external/github.test.ts / jira.test.ts's own constants,
@@ -226,6 +231,8 @@ beforeAll(async () => {
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-key';
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-key';
   process.env.NEXT_PUBLIC_SITE_URL = 'https://example.test';
+  // SCRUM-96: `@/connections` needs a 32-byte base64 key at use time.
+  process.env.CONNECTION_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
   // E4-T3: github/jira provider config, same env vars
   // tests/integration/external/github.test.ts and jira.test.ts already set up
   // for the SAME modules, reached here through the route handlers instead of
@@ -260,6 +267,8 @@ beforeAll(async () => {
   commitItemEditRoute = (
     await import('@/app/api/artifact-versions/[versionId]/items/[logicalItemId]/route')
   ).PUT;
+  ops = await import('@/external/operations');
+  connectionsModule = await import('@/connections');
 });
 
 afterAll(async () => {
@@ -4631,9 +4640,226 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     `;
     expect(triggers.map((t) => t.tgname)).toEqual(['provider_connection_touch']);
   });
-  it.todo(
-    'T49 (application half): reconcile/retry/drift return reconnect-required, never failed, never a new warning',
+
+  // SCRUM-96 helper: the provider account id `insertConnection` generated.
+  async function accountIdOf(connectionId: string): Promise<string> {
+    const rows = await sql<{ external_account_id: string }[]>`
+      SELECT external_account_id FROM provider_connection WHERE id = ${connectionId}
+    `;
+    return rows[0]!.external_account_id;
+  }
+
+  // Everything T49 says must not move: the operation rows, the refs, and impact().
+  async function operationSnapshot(projectId: string): Promise<string> {
+    const rows = await sql<{ h: string }[]>`
+      SELECT md5(
+        coalesce((SELECT string_agg(row_to_json(o)::text, '|' ORDER BY o.id)
+                    FROM external_operation o WHERE o.project_id = ${projectId}), '') || '#' ||
+        coalesce((SELECT string_agg(row_to_json(r)::text, '|' ORDER BY r.id)
+                    FROM external_ref r WHERE r.project_id = ${projectId}), '') || '#' ||
+        coalesce((SELECT string_agg(row_to_json(i)::text, '|' ORDER BY i.subject_id, i.root_item_version_id)
+                    FROM impact(${projectId}::uuid) i), '')
+      ) AS h
+    `;
+    return rows[0]!.h;
+  }
+
+  // SCRUM-96 / UC-S4 part A: runOperation records the acting user's connection
+  // and the account snapshot in the SAME insert-first row (ERD 7.2 step 0, 4.14).
+  it('SCRUM-96: runOperation writes connection_id and target_descriptor.account_id in the insert-first row, before send, and never rewrites them', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+      name: 'appendix-c: SCRUM-96 record',
+    });
+    const { versionId } = await draftArtifactVersion(projectId);
+    const connectionId = await insertConnection(userId, 'stitch');
+    const accountId = await accountIdOf(connectionId);
+    const operationKey = `stitch:generate:${randomUUID()}`;
+
+    type SeenRow = {
+      id: string;
+      status: string;
+      connection_id: string | null;
+      target_descriptor: Record<string, unknown>;
+    };
+    let seenDuringSend: SeenRow | null = null;
+    let sendOperationId: string | null = null;
+
+    const first = await ops.runOperation({
+      projectId,
+      provider: 'stitch',
+      operationType: 'generate',
+      operationKey,
+      requestHash: 'h-record',
+      targetDescriptor: { uiRequirementsVersionId: versionId },
+      sourceArtifactVersionId: versionId,
+      connectionId,
+      accountId,
+      send: async (ctx) => {
+        sendOperationId = ctx.operationId;
+        const rows = await sql<SeenRow[]>`
+          SELECT id, status, connection_id, target_descriptor FROM external_operation
+           WHERE operation_key = ${operationKey}
+        `;
+        seenDuringSend = rows[0] ?? null;
+        return { externalId: `stitch-${randomUUID()}` };
+      },
+      reconcile: async () => ({ found: false }),
+    });
+
+    expect(first.status).toBe('completed');
+    // Committed BEFORE send ran (insert-first), with the connection already on it.
+    expect(seenDuringSend).toMatchObject({
+      status: 'pending',
+      connection_id: connectionId,
+      target_descriptor: { uiRequirementsVersionId: versionId, account_id: accountId },
+    });
+    expect(sendOperationId).toBe((seenDuringSend as SeenRow | null)?.id);
+
+    // A second call under the same key from a legacy caller does not rewrite it.
+    const second = await ops.runOperation({
+      projectId,
+      provider: 'stitch',
+      operationType: 'generate',
+      operationKey,
+      requestHash: 'h-record',
+      targetDescriptor: { uiRequirementsVersionId: versionId },
+      sourceArtifactVersionId: versionId,
+      connectionId: null,
+      send: async () => {
+        throw new Error('must not resend a completed operation');
+      },
+      reconcile: async () => ({ found: false }),
+    });
+    expect(second.status).toBe('completed');
+    const rows = await sql<{ connection_id: string | null }[]>`
+      SELECT connection_id FROM external_operation WHERE operation_key = ${operationKey}
+    `;
+    expect(rows).toEqual([{ connection_id: connectionId }]);
+  });
+
+  // T49 (application half)
+  it.each([
+    ['reconciliation_required', 'needs_reauth'],
+    ['failed', 'needs_reauth'],
+    ['pending', 'needs_reauth'],
+    ['reconciliation_required', 'revoked'],
+  ] as const)(
+    'T49: a %s operation on a %s connection - runOperation throws ReconnectRequiredError and the operation, its refs and impact() are byte-identical; no send/reconcile call',
+    async (operationStatus, connectionStatus) => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+        name: `appendix-c: T49 app ${operationStatus}/${connectionStatus}`,
+      });
+      const { versionId } = await draftArtifactVersion(projectId);
+      const connectionId = await insertConnection(userId, 'stitch');
+      const accountId = await accountIdOf(connectionId);
+      const operationKey = `stitch:generate:${randomUUID()}`;
+      // A `pending` row is old enough that runOperation would normally move it
+      // to reconciliation_required (older than T = 90s).
+      await sql`
+        INSERT INTO external_operation
+          (project_id, provider, operation_type, operation_key, status, request_hash,
+           source_artifact_version_id, connection_id, target_descriptor, error_message,
+           created_at, updated_at)
+        VALUES (${projectId}, 'stitch', 'generate', ${operationKey}, ${operationStatus}, 'h-t49',
+                ${versionId}, ${connectionId}, ${sql.json({ account_id: accountId })},
+                ${operationStatus === 'failed' ? 'an earlier definitive failure' : null},
+                now() - interval '1 hour', now() - interval '1 hour')
+      `;
+      if (connectionStatus === 'needs_reauth') {
+        await sql`UPDATE provider_connection SET status = 'needs_reauth' WHERE id = ${connectionId}`;
+      } else {
+        await sql`
+          UPDATE provider_connection
+             SET status = 'revoked', access_token_enc = 'revoked', refresh_token_enc = NULL, expires_at = NULL
+           WHERE id = ${connectionId}
+        `;
+      }
+      const before = await operationSnapshot(projectId);
+      let called = 0;
+
+      await expect(
+        ops.runOperation({
+          projectId,
+          provider: 'stitch',
+          operationType: 'generate',
+          operationKey,
+          requestHash: 'h-t49',
+          targetDescriptor: {},
+          sourceArtifactVersionId: versionId,
+          connectionId,
+          accountId,
+          send: async () => {
+            called += 1;
+            return { externalId: 'never' };
+          },
+          reconcile: async () => {
+            called += 1;
+            return { found: false };
+          },
+        }),
+      ).rejects.toBeInstanceOf(connectionsModule.ReconnectRequiredError);
+
+      expect(called).toBe(0);
+      expect(await operationSnapshot(projectId)).toBe(before);
+
+      // The status read (never a decrypt/refresh) drives ExternalOperationDTO.needsReconnect.
+      const opRows = await sql<{ id: string }[]>`
+        SELECT id FROM external_operation WHERE operation_key = ${operationKey}
+      `;
+      const state = await ops.getOperationDTOState(opRows[0]!.id);
+      expect(state?.connection).toBe(connectionStatus);
+      const { toExternalOperationDTO } = await import('@/lib/serialize');
+      const dto = toExternalOperationDTO(state!);
+      expect(dto.needsReconnect).toEqual({ provider: 'stitch', reason: connectionStatus });
+      expect(dto.status).toBe(operationStatus);
+    },
   );
+
+  it('T49: a closure that itself raises ReconnectRequiredError (refresh rejected) leaves the operation as it was and creates no ref', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+      name: 'appendix-c: T49 app closure',
+    });
+    const { versionId } = await draftArtifactVersion(projectId);
+    const connectionId = await insertConnection(userId, 'stitch');
+    const accountId = await accountIdOf(connectionId);
+    const operationKey = `stitch:generate:${randomUUID()}`;
+    await sql`
+      INSERT INTO external_operation
+        (project_id, provider, operation_type, operation_key, status, request_hash,
+         source_artifact_version_id, connection_id, target_descriptor, error_message)
+      VALUES (${projectId}, 'stitch', 'generate', ${operationKey}, 'failed', 'h-t49c',
+              ${versionId}, ${connectionId}, ${sql.json({ account_id: accountId })}, 'earlier failure')
+    `;
+
+    await expect(
+      ops.runOperation({
+        projectId,
+        provider: 'stitch',
+        operationType: 'generate',
+        operationKey,
+        requestHash: 'h-t49c',
+        targetDescriptor: {},
+        sourceArtifactVersionId: versionId,
+        connectionId,
+        accountId,
+        send: async () => {
+          throw new connectionsModule.ReconnectRequiredError(
+            'stitch',
+            'refresh_rejected',
+            connectionId,
+          );
+        },
+        reconcile: async () => ({ found: false }),
+      }),
+    ).rejects.toBeInstanceOf(connectionsModule.ReconnectRequiredError);
+
+    const rows = await sql<{ status: string; error_message: string | null }[]>`
+      SELECT status, error_message FROM external_operation WHERE operation_key = ${operationKey}
+    `;
+    expect(rows).toEqual([{ status: 'failed', error_message: 'earlier failure' }]);
+    const refs = await sql`SELECT 1 FROM external_ref WHERE project_id = ${projectId}`;
+    expect(refs).toHaveLength(0);
+  });
 
   // T50 (SQL half)
   it('T50: a legacy operation (connection_id NULL) keeps its state machine', async () => {
@@ -4652,9 +4878,85 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     `;
     expect(rows[0]).toEqual({ connection_id: null, status: 'completed' });
   });
-  it.todo(
-    'T50 (application half): a NEW operation with no env credential and no user connection is refused with CONNECTION_REQUIRED and writes no row',
-  );
+
+  // T50 (application half)
+  it('T50: a legacy operation (connection_id NULL) still reconciles through runOperation with no connection lookup, and stays NULL', async () => {
+    const { projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T50 legacy' });
+    const { versionId } = await draftArtifactVersion(projectId);
+    const operationKey = `stitch:generate:${randomUUID()}`;
+    const opId = await fx.createExternalOperation(sql, {
+      projectId,
+      provider: 'stitch',
+      operationKey,
+      requestHash: 'h-t50',
+      status: 'reconciliation_required',
+      sourceArtifactVersionId: versionId,
+    });
+    expect((await ops.getOperationDTOState(opId))?.connection).toBe('legacy');
+
+    const seen: string[] = [];
+    const result = await ops.runOperation({
+      projectId,
+      provider: 'stitch',
+      operationType: 'generate',
+      operationKey,
+      requestHash: 'h-t50',
+      targetDescriptor: {},
+      sourceArtifactVersionId: versionId,
+      connectionId: null,
+      send: async () => {
+        throw new Error('a reconciliation_required row is reconciled, not resent');
+      },
+      reconcile: async (ctx) => {
+        seen.push(ctx.operationId);
+        return { found: true, externalId: 'stitch-legacy-1' };
+      },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(seen).toEqual([opId]);
+    const rows = await sql<{ connection_id: string | null; status: string }[]>`
+      SELECT connection_id, status FROM external_operation WHERE id = ${opId}
+    `;
+    expect(rows).toEqual([{ connection_id: null, status: 'completed' }]);
+    const { toExternalOperationDTO } = await import('@/lib/serialize');
+    const state = await ops.getOperationDTOState(opId);
+    expect(toExternalOperationDTO(state!).needsReconnect).toBeNull();
+  });
+
+  it('T50: a NEW operation whose caller has no user connection is refused with ConnectionRequiredError before runOperation - no external_operation row is written', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+      name: 'appendix-c: T50 no credential',
+    });
+    const { versionId } = await draftArtifactVersion(projectId);
+
+    // The caller's contract (Module Boundaries 4.5/4.6, ERD 7.2 step 0): resolve
+    // the credential FIRST, then call runOperation. The provider modules adopt
+    // exactly this order in UC-S4 part B / UC-S5 / UC-S6; until then this pins
+    // that the connections half of the contract leaves no row behind.
+    const newOperationAs = async (asUser: string) => {
+      const credential = await connectionsModule.getCredential(asUser, 'stitch');
+      return ops.runOperation({
+        projectId,
+        provider: 'stitch',
+        operationType: 'generate',
+        operationKey: `stitch:generate:${randomUUID()}`,
+        requestHash: 'h-t50-new',
+        targetDescriptor: {},
+        sourceArtifactVersionId: versionId,
+        connectionId: credential.connectionId,
+        accountId: credential.accountId,
+        send: async () => ({ externalId: 'never' }),
+        reconcile: async () => ({ found: false }),
+      });
+    };
+
+    await expect(newOperationAs(userId)).rejects.toBeInstanceOf(
+      connectionsModule.ConnectionRequiredError,
+    );
+    const rows = await sql`SELECT 1 FROM external_operation WHERE project_id = ${projectId}`;
+    expect(rows).toHaveLength(0);
+  });
 
   // T51 / T52 are application tests of the connections module.
   // Implemented in tests/integration/connections.test.ts (T51: account

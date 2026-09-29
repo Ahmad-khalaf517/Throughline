@@ -552,6 +552,9 @@ export async function generate(uiRequirementsVersionId: string): Promise<StitchO
     requestHash,
     targetDescriptor: { uiRequirementsVersionId },
     sourceArtifactVersionId: uiRequirementsVersionId,
+    // Legacy environment-credential path (SCRUM-96 part A keeps today's behaviour):
+    // per-user connections arrive with the provider stories (UC-S4 part B / UC-S5 / UC-S6).
+    connectionId: null,
     send: () => sendGenerate({ apiKey, storage, bucket, prompt, uiRequirementsVersionId }),
     reconcile: () =>
       reconcileGenerate({ apiKey, storage, bucket, prompt, uiRequirementsVersionId }),
