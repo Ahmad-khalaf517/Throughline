@@ -18,6 +18,7 @@ export {
   InvalidGrantError,
   ConnectionConfigError,
   ConnectionInputError,
+  ConnectionStoreError,
   OAuthFlowError,
   type OAuthFlowErrorCode,
   type ReconnectReason,

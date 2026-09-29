@@ -497,7 +497,7 @@ Per-user, not per-project: these routes need a verified user (`401 UNAUTHENTICAT
 
 `-> connections.beginOAuth('github')`
 
-Browser navigation. Optional query `returnTo` - a **relative** path on this site (anything else is ignored). `beginOAuth` returns the authorize URL and a PKCE verifier; **the route** sets the verifier in a short-lived `httpOnly`, `SameSite=Lax` cookie and answers `302` to GitHub's authorize URL with a `state` signed with `OAUTH_STATE_SECRET` (an HMAC key of its own - not `GITHUB_MARKER_SECRET`) and bound to the user, provider and `returnTo` (CSRF), the PKCE challenge, scope `repo`, and a `redirect_uri` taken from an allowlist derived from `NEXT_PUBLIC_SITE_URL`.
+Browser navigation. Optional query `returnTo` - a **relative** path on this site (anything else is ignored). `beginOAuth` returns the authorize URL and a PKCE verifier; **the route** sets the verifier in a short-lived `httpOnly`, `SameSite=Lax` cookie and answers `302` to GitHub's authorize URL with a `state` signed with `OAUTH_STATE_SECRET` (an HMAC key of its own - not `GITHUB_MARKER_SECRET`) and bound to the user, provider and `returnTo` (CSRF), the PKCE challenge, scopes `repo read:org` (`read:org` so org membership and the owner picker work; amended in UC-S4), and a `redirect_uri` taken from an allowlist derived from `NEXT_PUBLIC_SITE_URL`.
 **Response:** `302`. **Errors:** `401 UNAUTHENTICATED`.
 
 ### `GET /api/connections/github/callback`

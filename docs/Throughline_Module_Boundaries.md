@@ -844,6 +844,18 @@ class ReconnectRequiredError  extends Error {}   // -> API 409 RECONNECT_REQUIRE
 
 ---
 
+**Implementation notes (UC-S4, recorded so the doc matches the code):**
+- **OAuth HTTP lives here (4.6 exception).** `beginOAuth`/`completeOAuth` and the GitHub authorize/token/identity/revoke calls are in `connections` (`oauth-github.ts`); the GitHub revoker registers itself via `registerRevoker` when the module loads. `registerRefresher` remains the seam for Jira's refresh call (UC-S5). "This module holds no provider HTTP" above therefore means *no per-operation provider API calls*, not no OAuth endpoints.
+- **Extra exports:** `OAuthFlowError` (codes `invalid_state`, `exchange_failed`; fixed message, no provider text), `sanitizeReturnTo` (relative-path check, used by the callback route), and `ConnectionStoreError` (DB failure with a fixed message - Drizzle errors embed SQL parameters, i.e. ciphertext, and must never reach a log).
+- **OAuth scope** is `repo read:org` (not `repo` alone): `read:org` is what makes org-membership checks and `GET /user/orgs` (owner picker) reliable.
+- **Signed state** additionally carries the PKCE challenge, binding the cookie verifier to its state.
+- **`external-operations` imports `connections`** for `getConnectionStatusForOperation` (needed by `getOperationDTOState`) as well as the error types; module-map row 13's "(error types only)" is superseded by this sentence.
+- **`runOperation`** takes an optional `accountId` and can return `{status:'failed'}`/`{status:'refused'}` variants that pre-date round 14; when a closure throws `ReconnectRequiredError` the row is restored to its prior status/message (only `updated_at` differs because the touch trigger fires).
+- **`github.previewInit`** returns an extra `connection: { status, targetReady }` block (FR-089: previews stay readable without a connection).
+- **Known lint gap:** the `no-restricted-imports` rule for `withProjectLock` blocks `**/db/lock` but `@/db` re-exports it; nothing imports it that way today, closing the gap (also block the barrel export) is a follow-up.
+
+---
+
 ## 5. Table ownership matrix
 
 | Table | Owning module | ERD section |

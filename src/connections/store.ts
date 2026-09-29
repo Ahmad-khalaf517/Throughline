@@ -7,6 +7,7 @@ import {
   ConnectionConfigError,
   ConnectionInputError,
   ConnectionRequiredError,
+  ConnectionStoreError,
   InvalidGrantError,
   ReconnectRequiredError,
   type ConnectionProvider,
@@ -39,6 +40,19 @@ export type OperationConnectionStatus =
 const REFRESH_SKEW_MS = 60_000;
 // Hard timeout for the single token-endpoint call made under the row lock.
 const REFRESH_TIMEOUT_MS = 10_000;
+
+/**
+ * Runs a write whose statement parameters include ciphertext. Any failure is
+ * replaced by a `ConnectionStoreError`: the driver error (whose message carries
+ * the SQL parameters) is neither attached as `cause` nor logged.
+ */
+async function guardWrite<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch {
+    throw new ConnectionStoreError();
+  }
+}
 
 function key(): Buffer {
   return parseKey(env.CONNECTION_ENCRYPTION_KEY);
@@ -147,26 +161,29 @@ async function refreshLocked(connectionId: string): Promise<Row> {
     }
 
     const rotated = result.refreshToken ?? refreshToken;
-    const [updated] = await tx
-      .update(providerConnection)
-      .set({
-        accessTokenEnc: encryptSecret({
-          plaintext: result.accessToken,
-          userId: row.userId,
-          provider,
-          key: k,
-        }),
-        refreshTokenEnc: encryptSecret({
-          plaintext: rotated,
-          userId: row.userId,
-          provider,
-          key: k,
-        }),
-        expiresAt: result.expiresAt ?? null,
-        keyVersion: CURRENT_KEY_VERSION,
-      })
-      .where(eq(providerConnection.id, row.id))
-      .returning();
+    const rotatedValues = {
+      accessTokenEnc: encryptSecret({
+        plaintext: result.accessToken,
+        userId: row.userId,
+        provider,
+        key: k,
+      }),
+      refreshTokenEnc: encryptSecret({
+        plaintext: rotated,
+        userId: row.userId,
+        provider,
+        key: k,
+      }),
+      expiresAt: result.expiresAt ?? null,
+      keyVersion: CURRENT_KEY_VERSION,
+    };
+    const [updated] = await guardWrite(() =>
+      tx
+        .update(providerConnection)
+        .set(rotatedValues)
+        .where(eq(providerConnection.id, row.id))
+        .returning(),
+    );
     return { kind: 'ok' as const, row: updated! };
   });
 
@@ -287,14 +304,16 @@ export async function saveConnection(input: SaveConnectionInput): Promise<Connec
     keyVersion: CURRENT_KEY_VERSION,
   };
   // Same row, same id on a reconnect (revives needs_reauth and the revoked tombstone).
-  const [row] = await db
-    .insert(providerConnection)
-    .values({ userId: input.userId, provider: input.provider, ...values })
-    .onConflictDoUpdate({
-      target: [providerConnection.userId, providerConnection.provider],
-      set: values,
-    })
-    .returning();
+  const [row] = await guardWrite(() =>
+    db
+      .insert(providerConnection)
+      .values({ userId: input.userId, provider: input.provider, ...values })
+      .onConflictDoUpdate({
+        target: [providerConnection.userId, providerConnection.provider],
+        set: values,
+      })
+      .returning(),
+  );
   return toStatus(row!);
 }
 
@@ -360,10 +379,17 @@ export async function disconnect(
     if (!isForeignKeyViolation(error)) throw error;
   }
   if (!deleted) {
-    await db
-      .update(providerConnection)
-      .set({ status: 'revoked', accessTokenEnc: 'revoked', refreshTokenEnc: null, expiresAt: null })
-      .where(eq(providerConnection.id, row.id));
+    await guardWrite(() =>
+      db
+        .update(providerConnection)
+        .set({
+          status: 'revoked',
+          accessTokenEnc: 'revoked',
+          refreshTokenEnc: null,
+          expiresAt: null,
+        })
+        .where(eq(providerConnection.id, row.id)),
+    );
   }
   return { providerRevoked };
 }

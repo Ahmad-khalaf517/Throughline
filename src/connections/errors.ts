@@ -68,6 +68,19 @@ export class OAuthFlowError extends Error {
   }
 }
 
+/**
+ * A database write that carries ciphertext failed. Driver/Drizzle errors embed
+ * the statement's parameters (the encrypted token, the user id), so the original
+ * is deliberately dropped: fixed message, no `cause`, nothing logged
+ * (NFR-005, Module Boundaries 4.9 rule 1). Reaches the API as a generic 500.
+ */
+export class ConnectionStoreError extends Error {
+  constructor() {
+    super('The connection store could not persist the change.');
+    this.name = 'ConnectionStoreError';
+  }
+}
+
 /** Caller passed input the module refuses (e.g. a provider_meta key outside the whitelist). */
 export class ConnectionInputError extends Error {
   constructor(message: string) {

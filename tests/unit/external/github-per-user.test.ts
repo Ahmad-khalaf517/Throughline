@@ -84,7 +84,15 @@ function installFakeGithub() {
       auth: String(new Headers(init?.headers).get('authorization')),
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
     });
-    const route = githubRoutes[`${method} ${url.pathname}`];
+    // initRepo writes README / starter / ADR / lineage.json through the contents
+    // API right after creating the repo; unless a test overrides a path, accept them.
+    const isContentsWrite =
+      method === 'PUT' && /^\/repos\/[^/]+\/[^/]+\/contents\//.test(url.pathname);
+    const route =
+      githubRoutes[`${method} ${url.pathname}`] ??
+      (isContentsWrite
+        ? { status: 201, body: { content: {}, commit: { sha: 'abc' } } }
+        : undefined);
     const { status, body } = route ?? { status: 404, body: { message: 'Not Found' } };
     return new Response(JSON.stringify(body), {
       status,
