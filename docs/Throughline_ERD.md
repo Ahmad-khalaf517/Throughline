@@ -2080,7 +2080,7 @@ INSERT INTO provider_connection (id, user_id, provider, external_account_id, dis
   ('00000000-0000-0000-0000-0000000000e3', '00000000-0000-0000-0000-0000000000a1', 'stitch', 'k1', 'Stitch key', 'v1:AAAA:BBBB:CCCC');
 INSERT INTO provider_connection (id, user_id, provider, external_account_id, display_name, access_token_enc, refresh_token_enc, scopes, provider_meta) VALUES
   ('00000000-0000-0000-0000-0000000000e4', '00000000-0000-0000-0000-0000000000a1', 'jira', 'acct-1', 'Ada', 'v1:AAAA:BBBB:CCCC', 'v1:DDDD:EEEE:FFFF',
-   'read:jira-work write:jira-work offline_access', '{"cloudId":"cloud-1","siteUrl":"https://x.atlassian.net","siteName":"x"}');
+   'read:jira-work write:jira-work offline_access read:me', '{"cloudId":"cloud-1","siteUrl":"https://x.atlassian.net","siteName":"x"}');
 DO $$ BEGIN
   IF (SELECT count(DISTINCT provider) FROM provider_connection WHERE user_id = '00000000-0000-0000-0000-0000000000a1') <> 3 THEN
     RAISE EXCEPTION 'FAILED T46e: user a1 does not have all three providers'; END IF;

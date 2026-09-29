@@ -519,7 +519,7 @@ The owner picker (FR-088): the user's own login and the organizations they can c
 
 `-> connections.beginOAuth('jira')`
 
-As the GitHub start route, against Atlassian's authorize URL (`https://auth.atlassian.com/authorize`), scopes `read:jira-work write:jira-work offline_access`, `audience=api.atlassian.com`, `prompt=consent`.
+As the GitHub start route, against Atlassian's authorize URL (`https://auth.atlassian.com/authorize`), scopes `read:jira-work write:jira-work offline_access read:me`, `audience=api.atlassian.com`, `prompt=consent`.
 **Response:** `302`. **Errors:** `401 UNAUTHENTICATED`.
 
 ### `GET /api/connections/jira/callback`

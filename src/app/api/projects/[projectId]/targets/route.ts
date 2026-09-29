@@ -98,7 +98,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     try {
       updated = await updateProjectTargets(projectId, {
         ...(githubOwner !== undefined ? { githubOwner } : {}),
-        ...(jira === null ? { jira: null } : {}),
+        ...(jira !== undefined ? { jira } : {}),
       });
     } catch (error) {
       if (error instanceof InvalidProjectTargetsError) {
