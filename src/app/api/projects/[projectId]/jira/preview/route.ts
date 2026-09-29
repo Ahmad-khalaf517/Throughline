@@ -2,8 +2,10 @@ import { NextResponse } from 'next/server';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
 import { getProjectById } from '@/artifact-lifecycle';
 import { previewExport, BacklogVersionNotApprovedError } from '@/external/jira';
-import { ApiError, errorResponse } from '@/lib/errors';
+import { ApiError } from '@/lib/errors';
+import { routeErrorResponse } from '@/app/api/_shared/connection-errors';
 import { serializeRefWithFreshDrift, toImpactRowDTOs } from '@/app/api/_shared/external';
+import { toJiraCtx, translateJiraError } from '@/app/api/_shared/jira-ctx';
 
 interface RouteParams {
   params: Promise<{ projectId: string }>;
@@ -38,7 +40,7 @@ export async function GET(request: Request, { params }: RouteParams) {
 
     let preview;
     try {
-      preview = await previewExport(backlogVersionId);
+      preview = await previewExport(backlogVersionId, toJiraCtx(user.id, project));
     } catch (error) {
       if (error instanceof BacklogVersionNotApprovedError) {
         throw new ApiError('PREREQUISITE_NOT_APPROVED', error.message);
@@ -67,8 +69,11 @@ export async function GET(request: Request, { params }: RouteParams) {
       })),
       needsDecision,
       impact: await toImpactRowDTOs(preview.impact),
+      // Round 14 (FR-089): the preview never fails for a missing or lapsed
+      // connection; this block lets the screen show the connect-to-continue prompt.
+      connection: preview.connection,
     });
   } catch (error) {
-    return errorResponse(error);
+    return routeErrorResponse(translateJiraError(error));
   }
 }

@@ -2,10 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Route-handler wiring test for GET /api/projects/:projectId/jira/preview
 // (API Contracts section 9).
-const { FakeBacklogVersionNotApprovedError } = vi.hoisted(() => {
-  class FakeBacklogVersionNotApprovedError extends Error {}
-  return { FakeBacklogVersionNotApprovedError };
-});
+const { FakeBacklogVersionNotApprovedError, FakeJiraTargetRequiredError, FakeJiraSiteError } =
+  vi.hoisted(() => {
+    class FakeBacklogVersionNotApprovedError extends Error {}
+    class FakeJiraTargetRequiredError extends Error {
+      readonly target = 'jira' as const;
+    }
+    class FakeJiraSiteError extends Error {}
+    return { FakeBacklogVersionNotApprovedError, FakeJiraTargetRequiredError, FakeJiraSiteError };
+  });
 
 vi.mock('@/auth', () => ({
   getVerifiedUser: vi.fn(),
@@ -25,6 +30,12 @@ vi.mock('@/external/jira', () => ({
   previewExport: vi.fn(),
   checkDrift: vi.fn(),
   BacklogVersionNotApprovedError: FakeBacklogVersionNotApprovedError,
+  JiraTargetRequiredError: FakeJiraTargetRequiredError,
+  JiraSiteNotAccessibleError: FakeJiraSiteError,
+}));
+vi.mock('@/connections', () => ({
+  ConnectionRequiredError: class extends Error {},
+  ReconnectRequiredError: class extends Error {},
 }));
 vi.mock('@/external/github', () => ({ checkDrift: vi.fn() }));
 vi.mock('@/external/stitch', () => ({ checkDrift: vi.fn() }));
@@ -156,6 +167,7 @@ describe('GET /api/projects/:projectId/jira/preview', () => {
         },
       ],
       impact: [],
+      connection: { status: 'active', targetReady: true },
     });
 
     const response = await GET(request(), paramsFor('project-1'));
@@ -174,5 +186,47 @@ describe('GET /api/projects/:projectId/jira/preview', () => {
       existingRef: { id: 'ref-existing', provider: 'jira' },
     });
     expect(body.impact).toEqual([]);
+    // Round 14 (FR-089): the connection block rides along untouched.
+    expect(body.connection).toEqual({ status: 'active', targetReady: true });
+  });
+
+  it('passes the JiraCtx built from the verified user and the project targets to previewExport', async () => {
+    mockedGetProjectById.mockResolvedValue({
+      ...baseProject(),
+      jiraCloudId: 'cloud-1',
+      jiraProjectKey: 'PROJ',
+    });
+    mockedPreviewExport.mockResolvedValue({
+      epics: 0,
+      stories: 0,
+      skipped: [],
+      impact: [],
+      connection: { status: 'none', targetReady: true },
+    });
+
+    const response = await GET(request(), paramsFor('project-1'));
+
+    expect(response.status).toBe(200);
+    expect(mockedPreviewExport).toHaveBeenCalledWith('backlog-v1', {
+      userId: 'user-1',
+      jiraCloudId: 'cloud-1',
+      jiraProjectKey: 'PROJ',
+    });
+  });
+
+  it('passes a ctx with no target when the project has none, and reports targetReady false', async () => {
+    mockedGetProjectById.mockResolvedValue(baseProject());
+    mockedPreviewExport.mockResolvedValue({
+      epics: 1,
+      stories: 1,
+      skipped: [],
+      impact: [],
+      connection: { status: 'none', targetReady: false },
+    });
+
+    const response = await GET(request(), paramsFor('project-1'));
+
+    expect(mockedPreviewExport).toHaveBeenCalledWith('backlog-v1', { userId: 'user-1' });
+    expect((await response.json()).connection).toEqual({ status: 'none', targetReady: false });
   });
 });

@@ -1,5 +1,12 @@
-import { ConnectionConfigError, ConnectionInputError, OAuthFlowError } from './errors';
+import { ConnectionInputError, OAuthFlowError } from './errors';
 import { buildGithubAuthorizeUrl, exchangeGithubCode, fetchGithubIdentity } from './oauth-github';
+import {
+  JIRA_SCOPE,
+  buildJiraAuthorizeUrl,
+  exchangeJiraCode,
+  fetchDefaultJiraSite,
+  fetchJiraIdentity,
+} from './oauth-jira';
 import { createPkce, sanitizeReturnTo, signState, verifyState } from './oauth-state';
 import { saveConnection } from './store';
 
@@ -9,11 +16,10 @@ import { saveConnection } from './store';
 
 type OAuthProvider = 'github' | 'jira';
 
-function assertImplemented(provider: OAuthProvider): asserts provider is 'github' {
-  if (provider === 'jira') {
-    throw new ConnectionConfigError('Jira OAuth is not implemented until SCRUM-97.');
+function assertProvider(provider: string): asserts provider is OAuthProvider {
+  if (provider !== 'github' && provider !== 'jira') {
+    throw new ConnectionInputError('Unknown OAuth provider.');
   }
-  if (provider !== 'github') throw new ConnectionInputError('Unknown OAuth provider.');
 }
 
 export async function beginOAuth(
@@ -21,7 +27,7 @@ export async function beginOAuth(
   provider: OAuthProvider,
   opts: { returnTo?: string } = {},
 ): Promise<{ authorizeUrl: string; pkceVerifier: string }> {
-  assertImplemented(provider);
+  assertProvider(provider);
   const { verifier, challenge } = createPkce();
   const state = signState({
     userId,
@@ -29,7 +35,11 @@ export async function beginOAuth(
     returnTo: sanitizeReturnTo(opts.returnTo),
     challenge,
   });
-  return { authorizeUrl: buildGithubAuthorizeUrl({ state, challenge }), pkceVerifier: verifier };
+  const authorizeUrl =
+    provider === 'github'
+      ? buildGithubAuthorizeUrl({ state, challenge })
+      : buildJiraAuthorizeUrl({ state, challenge });
+  return { authorizeUrl, pkceVerifier: verifier };
 }
 
 export async function completeOAuth(
@@ -37,7 +47,7 @@ export async function completeOAuth(
   provider: OAuthProvider,
   query: { code: string; state: string; pkceVerifier: string },
 ): Promise<{ returnTo?: string }> {
-  assertImplemented(provider);
+  assertProvider(provider);
   if (!query.code || !query.state || !query.pkceVerifier) {
     throw new OAuthFlowError('invalid_state');
   }
@@ -48,20 +58,40 @@ export async function completeOAuth(
     pkceVerifier: query.pkceVerifier,
   });
 
-  const token = await exchangeGithubCode({ code: query.code, pkceVerifier: query.pkceVerifier });
-  const identity = await fetchGithubIdentity(token.accessToken);
+  if (provider === 'github') {
+    const token = await exchangeGithubCode({ code: query.code, pkceVerifier: query.pkceVerifier });
+    const identity = await fetchGithubIdentity(token.accessToken);
 
-  await saveConnection({
-    userId,
-    provider,
-    externalAccountId: identity.id,
-    displayName: identity.login,
-    accessToken: token.accessToken,
-    // OAuth-App tokens do not expire and carry no refresh token.
-    refreshToken: null,
-    expiresAt: null,
-    scopes: token.scopes.length > 0 ? token.scopes : (identity.scopes ?? []),
-    providerMeta: { login: identity.login },
-  });
+    await saveConnection({
+      userId,
+      provider,
+      externalAccountId: identity.id,
+      displayName: identity.login,
+      accessToken: token.accessToken,
+      // OAuth-App tokens do not expire and carry no refresh token.
+      refreshToken: null,
+      expiresAt: null,
+      scopes: token.scopes.length > 0 ? token.scopes : (identity.scopes ?? []),
+      providerMeta: { login: identity.login },
+    });
+  } else {
+    const token = await exchangeJiraCode({ code: query.code, pkceVerifier: query.pkceVerifier });
+    // Without a refresh token the connection could never be renewed (ERD 7.6).
+    if (!token.refreshToken) throw new OAuthFlowError('exchange_failed');
+    const identity = await fetchJiraIdentity(token.accessToken);
+    const site = await fetchDefaultJiraSite(token.accessToken);
+
+    await saveConnection({
+      userId,
+      provider,
+      externalAccountId: identity.id,
+      displayName: identity.displayName,
+      accessToken: token.accessToken,
+      refreshToken: token.refreshToken,
+      expiresAt: token.expiresAt,
+      scopes: token.scopes.length > 0 ? token.scopes : JIRA_SCOPE.split(' '),
+      providerMeta: site ?? {},
+    });
+  }
   return returnTo === undefined ? {} : { returnTo };
 }

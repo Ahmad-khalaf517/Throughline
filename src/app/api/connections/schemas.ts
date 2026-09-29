@@ -16,5 +16,10 @@ export const oauthCallbackQuerySchema = z.object({
   error: z.string().optional(),
 });
 
+// `GET /api/connections/jira/projects` (API Contracts 10A): `cloudId` is required.
+export const jiraProjectsQuerySchema = z.object({
+  cloudId: z.string().trim().min(1, 'cloudId is required'),
+});
+
 // Only these three provider segments exist (API Contracts 10A); anything else is 404.
 export const providerParamSchema = z.enum(['github', 'jira', 'stitch']);

@@ -8,9 +8,10 @@
 // layers 4-6 only.
 //
 // SCRUM-96: beginOAuth / completeOAuth for GitHub, with the GitHub provider HTTP
-// (authorize, token exchange, identity, revoke) in ./oauth-github. The Jira
-// branch arrives with SCRUM-97. Other providers register their refresh / revoke
-// HTTP calls through registerRefresher / registerRevoker.
+// (authorize, token exchange, identity, revoke) in ./oauth-github. SCRUM-97 adds
+// the Jira branch (./oauth-jira: authorize, token exchange, identity, sites, and
+// the registered refresh-with-rotation call). Other providers register their
+// refresh / revoke HTTP calls through registerRefresher / registerRevoker.
 export type { Credential } from './credential';
 export {
   ConnectionRequiredError,

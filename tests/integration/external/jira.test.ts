@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
+import { randomBytes } from 'node:crypto';
 import type postgres from 'postgres';
 import { connect } from '../support/connection';
 import * as fx from '../support/fixtures';
@@ -27,13 +28,21 @@ import * as fx from '../support/fixtures';
 // so every env var it (transitively) reads must be in `process.env` BEFORE
 // the first `await import('@/external/jira')`.
 
+// Round 14 (SCRUM-97): every export/preview runs as the project owner with their
+// own Jira connection (saved through the real `connections.saveConnection`) and
+// the project's Jira target in the ctx; the fake Jira answers on the Atlassian
+// gateway path `/ex/jira/<cloudId>/rest/api/3/...` and checks the Bearer token.
+// The JIRA_* environment credential is deliberately NOT configured any more:
+// nothing in a new-operation path may fall back to it.
+
 let sql: postgres.Sql;
 let jira: typeof import('@/external/jira');
+let connections: typeof import('@/connections');
 
-const JIRA_BASE_URL = 'https://fake-jira.example.test';
-const JIRA_EMAIL = 'throughline-test@example.test';
-const JIRA_API_TOKEN = 'fake-jira-token';
+const FAKE_SITE_URL = 'https://fake-jira.example.test';
+const CLOUD_ID = 'cloud-test-1';
 const DEFAULT_PROJECT_KEY = 'THRLN';
+const TEST_ACCESS_TOKEN = 'atl_thrln_test_user_token';
 
 beforeAll(async () => {
   sql = connect();
@@ -44,12 +53,11 @@ beforeAll(async () => {
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key';
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
   process.env.NEXT_PUBLIC_SITE_URL = 'http://localhost:3000';
-  process.env.JIRA_BASE_URL = JIRA_BASE_URL;
-  process.env.JIRA_EMAIL = JIRA_EMAIL;
-  process.env.JIRA_API_TOKEN = JIRA_API_TOKEN;
-  process.env.JIRA_PROJECT_KEY = DEFAULT_PROJECT_KEY;
+  // 32 bytes, base64 - read by the connections module at call time.
+  process.env.CONNECTION_ENCRYPTION_KEY = randomBytes(32).toString('base64');
 
   jira = await import('@/external/jira');
+  connections = await import('@/connections');
 });
 
 afterAll(async () => {
@@ -95,6 +103,50 @@ async function approveBacklogVersion(
     await sql`UPDATE artifact_version SET status = 'superseded' WHERE id = ${current.id}`;
   await fx.approveArtifactVersion(sql, versionId);
   return versionId;
+}
+
+// ---------------------------------------------------------------------------
+// Round 14: the acting user's own connection + ctx.
+// ---------------------------------------------------------------------------
+
+/** The user's Jira connection: account id `atl-<userId>`, default site = the fake site. */
+async function ensureConnection(userId: string, externalAccountId = `atl-${userId}`) {
+  await connections.saveConnection({
+    userId,
+    provider: 'jira',
+    externalAccountId,
+    displayName: 'Test User',
+    accessToken: TEST_ACCESS_TOKEN,
+    refreshToken: 'atl_thrln_test_refresh_token',
+    // Comfortably valid: this file never reaches the refresh path.
+    expiresAt: new Date(Date.now() + 3_600_000),
+    scopes: ['read:jira-work', 'write:jira-work', 'offline_access'],
+    providerMeta: { cloudId: CLOUD_ID, siteUrl: FAKE_SITE_URL, siteName: 'Fake' },
+  });
+}
+
+async function ownerOfBacklogVersion(backlogVersionId: string): Promise<string> {
+  const [row] = await sql<{ owner_user_id: string }[]>`
+    SELECT p.owner_user_id
+    FROM artifact_version av
+    JOIN artifact a ON a.id = av.artifact_id
+    JOIN project p ON p.id = a.project_id
+    WHERE av.id = ${backlogVersionId}
+  `;
+  return row!.owner_user_id;
+}
+
+/** ctx for the owner of the project a backlog version belongs to (a connection is ensured). */
+async function ctxForVersion(
+  backlogVersionId: string,
+  target: { jiraCloudId?: string; jiraProjectKey?: string } = {
+    jiraCloudId: CLOUD_ID,
+    jiraProjectKey: DEFAULT_PROJECT_KEY,
+  },
+) {
+  const userId = await ownerOfBacklogVersion(backlogVersionId);
+  await ensureConnection(userId);
+  return { userId, ...target };
 }
 
 async function jiraOperationRows(projectId: string) {
@@ -157,8 +209,19 @@ function createFakeJira() {
   const issueNumberByProject = new Map<string, number>();
 
   async function fetchImpl(url: string | URL, init?: RequestInit): Promise<Response> {
-    const { pathname } = new URL(url);
+    const parsed = new URL(url);
     const method = (init?.method ?? 'GET').toUpperCase();
+    // Round 14: only the Atlassian gateway path, only with the user's Bearer token.
+    if (
+      parsed.host !== 'api.atlassian.com' ||
+      !parsed.pathname.startsWith(`/ex/jira/${CLOUD_ID}/`)
+    ) {
+      throw new Error(`fake Jira fetch: unexpected target ${parsed.host}${parsed.pathname}`);
+    }
+    if (new Headers(init?.headers).get('authorization') !== `Bearer ${TEST_ACCESS_TOKEN}`) {
+      return jsonResponse(401, { message: 'Unauthorized' });
+    }
+    const pathname = parsed.pathname.slice(`/ex/jira/${CLOUD_ID}`.length);
 
     if (method === 'POST' && pathname === '/rest/api/3/issue') {
       const body = init?.body
@@ -188,7 +251,7 @@ function createFakeJira() {
         parentKey: body.fields.parent?.key ?? null,
       };
       issuesByKey.set(key, issue);
-      return jsonResponse(201, { id, key, self: `${JIRA_BASE_URL}/rest/api/3/issue/${id}` });
+      return jsonResponse(201, { id, key, self: `${FAKE_SITE_URL}/rest/api/3/issue/${id}` });
     }
 
     if (method === 'POST' && pathname === '/rest/api/3/search/jql') {
@@ -248,7 +311,7 @@ function createResponseDropper(
     const { pathname } = new URL(url);
     const method = (init?.method ?? 'GET').toUpperCase();
     let dropKey: string | undefined;
-    if (method === 'POST' && pathname === '/rest/api/3/issue' && init?.body) {
+    if (method === 'POST' && pathname.endsWith('/rest/api/3/issue') && init?.body) {
       const body = JSON.parse(String(init.body)) as { fields?: { labels?: string[] } };
       const marker = body.fields?.labels?.[0];
       if (marker && dropNextResponseFor.has(marker)) dropKey = marker;
@@ -315,7 +378,8 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       ]);
 
       const fake = createFakeJira();
-      const v1Refs = await withFakeFetch(fake.fetch, () => jira.exportBacklog(v1, new Map()));
+      const ctx = await ctxForVersion(v1);
+      const v1Refs = await withFakeFetch(fake.fetch, () => jira.exportBacklog(v1, new Map(), ctx));
       expect(v1Refs).toHaveLength(2); // 1 Epic + 1 Story
 
       const originalStoryRef = (await jiraRefRowsForItem(story.itemVersionId))[0];
@@ -338,7 +402,8 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       ]);
 
       // Skip / Create New prompt appears for the changed Story.
-      const preview = await jira.previewExport(v2);
+      const ctx2 = await ctxForVersion(v2);
+      const preview = await jira.previewExport(v2, ctx2);
       expect(preview.skipped).toContainEqual(
         expect.objectContaining({
           kind: 'needs_decision',
@@ -346,17 +411,18 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
           displayKey: story.displayKey,
         }),
       );
+      expect(preview.connection).toEqual({ status: 'active', targetReady: true });
 
       // No decision supplied -> refuses loudly. Never a silent skip or a
       // silent duplicate.
-      await expect(jira.exportBacklog(v2, new Map())).rejects.toThrow(
+      await expect(jira.exportBacklog(v2, new Map(), ctx2)).rejects.toThrow(
         jira.MissingExportDecisionError,
       );
 
       // Skip -> the existing Jira issue (THR-42-equivalent) is untouched;
       // no new operation/ref for the new ItemVersion.
       await withFakeFetch(fake.fetch, () =>
-        jira.exportBacklog(v2, new Map([[story.logicalItemId, 'skip']])),
+        jira.exportBacklog(v2, new Map([[story.logicalItemId, 'skip']]), ctx2),
       );
       expect(await jiraRefRowsForItem(story.itemVersionId)).toHaveLength(1); // still just the original
       expect(await jiraRefRowsForItem(storyV2ItemVersionId)).toHaveLength(0); // nothing new
@@ -364,7 +430,7 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       // Create New -> a genuinely NEW Jira issue is created (never an update
       // of the old one, never a silent duplicate reusing the old key).
       const afterCreateNew = await withFakeFetch(fake.fetch, () =>
-        jira.exportBacklog(v2, new Map([[story.logicalItemId, 'create_new']])),
+        jira.exportBacklog(v2, new Map([[story.logicalItemId, 'create_new']]), ctx2),
       );
       const newStoryRef = afterCreateNew.find(
         (ref) => ref.sourceItemVersionId === storyV2ItemVersionId,
@@ -393,35 +459,30 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
 
       const fake = createFakeJira();
 
-      // First export, configured project ALPHA.
-      process.env.JIRA_PROJECT_KEY = 'ALPHA';
-      vi.resetModules();
-      const jiraAlpha = await import('@/external/jira');
+      // First export, the project's chosen Jira project is ALPHA.
+      const alphaCtx = await ctxForVersion(versionId, {
+        jiraCloudId: CLOUD_ID,
+        jiraProjectKey: 'ALPHA',
+      });
       const alphaRefs = await withFakeFetch(fake.fetch, () =>
-        jiraAlpha.exportBacklog(versionId, new Map()),
+        jira.exportBacklog(versionId, new Map(), alphaCtx),
       );
       expect(alphaRefs).toHaveLength(1);
 
-      // Reconfigure to a DIFFERENT Jira project, BETA - a fresh module
-      // instance is required because `env` (src/lib/env.ts) is parsed once
-      // at import time; `vi.resetModules()` forces every transitive import
-      // (this module, external-operations, backlog, identity, db) to
-      // re-evaluate against the now-current `process.env`, the same
-      // technique used nowhere else in this repo yet but standard Vitest
-      // module-registry behavior.
-      process.env.JIRA_PROJECT_KEY = 'BETA';
-      vi.resetModules();
-      const jiraBeta = await import('@/external/jira');
+      // The project's target is changed to a DIFFERENT Jira project, BETA
+      // (PATCH .../targets). It is just another ctx now - nothing is read from
+      // the environment any more, so no module reset is needed.
+      const betaCtx = { ...alphaCtx, jiraProjectKey: 'BETA' };
 
-      // Switching the configured project alone must NOT resurface an
-      // unnecessary Skip/Create-New prompt (FR-074 is scoped to the
-      // CONFIGURED project, ERD 7.4) - nothing has been exported to BETA
-      // yet, so this is a plain, undecided-free export.
-      const betaPreview = await jiraBeta.previewExport(versionId);
+      // Switching the chosen project alone must NOT resurface an unnecessary
+      // Skip/Create-New prompt (FR-074 is scoped to the chosen site + project,
+      // ERD 7.4) - nothing has been exported to BETA yet, so this is a plain,
+      // undecided-free export.
+      const betaPreview = await jira.previewExport(versionId, betaCtx);
       expect(betaPreview.skipped).toHaveLength(0);
 
       const betaRefs = await withFakeFetch(fake.fetch, () =>
-        jiraBeta.exportBacklog(versionId, new Map()),
+        jira.exportBacklog(versionId, new Map(), betaCtx),
       );
       expect(betaRefs).toHaveLength(1);
 
@@ -463,7 +524,8 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       ]);
 
       const fake = createFakeJira();
-      await withFakeFetch(fake.fetch, () => jira.exportBacklog(v1, new Map()));
+      const ctx = await ctxForVersion(v1);
+      await withFakeFetch(fake.fetch, () => jira.exportBacklog(v1, new Map(), ctx));
       const originalEpicRef = (await jiraRefRowsForItem(epic.itemVersionId))[0];
       const originalEpicKey = originalEpicRef!.external_key!;
 
@@ -486,7 +548,7 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       ]);
 
       // Skip/Create-New prompt appears for the Epic (FR-074 extended).
-      const preview = await jira.previewExport(v2);
+      const preview = await jira.previewExport(v2, ctx);
       expect(preview.skipped).toContainEqual(
         expect.objectContaining({
           kind: 'needs_decision',
@@ -497,7 +559,7 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
 
       // Choose Skip for E-01.
       const exported = await withFakeFetch(fake.fetch, () =>
-        jira.exportBacklog(v2, new Map([[epic.logicalItemId, 'skip']])),
+        jira.exportBacklog(v2, new Map([[epic.logicalItemId, 'skip']]), ctx),
       );
 
       // No second Jira Epic is created.
@@ -562,7 +624,8 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       ]);
 
       const fake = createFakeJira();
-      const refs = await withFakeFetch(fake.fetch, () => jira.exportBacklog(v1, new Map()));
+      const ctx = await ctxForVersion(v1);
+      const refs = await withFakeFetch(fake.fetch, () => jira.exportBacklog(v1, new Map(), ctx));
       expect(refs).toHaveLength(2);
 
       const issues = [...fake.issuesByKey.values()];
@@ -626,7 +689,10 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       // from this call's own return value, and its own operation row is
       // left `pending` (R6/R9), never `failed`.
       dropper.simulateLostResponseFor(storyMarker);
-      const v1Refs = await withFakeFetch(dropper.fetch, () => jira.exportBacklog(v1, new Map()));
+      const ctx = await ctxForVersion(v1);
+      const v1Refs = await withFakeFetch(dropper.fetch, () =>
+        jira.exportBacklog(v1, new Map(), ctx),
+      );
       expect(v1Refs.some((ref) => ref.sourceItemVersionId === epic.itemVersionId)).toBe(true);
       expect(v1Refs.some((ref) => ref.sourceItemVersionId === story.itemVersionId)).toBe(false);
 
@@ -644,7 +710,7 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       // `reconcileAndFinalize` never forwarded `metadata`, so this ref would
       // persist with `metadata: {}` and no `jiraProjectKey` at all.
       const v1RefsAgain = await withClockAdvancedPastThreshold(() =>
-        withFakeFetch(fake.fetch, () => jira.exportBacklog(v1, new Map())),
+        withFakeFetch(fake.fetch, () => jira.exportBacklog(v1, new Map(), ctx)),
       );
       const reconciledStoryRef = v1RefsAgain.find(
         (ref) => ref.sourceItemVersionId === story.itemVersionId,
@@ -684,7 +750,7 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       // `resolveDecisionNeed` saw zero refs "in the configured project", and
       // this Story would be silently treated as brand new (a silent
       // duplicate on export, exactly what FR-074 forbids).
-      const preview = await jira.previewExport(v2);
+      const preview = await jira.previewExport(v2, ctx);
       expect(preview.skipped).toContainEqual(
         expect.objectContaining({
           kind: 'needs_decision',
@@ -694,9 +760,161 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       );
 
       // No decision supplied -> refuses loudly, never a silent duplicate.
-      await expect(jira.exportBacklog(v2, new Map())).rejects.toThrow(
+      await expect(jira.exportBacklog(v2, new Map(), ctx)).rejects.toThrow(
         jira.MissingExportDecisionError,
       );
+    });
+  });
+
+  describe('round 14 - per-user credential (SCRUM-97, ERD 7.4 / 7.6)', () => {
+    async function twoItemBacklog(name: string) {
+      const { projectId } = await fx.createProjectWithOwner(sql, { name });
+      const artifactId = await fx.createArtifact(sql, projectId, 'backlog');
+      const epic = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId,
+        itemType: 'epic',
+      });
+      const versionId = await approveBacklogVersion(sql, artifactId, 1, [
+        { logicalItemId: epic.logicalItemId, itemVersionId: epic.itemVersionId },
+      ]);
+      return { projectId, epic, versionId };
+    }
+
+    it('snapshots cloudId, projectKey and account_id into target_descriptor and records the connection on the operation', async () => {
+      const { projectId, epic, versionId } = await twoItemBacklog('jira descriptor');
+      const ctx = await ctxForVersion(versionId);
+      const fake = createFakeJira();
+
+      await withFakeFetch(fake.fetch, () => jira.exportBacklog(versionId, new Map(), ctx));
+
+      const [op] = await sql<
+        { connection_id: string | null; target_descriptor: Record<string, unknown> }[]
+      >`SELECT connection_id, target_descriptor FROM external_operation
+        WHERE project_id = ${projectId} AND provider = 'jira'`;
+      expect(op!.connection_id).not.toBeNull();
+      expect(op!.target_descriptor).toMatchObject({
+        cloudId: CLOUD_ID,
+        projectKey: DEFAULT_PROJECT_KEY,
+        account_id: `atl-${ctx.userId}`,
+        itemType: 'epic',
+      });
+      expect(JSON.stringify(op!.target_descriptor)).not.toContain(TEST_ACCESS_TOKEN);
+      const [refRow] = await sql<{ external_url: string | null }[]>`
+        SELECT external_url FROM external_ref
+        WHERE provider = 'jira' AND source_item_version_id = ${epic.itemVersionId}`;
+      expect(refRow!.external_url).toMatch(new RegExp(`^${FAKE_SITE_URL}/browse/`));
+    });
+
+    it('FR-074 is scoped to the operation target: a ref made in another Jira project never counts as already exported', async () => {
+      const { epic, versionId } = await twoItemBacklog('jira scoped decision');
+      const alphaCtx = await ctxForVersion(versionId, {
+        jiraCloudId: CLOUD_ID,
+        jiraProjectKey: 'ALPHA',
+      });
+      const fake = createFakeJira();
+      await withFakeFetch(fake.fetch, () => jira.exportBacklog(versionId, new Map(), alphaCtx));
+
+      // A new Epic ItemVersion approved afterwards: needs a decision in ALPHA, none in BETA.
+      const [artifactRow] = await sql<{ artifact_id: string; project_id: string }[]>`
+        SELECT av.artifact_id, a.project_id FROM artifact_version av
+        JOIN artifact a ON a.id = av.artifact_id WHERE av.id = ${versionId}`;
+      const epicV2 = await fx.createItemVersion(sql, {
+        projectId: artifactRow!.project_id,
+        logicalItemId: epic.logicalItemId,
+        revisionNumber: 2,
+      });
+      const v2 = await approveBacklogVersion(sql, artifactRow!.artifact_id, 2, [
+        { logicalItemId: epic.logicalItemId, itemVersionId: epicV2 },
+      ]);
+
+      const inAlpha = await jira.previewExport(v2, alphaCtx);
+      expect(inAlpha.skipped).toContainEqual(
+        expect.objectContaining({ kind: 'needs_decision', logicalItemId: epic.logicalItemId }),
+      );
+      const inBeta = await jira.previewExport(v2, { ...alphaCtx, jiraProjectKey: 'BETA' });
+      expect(inBeta.skipped).toHaveLength(0);
+    });
+
+    it('no connection -> ConnectionRequiredError and NO external_operation row; the preview still works', async () => {
+      const { projectId, versionId } = await twoItemBacklog('jira no connection');
+      const userId = await ownerOfBacklogVersion(versionId);
+      const ctx = { userId, jiraCloudId: CLOUD_ID, jiraProjectKey: DEFAULT_PROJECT_KEY };
+
+      const preview = await jira.previewExport(versionId, ctx);
+      expect(preview.connection).toEqual({ status: 'none', targetReady: true });
+      await expect(jira.exportBacklog(versionId, new Map(), ctx)).rejects.toBeInstanceOf(
+        connections.ConnectionRequiredError,
+      );
+      expect(await jiraOperationRows(projectId)).toHaveLength(0);
+    });
+
+    it('no Jira target -> JiraTargetRequiredError and NO external_operation row', async () => {
+      const { projectId, versionId } = await twoItemBacklog('jira no target');
+      const ctx = await ctxForVersion(versionId, {});
+
+      const preview = await jira.previewExport(versionId, ctx);
+      expect(preview.connection.targetReady).toBe(false);
+      await expect(jira.exportBacklog(versionId, new Map(), ctx)).rejects.toBeInstanceOf(
+        jira.JiraTargetRequiredError,
+      );
+      expect(await jiraOperationRows(projectId)).toHaveLength(0);
+    });
+
+    it('T49 (jira half): a 401 from Jira marks the connection needs_reauth and leaves the operation pending - never failed, no ref', async () => {
+      const { projectId, epic, versionId } = await twoItemBacklog('jira 401');
+      const ctx = await ctxForVersion(versionId);
+      const unauthorized = async () =>
+        new Response(JSON.stringify({ message: 'Unauthorized' }), { status: 401 });
+
+      await expect(
+        withFakeFetch(unauthorized, () => jira.exportBacklog(versionId, new Map(), ctx)),
+      ).rejects.toBeInstanceOf(connections.ReconnectRequiredError);
+
+      const rows = await jiraOperationRows(projectId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.status).toBe('pending');
+      expect(await jiraRefRowsForItem(epic.itemVersionId)).toHaveLength(0);
+      const status = (await connections.listConnections(ctx.userId)).find(
+        (c) => c.provider === 'jira',
+      );
+      expect(status?.status).toBe('needs_reauth');
+    });
+
+    it('T51 (jira half): a retry after the connected account changed is ReconnectRequired before any request', async () => {
+      const { projectId, epic, versionId } = await twoItemBacklog('jira account mismatch');
+      const ctx = await ctxForVersion(versionId);
+      // Leave a pending operation behind: the create response is lost.
+      const fake = createFakeJira();
+      const dropper = createResponseDropper(fake.fetch);
+      dropper.simulateLostResponseFor(`tl-${epic.itemVersionId}`);
+      await withFakeFetch(dropper.fetch, () => jira.exportBacklog(versionId, new Map(), ctx));
+      const [op] = await sql<{ id: string }[]>`
+        SELECT id FROM external_operation WHERE project_id = ${projectId} AND provider = 'jira'`;
+
+      await ensureConnection(ctx.userId, 'atl-a-different-account');
+      let requests = 0;
+      await expect(
+        withClockAdvancedPastThreshold(() =>
+          withFakeFetch(
+            async (url, init) => {
+              requests += 1;
+              return fake.fetch(url, init);
+            },
+            () => jira.retryOperation(op!.id, ctx),
+          ),
+        ),
+      ).rejects.toBeInstanceOf(connections.ReconnectRequiredError);
+      expect(requests).toBe(0);
+      expect((await jiraOperationRows(projectId))[0]!.status).toBe('pending');
+
+      // The original account resumes and reconciles the same operation.
+      await ensureConnection(ctx.userId);
+      const retried = await withClockAdvancedPastThreshold(() =>
+        withFakeFetch(fake.fetch, () => jira.retryOperation(op!.id, ctx)),
+      );
+      expect(retried.status).toBe('completed');
+      expect(await jiraOperationRows(projectId)).toHaveLength(1);
     });
   });
 });

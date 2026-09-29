@@ -39,6 +39,10 @@ vi.mock('@/external/github', () => ({
   checkOwnerAccessible: vi.fn(),
 }));
 
+vi.mock('@/external/jira', () => ({
+  checkProjectAccessible: vi.fn(),
+}));
+
 vi.mock('@/external/operations', () => ({
   hasOperationsFor: vi.fn(),
 }));
@@ -51,6 +55,7 @@ vi.mock('@/connections', () => ({
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
 import { getProjectById, updateProjectTargets } from '@/artifact-lifecycle';
 import { checkOwnerAccessible } from '@/external/github';
+import { checkProjectAccessible } from '@/external/jira';
 import { hasOperationsFor } from '@/external/operations';
 import { PATCH } from '@/app/api/projects/[projectId]/targets/route';
 import { ApiError } from '@/lib/errors';
@@ -61,6 +66,7 @@ const mockedRequireProjectOwner = vi.mocked(requireProjectOwner);
 const mockedGetProjectById = vi.mocked(getProjectById);
 const mockedUpdateProjectTargets = vi.mocked(updateProjectTargets);
 const mockedCheckOwnerAccessible = vi.mocked(checkOwnerAccessible);
+const mockedCheckProjectAccessible = vi.mocked(checkProjectAccessible);
 const mockedHasOperationsFor = vi.mocked(hasOperationsFor);
 
 const user = { id: 'user-1', email: 'a@b.com', displayName: null };
@@ -102,6 +108,7 @@ describe('PATCH /api/projects/:projectId/targets', () => {
     mockedGetProjectById.mockReset().mockResolvedValue(project());
     mockedUpdateProjectTargets.mockReset().mockResolvedValue(project({ githubOwner: 'acme' }));
     mockedCheckOwnerAccessible.mockReset().mockResolvedValue(true);
+    mockedCheckProjectAccessible.mockReset().mockResolvedValue(true);
     mockedHasOperationsFor.mockReset().mockResolvedValue(false);
   });
 
@@ -220,22 +227,89 @@ describe('PATCH /api/projects/:projectId/targets', () => {
     },
   );
 
-  it('refuses to store a Jira target until UC-S5 can validate it (422 TARGET_NOT_ACCESSIBLE)', async () => {
-    const response = await PATCH(
-      patch({ jira: { cloudId: 'cloud-1', projectKey: 'PROJ' } }),
-      paramsFor('project-1'),
+  describe('jira target (SCRUM-97)', () => {
+    const jiraTarget = { cloudId: 'cloud-1', projectKey: 'PROJ' };
+
+    it('validates the pair with the caller connection, then writes it - never asking hasOperationsFor', async () => {
+      const order: string[] = [];
+      mockedCheckProjectAccessible.mockImplementation(async () => {
+        order.push('checkProjectAccessible');
+        return true;
+      });
+      mockedUpdateProjectTargets.mockImplementation(async () => {
+        order.push('updateProjectTargets');
+        return project({ jiraCloudId: 'cloud-1', jiraProjectKey: 'PROJ' });
+      });
+
+      const response = await PATCH(patch({ jira: jiraTarget }), paramsFor('project-1'));
+
+      expect(response.status).toBe(200);
+      expect(order).toEqual(['checkProjectAccessible', 'updateProjectTargets']);
+      expect(mockedCheckProjectAccessible).toHaveBeenCalledWith(
+        { userId: 'user-1' },
+        'cloud-1',
+        'PROJ',
+      );
+      expect(mockedHasOperationsFor).not.toHaveBeenCalled();
+      expect(mockedUpdateProjectTargets).toHaveBeenCalledWith('project-1', { jira: jiraTarget });
+      expect((await response.json()).targets).toEqual({
+        githubOwner: null,
+        jira: jiraTarget,
+      });
+    });
+
+    it('returns 422 TARGET_NOT_ACCESSIBLE { target: jira } when the site or project is not visible, writing nothing', async () => {
+      mockedCheckProjectAccessible.mockResolvedValue(false);
+
+      const response = await PATCH(patch({ jira: jiraTarget }), paramsFor('project-1'));
+
+      expect(response.status).toBe(422);
+      const body = await response.json();
+      expect(body.error.code).toBe('TARGET_NOT_ACCESSIBLE');
+      expect(body.error.details).toEqual({ target: 'jira' });
+      expect(mockedUpdateProjectTargets).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['ConnectionRequiredError', new FakeConnectionRequiredError('jira'), 'CONNECTION_REQUIRED'],
+      [
+        'ReconnectRequiredError',
+        new FakeReconnectRequiredError('jira', 'needs_reauth'),
+        'RECONNECT_REQUIRED',
+      ],
+    ])(
+      'translates %s from the project check into 409 %s and writes nothing',
+      async (_n, error, code) => {
+        mockedCheckProjectAccessible.mockRejectedValue(error);
+
+        const response = await PATCH(patch({ jira: jiraTarget }), paramsFor('project-1'));
+
+        expect(response.status).toBe(409);
+        expect((await response.json()).error.code).toBe(code);
+        expect(mockedUpdateProjectTargets).not.toHaveBeenCalled();
+      },
     );
-    expect(response.status).toBe(422);
-    const body = await response.json();
-    expect(body.error.code).toBe('TARGET_NOT_ACCESSIBLE');
-    expect(body.error.message).toContain('SCRUM-97');
-    expect(mockedUpdateProjectTargets).not.toHaveBeenCalled();
+
+    it('validates the Jira pair before the GitHub lock check when both are sent', async () => {
+      mockedGetProjectById.mockResolvedValue(project({ githubOwner: 'old-owner' }));
+      mockedHasOperationsFor.mockResolvedValue(true);
+      mockedCheckProjectAccessible.mockResolvedValue(false);
+
+      const response = await PATCH(
+        patch({ githubOwner: 'acme', jira: jiraTarget }),
+        paramsFor('project-1'),
+      );
+
+      expect(response.status).toBe(422);
+      expect(mockedHasOperationsFor).not.toHaveBeenCalled();
+    });
   });
 
   it('clears the Jira pair together (jira: null) with no provider call', async () => {
     const response = await PATCH(patch({ jira: null }), paramsFor('project-1'));
     expect(response.status).toBe(200);
     expect(mockedCheckOwnerAccessible).not.toHaveBeenCalled();
+    expect(mockedCheckProjectAccessible).not.toHaveBeenCalled();
     expect(mockedHasOperationsFor).not.toHaveBeenCalled();
     expect(mockedUpdateProjectTargets).toHaveBeenCalledWith('project-1', { jira: null });
   });

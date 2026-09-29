@@ -6,6 +6,7 @@ import {
   InvalidProjectTargetsError,
 } from '@/artifact-lifecycle';
 import { checkOwnerAccessible } from '@/external/github';
+import { checkProjectAccessible } from '@/external/jira';
 import { hasOperationsFor } from '@/external/operations';
 import { ApiError } from '@/lib/errors';
 import { toProjectDTO } from '@/lib/serialize';
@@ -32,9 +33,11 @@ interface RouteParams {
  * into `target_descriptor` at insert, so one inserted in between still
  * reconciles against the target it was created with.
  *
- * SCRUM-96 part A: the Jira half (`jira.checkProjectAccessible`) is added by
- * UC-S5 (SCRUM-97). Until then setting a Jira target is refused rather than
- * stored unvalidated; clearing it (`jira: null`) needs no provider call and works.
+ * A Jira pair is validated with `jira.checkProjectAccessible` (SCRUM-97); clearing
+ * it (`jira: null`) needs no provider call. Only a `githubOwner` change is
+ * lockable: Jira targets are not (each operation snapshots its site + project into
+ * `target_descriptor`, and FR-074 scopes on that), so `hasOperationsFor` is asked
+ * for GitHub only.
  */
 export async function PATCH(request: Request, { params }: RouteParams) {
   try {
@@ -54,13 +57,17 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     const project = await getProjectById(projectId);
     if (!project) throw new ApiError('NOT_FOUND', 'Project not found.');
 
+    // (1) validate a non-null target with the caller's connection - no lock held.
     if (jira) {
-      throw new ApiError('TARGET_NOT_ACCESSIBLE', 'Jira targets arrive with SCRUM-97.', {
-        target: 'jira',
-      });
+      if (!(await checkProjectAccessible({ userId: user.id }, jira.cloudId, jira.projectKey))) {
+        throw new ApiError(
+          'TARGET_NOT_ACCESSIBLE',
+          'That Jira site or project is not available to your connected Atlassian account.',
+          { target: 'jira' },
+        );
+      }
     }
 
-    // (1) validate a non-null owner with the caller's connection - no lock held.
     if (githubOwner) {
       const ctx = {
         userId: user.id,

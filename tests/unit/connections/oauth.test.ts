@@ -18,7 +18,7 @@ const { envMock, saveConnectionMock } = vi.hoisted(() => ({
 vi.mock('@/lib/env', () => envMock);
 vi.mock('@/connections/store', () => ({ saveConnection: saveConnectionMock }));
 
-import { OAuthFlowError, ConnectionConfigError } from '@/connections/errors';
+import { OAuthFlowError, ConnectionConfigError, ConnectionInputError } from '@/connections/errors';
 import { getRevoker } from '@/connections/hooks';
 import { beginOAuth, completeOAuth } from '@/connections/oauth';
 import { GITHUB_SCOPE, githubRedirectUri } from '@/connections/oauth-github';
@@ -104,11 +104,13 @@ describe('beginOAuth', () => {
     expect(githubRedirectUri()).toBe('http://localhost:3000/api/connections/github/callback');
   });
 
-  it('jira is not implemented until SCRUM-97', async () => {
-    await expect(beginOAuth('user-1', 'jira', {})).rejects.toThrow(/SCRUM-97/);
+  it('an unknown provider is a ConnectionInputError (the jira flow is covered by oauth-jira.test.ts)', async () => {
+    await expect(beginOAuth('user-1', 'stitch' as never, {})).rejects.toBeInstanceOf(
+      ConnectionInputError,
+    );
     await expect(
-      completeOAuth('user-1', 'jira', { code: 'c', state: 's', pkceVerifier: 'v' }),
-    ).rejects.toThrow(/SCRUM-97/);
+      completeOAuth('user-1', 'stitch' as never, { code: 'c', state: 's', pkceVerifier: 'v' }),
+    ).rejects.toBeInstanceOf(ConnectionInputError);
   });
 
   it.each([['GITHUB_OAUTH_CLIENT_ID'], ['OAUTH_STATE_SECRET']])(
