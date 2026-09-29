@@ -57,7 +57,7 @@ vi.mock('@/ai-client', async (importOriginal) => ({
 //
 // Harness: one Testcontainers postgres:15-alpine for the whole `integration`
 // vitest project (tests/integration/support/global-setup.ts), migrated with
-// the frozen drizzle/migrations/0000-0007 in order. Fixture rows use only
+// the frozen drizzle/migrations/0000-0010 in order. Fixture rows use only
 // the support/fixtures.ts helpers so every test exercises the real triggers/
 // CHECKs, not a shortcut around them (Appendix C's own suite ran the
 // canonical flow through the real triggers for the same reason).
@@ -3734,7 +3734,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // accidental-grant sub-check is meaningful regardless).
   describe('T34 - Supabase anon is denied read/write/EXECUTE everywhere; RLS still blocks an accidental grant', () => {
     // Every table Appendix A.3 enables RLS on (drizzle/migrations/0001,
-    // 0006) - the complete 16-table ERD model.
+    // 0006) - the complete 17-table ERD model (16 + provider_connection).
     const HARDENED_TABLES = [
       'app_user',
       'project',
@@ -3752,15 +3752,16 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
       'impact_acknowledgement',
       'ai_generation_run',
       'stitch_output',
+      'provider_connection', // #17, round 14 (migration 0010)
     ] as const;
 
-    it('T34a: anon SELECT is denied on every one of the 16 hardened tables', async () => {
+    it('T34a: anon SELECT is denied on every one of the 17 hardened tables', async () => {
       for (const table of HARDENED_TABLES) {
         await expectDeniedAsAnon(sql, (tx) => tx.unsafe(`SELECT 1 FROM "${table}" LIMIT 1`));
       }
     });
 
-    it('T34b: anon INSERT is denied on every one of the 16 hardened tables', async () => {
+    it('T34b: anon INSERT is denied on every one of the 17 hardened tables', async () => {
       // DEFAULT VALUES needs no knowledge of a table's columns and, because
       // Postgres checks table-level privileges before row constraints, a
       // denied INSERT never gets far enough to also trip a NOT NULL
@@ -3771,7 +3772,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
       }
     });
 
-    it('T34c: anon DELETE is denied on every one of the 16 hardened tables', async () => {
+    it('T34c: anon DELETE is denied on every one of the 17 hardened tables', async () => {
       // WHERE false needs no knowledge of a table's columns either, and
       // privilege checks don't depend on how many rows would actually
       // match.
@@ -4329,4 +4330,333 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     `;
     expect(Number(backlogVersionsAfterAttempt[0]!.count)).toBe(0);
   });
+
+  // ---------------------------------------------------------------------
+  // Round 14 (per-user provider connections, SCRUM-95 / UC-S3): T45-T50 SQL
+  // halves (ERD Appendix C.2); T51/T52 are application tests. NOT EXECUTED
+  // when written - Docker/Testcontainers was unavailable on the authoring
+  // machine; the assertions mirror the C.2 SQL statement for statement.
+  // ---------------------------------------------------------------------
+  const CIPHERTEXT = 'v1:AAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBB:Y2lwaGVydGV4dA';
+
+  async function insertConnection(
+    userId: string,
+    provider: 'github' | 'jira' | 'stitch',
+    overrides: {
+      accessTokenEnc?: string;
+      refreshTokenEnc?: string | null;
+      status?: string;
+      keyVersion?: number;
+      providerMeta?: Record<string, string>;
+    } = {},
+  ): Promise<string> {
+    const rows = await sql<{ id: string }[]>`
+      INSERT INTO provider_connection
+        (user_id, provider, external_account_id, display_name, access_token_enc,
+         refresh_token_enc, status, key_version, provider_meta)
+      VALUES (
+        ${userId}, ${provider}, ${`acct-${randomUUID()}`}, ${`name-${provider}`},
+        ${overrides.accessTokenEnc ?? CIPHERTEXT},
+        ${overrides.refreshTokenEnc ?? null},
+        ${overrides.status ?? 'active'},
+        ${overrides.keyVersion ?? 1},
+        ${sql.json(overrides.providerMeta ?? {})}
+      )
+      RETURNING id
+    `;
+    return rows[0]!.id;
+  }
+
+  async function draftArtifactVersion(
+    projectId: string,
+    type: fx.ArtifactType = 'architecture',
+  ): Promise<{ artifactId: string; versionId: string }> {
+    const artifactId = await fx.createArtifact(sql, projectId, type);
+    const versionId = await fx.createDraftArtifactVersion(sql, artifactId);
+    return { artifactId, versionId };
+  }
+
+  // T45 (SQL half) - a code path that forgot to encrypt fails at INSERT.
+  it('T45: plaintext tokens, a mismatched key version, token-named meta keys and a non-tombstone revoked row are all refused; no plaintext marker lands in any column', async () => {
+    const userId = await fx.createAppUser(sql);
+    const otherUserId = await fx.createAppUser(sql);
+    await insertConnection(userId, 'github', { providerMeta: { login: 'octo-a' } });
+
+    await expect(
+      insertConnection(otherUserId, 'github', { accessTokenEnc: 'ghp_PLAINTEXTTOKEN0123456789' }),
+    ).rejects.toThrow(/violates check constraint/);
+    await expect(
+      insertConnection(otherUserId, 'jira', {
+        accessTokenEnc: 'v1:AAAA:BBBB:CCCC',
+        refreshTokenEnc: 'PLAINTEXTREFRESH0123',
+      }),
+    ).rejects.toThrow(/violates check constraint/);
+    await expect(
+      insertConnection(otherUserId, 'stitch', { accessTokenEnc: 'v2:AAAA:BBBB:CCCC' }),
+    ).rejects.toThrow(/violates check constraint/);
+    await expect(
+      insertConnection(otherUserId, 'stitch', {
+        accessTokenEnc: 'v1:AAAA:BBBB:CCCC',
+        providerMeta: { access_token: 'PLAINTEXTTOKEN' },
+      }),
+    ).rejects.toThrow(/violates check constraint/);
+    await expect(
+      insertConnection(otherUserId, 'stitch', {
+        accessTokenEnc: 'v1:AAAA:BBBB:CCCC',
+        status: 'revoked',
+      }),
+    ).rejects.toThrow(/violates check constraint/);
+
+    // Scan every text / jsonb / array column of every public base table.
+    const columns = await sql<{ table_name: string; column_name: string }[]>`
+      SELECT c.table_name, c.column_name
+        FROM information_schema.columns c
+        JOIN information_schema.tables t
+          ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+       WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+         AND c.data_type IN ('text', 'jsonb', 'json', 'character varying', 'ARRAY')
+    `;
+    let hits = 0;
+    for (const { table_name, column_name } of columns) {
+      const rows = await sql.unsafe<{ n: string }[]>(
+        `SELECT count(*)::text AS n FROM public."${table_name}" WHERE "${column_name}"::text LIKE '%PLAINTEXT%'`,
+      );
+      hits += Number(rows[0]!.n);
+    }
+    expect(hits).toBe(0);
+  });
+
+  // T45's flows / log / API-response scan is an application integration
+  // test owned by UC-S2..UC-S8 (no connections module exists yet).
+  it.todo(
+    'T45 (application half): connect flows, logs and API responses never contain a sentinel token',
+  );
+
+  // T46
+  it('T46: one connection per (user, provider); unknown provider/status/user refused; another user or all three providers are fine', async () => {
+    const userId = await fx.createAppUser(sql);
+    const otherUserId = await fx.createAppUser(sql);
+    await insertConnection(userId, 'github');
+
+    await expect(insertConnection(userId, 'github')).rejects.toThrow(/unique constraint/);
+    await expect(
+      sql`INSERT INTO provider_connection (user_id, provider, external_account_id, display_name, access_token_enc)
+          VALUES (${otherUserId}, 'gitlab', '9', 'x', 'v1:AAAA:BBBB:CCCC')`,
+    ).rejects.toThrow(/violates check constraint/);
+    await expect(insertConnection(otherUserId, 'github', { status: 'expired' })).rejects.toThrow(
+      /violates check constraint/,
+    );
+    await expect(
+      sql`INSERT INTO provider_connection (user_id, provider, external_account_id, display_name, access_token_enc)
+          VALUES (${randomUUID()}, 'github', '9', 'x', 'v1:AAAA:BBBB:CCCC')`,
+    ).rejects.toThrow(/foreign key constraint/);
+
+    await insertConnection(otherUserId, 'github');
+    await insertConnection(userId, 'stitch');
+    await insertConnection(userId, 'jira', {
+      refreshTokenEnc: 'v1:DDDD:EEEE:FFFF',
+      providerMeta: { cloudId: 'cloud-1', siteUrl: 'https://x.atlassian.net', siteName: 'x' },
+    });
+    const providers = await sql<{ n: number }[]>`
+      SELECT count(DISTINCT provider)::int AS n FROM provider_connection WHERE user_id = ${userId}
+    `;
+    expect(providers[0]!.n).toBe(3);
+  });
+
+  // T47
+  it('T47: composite (connection_id, provider) FK, legacy NULL, RESTRICT on delete, delete_project() leaves connections alone', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T47' });
+    const other = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T47 other' });
+    const a = await draftArtifactVersion(projectId);
+    const b = await draftArtifactVersion(other.projectId);
+    const githubConn = await insertConnection(userId, 'github');
+    const stitchConn = await insertConnection(userId, 'stitch');
+
+    const withConn = await sql<{ id: string }[]>`
+      INSERT INTO external_operation
+        (project_id, provider, operation_type, operation_key, status, request_hash,
+         source_artifact_version_id, connection_id)
+      VALUES (${projectId}, 'github', 'create_repo', ${`op-${randomUUID()}`}, 'pending', 'h1',
+              ${a.versionId}, ${githubConn})
+      RETURNING id
+    `;
+    const legacy = await fx.createExternalOperation(sql, {
+      projectId: other.projectId,
+      provider: 'github',
+      status: 'pending',
+      sourceArtifactVersionId: b.versionId,
+    });
+
+    // a github connection cannot back a stitch operation
+    await expect(
+      sql`INSERT INTO external_operation
+            (project_id, provider, operation_type, operation_key, status, request_hash,
+             source_artifact_version_id, connection_id)
+          VALUES (${projectId}, 'stitch', 'generate_ui', ${`op-${randomUUID()}`}, 'pending', 'h3',
+                  ${a.versionId}, ${githubConn})`,
+    ).rejects.toThrow(/foreign key constraint/);
+    // a referenced connection cannot be deleted
+    await expect(sql`DELETE FROM provider_connection WHERE id = ${githubConn}`).rejects.toThrow(
+      /foreign key constraint/,
+    );
+
+    const deleted = await sql<
+      { deleted: boolean }[]
+    >`SELECT delete_project(${projectId}::uuid) AS deleted`;
+    expect(deleted[0]!.deleted).toBe(true);
+    const conns = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM provider_connection WHERE id IN (${githubConn}, ${stitchConn})
+    `;
+    expect(conns[0]!.n).toBe(2);
+    const gone = await sql`SELECT 1 FROM external_operation WHERE id = ${withConn[0]!.id}`;
+    expect(gone).toHaveLength(0);
+    const kept = await sql<{ connection_id: string | null }[]>`
+      SELECT connection_id FROM external_operation WHERE id = ${legacy}
+    `;
+    expect(kept).toHaveLength(1);
+    expect(kept[0]!.connection_id).toBeNull();
+
+    // now unreferenced: allowed
+    await sql`DELETE FROM provider_connection WHERE id = ${githubConn}`;
+  });
+
+  // T48
+  it('T48: project targets - Jira pair together, no blank target, targets stay editable after Requirements exist', async () => {
+    const { projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T48' });
+
+    await sql`UPDATE project SET github_owner = 'octo-org' WHERE id = ${projectId}`;
+    await sql`UPDATE project SET jira_cloud_id = 'cloud-1', jira_project_key = 'SCRUM' WHERE id = ${projectId}`;
+    await sql`UPDATE project SET jira_cloud_id = NULL, jira_project_key = NULL WHERE id = ${projectId}`;
+    await expect(
+      sql`UPDATE project SET jira_cloud_id = 'cloud-1' WHERE id = ${projectId}`,
+    ).rejects.toThrow(/project_jira_target_pair/);
+    await expect(
+      sql`UPDATE project SET jira_project_key = 'SCRUM' WHERE id = ${projectId}`,
+    ).rejects.toThrow(/project_jira_target_pair/);
+    await expect(
+      sql`UPDATE project SET github_owner = '   ' WHERE id = ${projectId}`,
+    ).rejects.toThrow(/project_target_not_blank/);
+
+    // brief is frozen once a Requirements version exists; targets are not.
+    await draftArtifactVersion(projectId, 'requirements');
+    await sql`UPDATE project SET github_owner = 'octo-org-2' WHERE id = ${projectId}`;
+    await expect(
+      sql`UPDATE project SET brief = 'edited' WHERE id = ${projectId}`,
+    ).rejects.toThrow();
+  });
+
+  // T49 (SQL half)
+  it('T49: needs_reauth and the revoked tombstone leave operations, refs and impact() byte-identical; the only trigger is provider_connection_touch', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T49' });
+    const { artifactId, versionId } = await draftArtifactVersion(projectId, 'backlog');
+    const story = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId,
+      itemType: 'story',
+    });
+    await fx.createMembership(sql, {
+      artifactVersionId: versionId,
+      artifactId,
+      logicalItemId: story.logicalItemId,
+      itemVersionId: story.itemVersionId,
+    });
+    const jiraConn = await insertConnection(userId, 'jira', {
+      refreshTokenEnc: 'v1:DDDD:EEEE:FFFF',
+    });
+    const stitchConn = await insertConnection(userId, 'stitch');
+
+    const jiraOp = await sql<{ id: string }[]>`
+      INSERT INTO external_operation
+        (project_id, provider, operation_type, operation_key, status, external_id, request_hash,
+         source_artifact_version_id, source_item_version_id, connection_id)
+      VALUES (${projectId}, 'jira', 'create_issue', ${`op-${randomUUID()}`}, 'completed', 'SCRUM-1', 'h5',
+              ${versionId}, ${story.itemVersionId}, ${jiraConn})
+      RETURNING id
+    `;
+    await fx.createExternalRef(sql, {
+      projectId,
+      provider: 'jira',
+      externalOperationId: jiraOp[0]!.id,
+      sourceArtifactVersionId: versionId,
+      sourceItemVersionId: story.itemVersionId,
+      externalId: 'SCRUM-1',
+      externalKey: 'SCRUM-1',
+    });
+    for (const [status, externalId] of [
+      ['completed', 'stitch-2'],
+      ['pending', null],
+    ] as const) {
+      await sql`
+        INSERT INTO external_operation
+          (project_id, provider, operation_type, operation_key, status, external_id, request_hash,
+           source_artifact_version_id, connection_id)
+        VALUES (${projectId}, 'stitch', 'generate_ui', ${`op-${randomUUID()}`}, ${status}, ${externalId},
+                ${`h-${randomUUID()}`}, ${versionId}, ${stitchConn})
+      `;
+    }
+
+    const snapshot = async (): Promise<string> => {
+      const rows = await sql<{ h: string }[]>`
+        SELECT md5(
+          coalesce((SELECT string_agg(row_to_json(o)::text, '|' ORDER BY o.id)
+                      FROM external_operation o WHERE o.project_id = ${projectId}), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(r)::text, '|' ORDER BY r.id)
+                      FROM external_ref r WHERE r.project_id = ${projectId}), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(i)::text, '|' ORDER BY i.subject_id, i.root_item_version_id)
+                      FROM impact(${projectId}::uuid) i), '')
+        ) AS h
+      `;
+      return rows[0]!.h;
+    };
+
+    const before = await snapshot();
+    await sql`UPDATE provider_connection SET status = 'needs_reauth' WHERE id IN (${jiraConn}, ${stitchConn})`;
+    expect(await snapshot()).toBe(before);
+    await sql`
+      UPDATE provider_connection
+         SET status = 'revoked', access_token_enc = 'revoked', refresh_token_enc = NULL, expires_at = NULL
+       WHERE id IN (${jiraConn}, ${stitchConn})
+    `;
+    expect(await snapshot()).toBe(before);
+
+    const impactSource = await sql`
+      SELECT 1 FROM pg_proc WHERE proname = 'impact' AND prosrc ILIKE '%provider_connection%'
+    `;
+    expect(impactSource).toHaveLength(0);
+    const triggers = await sql<{ tgname: string }[]>`
+      SELECT tgname FROM pg_trigger
+       WHERE tgrelid = 'provider_connection'::regclass AND NOT tgisinternal
+       ORDER BY tgname
+    `;
+    expect(triggers.map((t) => t.tgname)).toEqual(['provider_connection_touch']);
+  });
+  it.todo(
+    'T49 (application half): reconcile/retry/drift return reconnect-required, never failed, never a new warning',
+  );
+
+  // T50 (SQL half)
+  it('T50: a legacy operation (connection_id NULL) keeps its state machine', async () => {
+    const { projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T50' });
+    const { versionId } = await draftArtifactVersion(projectId);
+    const opId = await fx.createExternalOperation(sql, {
+      projectId,
+      provider: 'stitch',
+      status: 'pending',
+      sourceArtifactVersionId: versionId,
+    });
+    await sql`UPDATE external_operation SET status = 'reconciliation_required' WHERE id = ${opId}`;
+    await sql`UPDATE external_operation SET status = 'completed', external_id = 'stitch-1' WHERE id = ${opId}`;
+    const rows = await sql<{ connection_id: string | null; status: string }[]>`
+      SELECT connection_id, status FROM external_operation WHERE id = ${opId}
+    `;
+    expect(rows[0]).toEqual({ connection_id: null, status: 'completed' });
+  });
+  it.todo(
+    'T50 (application half): a NEW operation with no env credential and no user connection is refused with CONNECTION_REQUIRED and writes no row',
+  );
+
+  // T51 / T52 are application tests (connections + external-operations),
+  // owned by UC-S2..UC-S8 - no module exists to drive yet.
+  it.todo('T51');
+  it.todo('T52');
 });

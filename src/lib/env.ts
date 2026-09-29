@@ -54,6 +54,19 @@ const envSchema = z.object({
   // through the official @google/stitch-sdk, which owns its own base URL.
   STITCH_API_KEY: z.string().min(1).optional(),
   SUPABASE_STORAGE_BUCKET: z.string().min(1).optional(),
+
+  // --- module 18: connections --- (schema only so far, SCRUM-95)
+  // All optional, same reasoning as the modules above - the connections module
+  // (SCRUM-94/96+) throws a clear error at call time if one it needs is
+  // missing. CONNECTION_ENCRYPTION_KEY: 32 bytes, base64 (AES-256-GCM).
+  // OAUTH_STATE_SECRET: signs the OAuth `state` parameter. The client
+  // id/secret pairs are the GitHub OAuth App and the Atlassian 3LO app.
+  CONNECTION_ENCRYPTION_KEY: z.string().min(1).optional(),
+  OAUTH_STATE_SECRET: z.string().min(1).optional(),
+  GITHUB_OAUTH_CLIENT_ID: z.string().min(1).optional(),
+  GITHUB_OAUTH_CLIENT_SECRET: z.string().min(1).optional(),
+  ATLASSIAN_CLIENT_ID: z.string().min(1).optional(),
+  ATLASSIAN_CLIENT_SECRET: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

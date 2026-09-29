@@ -11,7 +11,7 @@ import { expectDeniedAsAnon } from './support/assertions';
 // any other statement.
 //
 // The schema this runs against is the real one: Testcontainers postgres with
-// drizzle/migrations/0000-0008 applied, so the append-only and draft-only
+// drizzle/migrations/0000-0010 applied, so the append-only and draft-only
 // triggers, every ON DELETE RESTRICT FK and the RLS/REVOKE hardening are all
 // live. Nothing here shortcuts them.
 

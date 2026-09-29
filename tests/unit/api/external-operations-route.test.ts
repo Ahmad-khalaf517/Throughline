@@ -35,6 +35,7 @@ function makeOperation(overrides: Partial<Record<string, unknown>> = {}) {
     requestHash: 'hash',
     sourceArtifactVersionId: 'arch-v1',
     sourceItemVersionId: null,
+    connectionId: null,
     targetDescriptor: { repoName: 'repo' },
     externalId: null,
     errorMessage: null,

@@ -1,6 +1,7 @@
 import {
   check,
   foreignKey,
+  index,
   jsonb,
   pgTable,
   text,
@@ -11,6 +12,7 @@ import {
 import { sql } from 'drizzle-orm';
 import { project } from './project';
 import { artifactVersion } from './artifact-version';
+import { providerConnection } from './provider-connection';
 import { artifactVersionItemMembership } from './artifact-version-item-membership';
 
 // ERD section 4.14 / Appendix A. Pre-write record, one per external object -
@@ -34,6 +36,11 @@ export const externalOperation = pgTable(
     // Nullable: Jira requires it (see the provider/item CHECK below),
     // GitHub/Stitch operate on the whole artifact version, not one item.
     sourceItemVersionId: uuid('source_item_version_id'),
+    // ERD 4.14 / A.5: the connection this operation was created with. NULL =
+    // legacy operation made with the shared env credential. The composite FK
+    // below forces the connection to be for the SAME provider (MATCH SIMPLE
+    // skips it when NULL).
+    connectionId: uuid('connection_id'),
     targetDescriptor: jsonb('target_descriptor').notNull().default({}),
     externalId: text('external_id'),
     errorMessage: text('error_message'),
@@ -71,5 +78,14 @@ export const externalOperation = pgTable(
         artifactVersionItemMembership.itemVersionId,
       ],
     }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.connectionId, table.provider],
+      foreignColumns: [providerConnection.id, providerConnection.provider],
+    }).onDelete('restrict'),
+    // Disconnect asks "does any operation still reference this connection?";
+    // the RESTRICT checks probe the same column.
+    index('external_operation_connection')
+      .on(table.connectionId)
+      .where(sql`${table.connectionId} IS NOT NULL`),
   ],
 );

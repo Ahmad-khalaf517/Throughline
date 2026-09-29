@@ -39,6 +39,9 @@ const baseProjectRow = {
   name: 'x',
   brief: 'y',
   inputContext: null,
+  githubOwner: null,
+  jiraCloudId: null,
+  jiraProjectKey: null,
   createdAt: now,
   updatedAt: now,
 };
