@@ -109,8 +109,11 @@ export default async function ProjectOutputsPage({ params }: ProjectOutputsPageP
         ← {project.name}
       </Link>
 
-      <header>
-        <h1 className="text-on-surface text-display-sm font-semibold">Outputs</h1>
+      <header className="app-card px-6 py-7 sm:px-8 sm:py-9">
+        <p className="app-kicker">Project / Delivery</p>
+        <h1 className="app-display text-on-surface mt-2 text-[clamp(2rem,4vw,3.25rem)] leading-tight">
+          Outputs
+        </h1>
         <p className="text-on-surface-variant mt-2 max-w-2xl text-sm leading-relaxed">
           Create external outputs for {project.name} from approved artifacts. Each preview shows
           current impact before you confirm a write.
@@ -122,13 +125,10 @@ export default async function ProjectOutputsPage({ params }: ProjectOutputsPageP
           const approvedVersionId = project.artifacts[card.sourceType].approvedVersionId;
 
           return (
-            <article
-              key={card.slug}
-              className="border-surface-dim bg-surface-container-lowest flex flex-col rounded-xl border shadow-sm"
-            >
+            <article key={card.slug} className="app-card flex flex-col overflow-hidden">
               <div className="flex flex-1 flex-col gap-5 p-6">
                 <div className="border-surface-container-low flex items-center gap-3 border-b pb-4">
-                  <span className="bg-surface-container text-on-surface flex h-10 w-10 shrink-0 items-center justify-center rounded-lg">
+                  <span className="app-accent-soft flex h-11 w-11 shrink-0 items-center justify-center rounded-lg">
                     <ProviderIcon provider={card.slug} />
                   </span>
                   <div>

@@ -69,7 +69,7 @@ export default async function ArtifactReviewPage({ params }: ArtifactReviewPageP
 
   return (
     <main
-      className={`mx-auto flex min-h-screen w-full flex-col gap-6 px-4 py-12 sm:px-6 ${type === 'architecture' ? 'max-w-6xl' : 'max-w-5xl'}`}
+      className={`mx-auto flex min-h-screen w-full flex-col gap-6 px-4 py-8 sm:px-6 sm:py-10 ${type === 'architecture' ? 'max-w-6xl' : 'max-w-5xl'}`}
     >
       <Link
         href={`/projects/${projectId}`}

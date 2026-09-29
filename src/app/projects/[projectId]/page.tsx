@@ -1,7 +1,9 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
+import { ArrowUpRight, GitBranch, Layers3, LayoutTemplate, ListTodo } from 'lucide-react';
 import { getProjectById, getProjectDashboard, type DashboardActivity } from '@/artifact-lifecycle';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
+import { ProjectJourney } from '@/components/projects/project-journey';
 import { FlaggedGlyph, StatusBadge } from '@/components/status/status-badge';
 import { ApiError } from '@/lib/errors';
 import type { ArtifactType } from '@/lib/serialize';
@@ -16,6 +18,13 @@ const LABELS: Record<ArtifactType, string> = {
   ui_requirements: 'UI requirements',
   backlog: 'Backlog epics & stories',
 };
+
+const TILE_ICONS = {
+  requirements: ListTodo,
+  architecture: Layers3,
+  ui_requirements: LayoutTemplate,
+  backlog: GitBranch,
+} as const;
 
 function formatDate(date: Date) {
   return date.toLocaleString('en-US', {
@@ -137,50 +146,90 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
   const itemsInShownVersions = dashboard.tiles.reduce((count, tile) => count + tile.itemCount, 0);
 
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6">
-      <h1 className="sr-only">Project overview for {project.name}</h1>
+    <main className="mx-auto flex w-full max-w-[1200px] flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
+      <header className="flex flex-wrap items-end justify-between gap-4 pb-1">
+        <div>
+          <p className="app-kicker">Overview / {project.name}</p>
+          <h1 className="app-display text-on-surface mt-2 text-[clamp(2.25rem,4vw,3.5rem)] leading-tight">
+            Where the plan stands.
+          </h1>
+          <p className="text-on-surface-variant mt-2 text-sm">
+            See what is ready, what needs review, and how decisions connect.
+          </p>
+        </div>
+        <span className="border-surface-dim bg-surface-container-lowest text-on-surface-variant rounded-full border px-3 py-1.5 text-xs font-medium">
+          {itemsInShownVersions} {itemNoun(itemsInShownVersions)} in current versions
+        </span>
+      </header>
 
-      <section aria-label="Artifact status" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {dashboard.tiles.map((tile) => (
-          <Link
-            key={tile.type}
-            href={
-              tile.versionId
-                ? `/projects/${projectId}/versions/${tile.versionId}`
-                : `/projects/${projectId}/artifacts/${tile.type}`
-            }
-            className="group bg-surface-container-lowest border-surface-dim hover:border-outline-variant focus-visible:ring-primary flex flex-col justify-between gap-3 rounded-lg border p-6 shadow-sm transition-colors focus-visible:ring-2 focus-visible:outline-none"
-          >
-            <div className="flex items-start justify-between gap-2">
-              <p className="text-on-surface-variant text-xs font-medium">{LABELS[tile.type]}</p>
-              <span className="text-on-surface-variant shrink-0 font-mono text-xs">
-                {tile.versionNumber ? `v${tile.versionNumber}` : 'No version'}
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-on-surface text-2xl font-semibold">
-                {tile.itemCount}
-                <span className="text-on-surface-variant ml-1 text-xs font-normal">
-                  {itemNoun(tile.itemCount)}
+      <ProjectJourney projectId={projectId} tiles={dashboard.tiles} />
+
+      <section aria-labelledby="artifacts-heading">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="app-kicker">The working set</p>
+            <h2
+              id="artifacts-heading"
+              className="text-on-surface mt-1 text-lg font-semibold tracking-tight"
+            >
+              Artifacts
+            </h2>
+          </div>
+          <span className="text-on-surface-variant text-xs">
+            Open a card to inspect its current version
+          </span>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {dashboard.tiles.map((tile) => {
+            const Icon = TILE_ICONS[tile.type];
+            return (
+              <Link
+                key={tile.type}
+                href={
+                  tile.versionId
+                    ? `/projects/${projectId}/versions/${tile.versionId}`
+                    : `/projects/${projectId}/artifacts/${tile.type}`
+                }
+                className="app-card app-card-link group flex min-h-48 flex-col justify-between gap-4 p-5 focus-visible:outline-none"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="app-accent-soft flex size-9 items-center justify-center rounded-lg">
+                    <Icon className="size-4.5" strokeWidth={1.8} aria-hidden="true" />
+                  </span>
+                  <span className="text-on-surface-variant shrink-0 font-mono text-xs">
+                    {tile.versionNumber ? `v${tile.versionNumber}` : 'No version'}
+                  </span>
+                </div>
+                <div>
+                  <p className="text-on-surface text-sm font-semibold">{LABELS[tile.type]}</p>
+                  <p className="text-on-surface mt-2 text-3xl font-semibold tracking-tight">
+                    {tile.itemCount}
+                    <span className="text-on-surface-variant ml-1 text-xs font-normal">
+                      {itemNoun(tile.itemCount)}
+                    </span>
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  {tile.status ? (
+                    <StatusBadge status={tile.status} />
+                  ) : (
+                    <span className="text-on-surface-variant text-xs">Not generated</span>
+                  )}
+                </div>
+                <span className="text-primary inline-flex items-center gap-1 text-xs font-semibold group-hover:underline group-focus-visible:underline">
+                  {tile.versionId ? 'Inspect version' : 'Open artifact'}{' '}
+                  <ArrowUpRight className="size-3.5" aria-hidden="true" />
                 </span>
-              </p>
-              {tile.status ? (
-                <StatusBadge status={tile.status} />
-              ) : (
-                <span className="text-on-surface-variant text-xs">Not generated</span>
-              )}
-            </div>
-            <span className="text-primary-container text-xs font-medium group-hover:underline group-focus-visible:underline">
-              {tile.versionId ? 'Inspect version →' : 'Open artifact →'}
-            </span>
-          </Link>
-        ))}
+              </Link>
+            );
+          })}
+        </div>
       </section>
 
       <div className="grid items-start gap-6 lg:grid-cols-12">
         <section
           aria-labelledby="activity-heading"
-          className="bg-surface-container-lowest border-surface-dim overflow-hidden rounded-lg border shadow-sm lg:col-span-8"
+          className="app-card overflow-hidden lg:col-span-8"
         >
           <div className="border-surface-dim flex flex-wrap items-start justify-between gap-3 border-b p-6">
             <div>
@@ -210,10 +259,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         </section>
 
         <aside className="flex flex-col gap-6 lg:col-span-4">
-          <section
-            aria-labelledby="health-heading"
-            className="bg-surface-container-lowest border-surface-dim rounded-lg border p-6 shadow-sm"
-          >
+          <section aria-labelledby="health-heading" className="app-card p-6">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 id="health-heading" className="text-on-surface text-base font-semibold">
                 Project health
@@ -253,7 +299,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
                   href={`/projects/${projectId}/warnings`}
                   className="bg-primary-container text-on-primary-container hover:bg-primary-container-hover focus-visible:ring-primary mt-4 flex h-10 w-full items-center justify-center rounded-lg text-sm font-medium shadow-sm transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
                 >
-                  View impact blast radius
+                  Review impact
                 </Link>
               </div>
             ) : (
@@ -268,10 +314,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
               </span>
             </div>
           </section>
-          <section
-            aria-labelledby="brief-heading"
-            className="bg-surface-container-lowest border-surface-dim rounded-lg border p-6 shadow-sm"
-          >
+          <section aria-labelledby="brief-heading" className="app-card p-6">
             <h2 id="brief-heading" className="text-on-surface text-base font-semibold">
               Project brief
             </h2>
