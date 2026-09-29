@@ -824,6 +824,11 @@ completeOAuth(userId: string, provider: 'github'|'jira', query: { code: string; 
 reportAuthFailure(connectionId: string): Promise<void>
   // a provider answered "credential invalid" for an otherwise decryptable token: sets status='needs_reauth'. Only that.
 
+registerRefresher(provider: Provider, fn: Refresher): void   // provider-HTTP seams (UC-S2): the provider modules register their token
+registerRevoker(provider: Provider, fn: Revoker): void        // refresh / revoke calls at import time, so this module holds no provider HTTP.
+  // Refresher receives { refreshToken, accountId, meta, signal } and returns { accessToken, refreshToken?, expiresAt? }; throwing
+  // InvalidGrantError -> status='needs_reauth'. Revoker returns boolean; a throw is reported as providerRevoked=false and local removal proceeds.
+class InvalidGrantError / ConnectionConfigError / ConnectionInputError extends Error {}   // config/input problems; never carry secrets
 class ConnectionRequiredError extends Error {}   // -> API 409 CONNECTION_REQUIRED
 class ReconnectRequiredError  extends Error {}   // -> API 409 RECONNECT_REQUIRED
 ```
