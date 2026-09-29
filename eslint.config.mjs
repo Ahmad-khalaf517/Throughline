@@ -19,6 +19,7 @@ const elementTypes = [
   'layer2-artifact-lifecycle',
   'layer2-architecture-materialization',
   'layer3-artifact-types',
+  'layer3b-connections',
   'layer4-external-operations',
   'layer5-external-provider',
   'layer6-api',
@@ -46,6 +47,10 @@ const eslintConfig = defineConfig([
           pattern: 'src/architecture-materialization/**',
         },
         { type: 'layer3-artifact-types', pattern: 'src/artifact-types/*/**', capture: ['name'] },
+        // Layer 3b (Module Boundaries 4.9): imports layer 0 only; importable by
+        // layers 4-6 only, never by layers 1-3 (nothing in the lineage core may
+        // hold a credential).
+        { type: 'layer3b-connections', pattern: 'src/connections/**' },
         { type: 'layer4-external-operations', pattern: 'src/external/operations/**' },
         {
           type: 'layer5-external-provider',
@@ -121,10 +126,13 @@ const eslintConfig = defineConfig([
                 'lib',
               ],
             },
-            // Layer 4: shared external-write protocol - layer 0-1 only (db, impact).
+            // Layer 3b: per-user provider credentials - layer 0 (db) only.
+            { from: ['layer3b-connections'], allow: ['layer0-db', 'lib'] },
+            // Layer 4: shared external-write protocol - layer 0-1 only (db, impact),
+            // plus connections (error types only, Module Boundaries 4.5 / 4.9).
             {
               from: ['layer4-external-operations'],
-              allow: ['layer0-db', 'layer1-impact', 'lib'],
+              allow: ['layer0-db', 'layer1-impact', 'layer3b-connections', 'lib'],
             },
             // Layer 5: provider integrations - layer 0-4, and read-only into their
             // paired layer-3 module (github->architecture, jira->backlog, stitch->ui-requirements).
@@ -136,6 +144,7 @@ const eslintConfig = defineConfig([
                 'layer0-ai-client',
                 'layer1-impact',
                 'layer3-artifact-types',
+                'layer3b-connections',
                 'layer4-external-operations',
                 'lib',
               ],
@@ -149,6 +158,7 @@ const eslintConfig = defineConfig([
                 'layer0-auth',
                 'layer2-artifact-lifecycle',
                 'layer3-artifact-types',
+                'layer3b-connections',
                 'layer4-external-operations',
                 'layer5-external-provider',
                 'lib',

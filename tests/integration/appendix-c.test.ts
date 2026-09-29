@@ -4426,10 +4426,11 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     expect(hits).toBe(0);
   });
 
-  // T45's flows / log / API-response scan is an application integration
-  // test owned by UC-S2..UC-S8 (no connections module exists yet).
+  // T45's application half (storage, listing and error scan) is implemented in
+  // tests/integration/connections.test.ts. The connect-flow / route / log scan
+  // stays with the OAuth and route stories (SCRUM-96/97).
   it.todo(
-    'T45 (application half): connect flows, logs and API responses never contain a sentinel token',
+    'T45 (application half, OAuth flows and API responses): connect flows and API responses never contain a sentinel token',
   );
 
   // T46
@@ -4655,8 +4656,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     'T50 (application half): a NEW operation with no env credential and no user connection is refused with CONNECTION_REQUIRED and writes no row',
   );
 
-  // T51 / T52 are application tests (connections + external-operations),
-  // owned by UC-S2..UC-S8 - no module exists to drive yet.
-  it.todo('T51');
-  it.todo('T52');
+  // T51 / T52 are application tests of the connections module.
+  // Implemented in tests/integration/connections.test.ts (T51: account
+  // mismatch; T52: concurrent Jira refresh with rotation).
 });
