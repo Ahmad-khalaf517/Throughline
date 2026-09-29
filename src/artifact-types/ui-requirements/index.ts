@@ -378,6 +378,7 @@ export async function generate(ctx: {
   feedback?: string | undefined;
   contextSourceVersionIds?: string[] | undefined;
   baseVersionId?: string | null | undefined;
+  onDelta?: (delta: string) => void;
 }): Promise<{ payload: unknown; candidates: Candidate[]; runId: string }> {
   const project = await getProjectById(ctx.projectId);
   if (!project) {
@@ -419,6 +420,7 @@ export async function generate(ctx: {
     purpose: 'generation',
     prompt,
     schema: outputSchema,
+    ...(ctx.onDelta ? { onDelta: ctx.onDelta } : {}),
   });
 
   return { payload: data.payload, candidates: toCandidates(data.items), runId };
