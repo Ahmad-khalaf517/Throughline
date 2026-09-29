@@ -14,6 +14,7 @@ export function LogoMark({ className, showWordmark = true }: LogoMarkProps) {
       width={showWordmark ? 470 : 96}
       height={showWordmark ? 64 : 32}
       alt="Throughline"
+      loading="eager"
       className={cn('h-7 w-auto', className)}
     />
   );
