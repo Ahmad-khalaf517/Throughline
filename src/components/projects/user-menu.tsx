@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Link2, LogOut, Pencil } from 'lucide-react';
+import { LogOut, Pencil, Plug } from 'lucide-react';
 import { friendlyNameFromEmail } from '@/lib/utils';
 import { EditProfileDialog, type UpdateDisplayNameState } from './edit-profile-dialog';
 
@@ -110,8 +110,8 @@ export function UserMenu({
               onClick={() => setOpen(false)}
               className="text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface focus-visible:ring-primary flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
             >
-              <Link2 className="size-4" aria-hidden="true" />
-              Connections
+              <Plug className="size-4" aria-hidden="true" />
+              Integrations
             </Link>
             <button
               type="button"

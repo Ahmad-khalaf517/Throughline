@@ -104,6 +104,8 @@ export async function POST(request: Request, { params }: RouteParams) {
       repoName: preview.repoName,
       // FR-030: the exact files the write will add. `null` = docs-only.
       starter: preview.starter ?? null,
+      // The default the screen preselects; the user picks the real one on init.
+      visibility: 'public' as const,
       impact: await toImpactRowDTOs(preview.impact),
       // Round 14 (FR-089): the preview never fails for a missing or lapsed
       // connection; this block lets the screen show the connect-to-continue prompt.

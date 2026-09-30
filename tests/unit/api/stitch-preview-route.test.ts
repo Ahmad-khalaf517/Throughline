@@ -132,7 +132,7 @@ describe('GET /api/projects/:projectId/stitch/preview', () => {
     mockedPreviewPrompt.mockResolvedValue({
       prompt: 'Generate...',
       impact: [],
-      connection: { status: 'none', targetReady: true },
+      connection: { status: 'none', targetReady: true, accountName: null },
     });
 
     const response = await GET(request(), paramsFor('project-1'));
@@ -142,7 +142,7 @@ describe('GET /api/projects/:projectId/stitch/preview', () => {
     expect(body).toEqual({
       prompt: 'Generate...',
       impact: [],
-      connection: { status: 'none', targetReady: true },
+      connection: { status: 'none', targetReady: true, accountName: null },
     });
     expect(mockedPreviewPrompt).toHaveBeenCalledWith('ui-v1', { userId: 'user-1' });
   });

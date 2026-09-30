@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The github module's round-14 credential handling (SCRUM-96 part B): a new
@@ -228,7 +229,21 @@ describe('initRepo - new operation', () => {
     );
   });
 
-  it('no github_owner -> GithubTargetRequiredError, and neither runOperation nor GitHub is touched', async () => {
+  it("no github_owner -> the repository is created under the connection's own login", async () => {
+    runOperationSends();
+    githubRoutes['POST /user/repos'] = createdRepo('octo', 'my-repo');
+
+    await initRepo('av-1', 'my-repo', { userId: 'user-1', githubOwner: null });
+
+    expect(mocks.runOperation.mock.calls[0]![0]).toMatchObject({
+      targetDescriptor: { repoName: 'my-repo', mode: 'docs-only', owner: 'octo' },
+    });
+    expect(seen.some((s) => s.method === 'POST' && s.path === '/user/repos')).toBe(true);
+    expect(seen.some((s) => s.path.startsWith('/orgs/'))).toBe(false);
+  });
+
+  it('no github_owner and no account login anywhere -> GithubTargetRequiredError, and neither runOperation nor GitHub is touched', async () => {
+    mocks.getCredential.mockResolvedValue(credential({ meta: {} }));
     const failure = await initRepo('av-1', 'my-repo', { userId: 'user-1' }).catch(
       (e: unknown) => e,
     );
@@ -431,7 +446,8 @@ describe('reconcile and retry of an existing operation', () => {
       sourceArtifactVersionId: 'av-1',
       targetDescriptor: { repoName: 'my-repo', owner: 'octo' },
     });
-    mocks.getCredentialForOperation.mockResolvedValue(credential());
+    mocks.getCredentialForOperation.mockResolvedValue(credential({ meta: {} }));
+    mocks.getCredential.mockResolvedValue(credential({ meta: {} }));
 
     await expect(retryOperation('op-1', { userId: 'user-1' })).rejects.toBeInstanceOf(
       GithubTargetRequiredError,
@@ -439,6 +455,7 @@ describe('reconcile and retry of an existing operation', () => {
     expect(mocks.runOperation).not.toHaveBeenCalled();
 
     mocks.runOperation.mockResolvedValue({ status: 'in_flight' });
+    mocks.getCredentialForOperation.mockResolvedValue(credential());
     await expect(
       retryOperation('op-1', { userId: 'user-1', githubOwner: 'octo' }),
     ).resolves.toEqual({
@@ -480,6 +497,108 @@ describe('reconcile and retry of an existing operation', () => {
   });
 });
 
+describe('repository visibility', () => {
+  const sha = (facts: unknown) => createHash('sha256').update(JSON.stringify(facts)).digest('hex');
+
+  it('is public by default: private:false reaches GitHub, and the request hash is the pre-visibility one', async () => {
+    runOperationSends();
+    githubRoutes['POST /user/repos'] = createdRepo('octo', 'my-repo');
+
+    await initRepo('av-1', 'my-repo', { userId: 'user-1', githubOwner: 'octo' });
+
+    const create = seen.find((s) => s.method === 'POST')!;
+    expect(create.body).toMatchObject({ name: 'my-repo', private: false });
+    const opts = mocks.runOperation.mock.calls[0]![0];
+    expect(opts.requestHash).toBe(sha({ repoName: 'my-repo', mode: 'docs-only', owner: 'octo' }));
+    expect(opts.targetDescriptor).toMatchObject({ visibility: 'public' });
+  });
+
+  it('private reaches createForAuthenticatedUser for the own account', async () => {
+    runOperationSends();
+    githubRoutes['POST /user/repos'] = createdRepo('octo', 'my-repo');
+
+    await initRepo('av-1', 'my-repo', { userId: 'user-1', githubOwner: 'octo' }, 'private');
+
+    const create = seen.find((s) => s.method === 'POST')!;
+    expect(create.path).toBe('/user/repos');
+    expect(create.body).toMatchObject({ private: true });
+  });
+
+  it('private reaches createInOrg for an organization', async () => {
+    runOperationSends();
+    githubRoutes['POST /orgs/acme/repos'] = createdRepo('acme', 'my-repo');
+
+    await initRepo('av-1', 'my-repo', { userId: 'user-1', githubOwner: 'acme' }, 'private');
+
+    const create = seen.find((s) => s.method === 'POST')!;
+    expect(create.path).toBe('/orgs/acme/repos');
+    expect(create.body).toMatchObject({ private: true });
+  });
+
+  it('a private request has a different hash (so a resend under the same key is a conflict) and records visibility', async () => {
+    runOperationSends();
+    githubRoutes['POST /user/repos'] = createdRepo('octo', 'my-repo');
+
+    await initRepo('av-1', 'my-repo', { userId: 'user-1', githubOwner: 'octo' }, 'private');
+
+    const opts = mocks.runOperation.mock.calls[0]![0];
+    expect(opts.requestHash).toBe(
+      sha({ repoName: 'my-repo', mode: 'docs-only', owner: 'octo', visibility: 'private' }),
+    );
+    expect(opts.requestHash).not.toBe(
+      sha({ repoName: 'my-repo', mode: 'docs-only', owner: 'octo' }),
+    );
+    expect(opts.targetDescriptor).toMatchObject({ visibility: 'private' });
+  });
+
+  it('a retry reuses the visibility recorded on the operation (missing means public)', async () => {
+    runOperationSends();
+    githubRoutes['POST /user/repos'] = createdRepo('octo', 'my-repo');
+    mocks.getOperationById.mockResolvedValue({
+      id: 'op-1',
+      provider: 'github',
+      sourceArtifactVersionId: 'av-1',
+      targetDescriptor: { repoName: 'my-repo', owner: 'octo', visibility: 'private' },
+    });
+
+    await retryOperation('op-1', { userId: 'user-1', githubOwner: 'octo' });
+
+    expect(mocks.runOperation.mock.calls[0]![0].requestHash).toBe(
+      sha({ repoName: 'my-repo', mode: 'docs-only', owner: 'octo', visibility: 'private' }),
+    );
+    expect(seen.find((s) => s.method === 'POST')!.body).toMatchObject({ private: true });
+
+    mocks.runOperation.mockClear();
+    seen = [];
+    mocks.getOperationById.mockResolvedValue({
+      id: 'op-1',
+      provider: 'github',
+      sourceArtifactVersionId: 'av-1',
+      targetDescriptor: { repoName: 'my-repo', owner: 'octo' },
+    });
+
+    await retryOperation('op-1', { userId: 'user-1', githubOwner: 'octo' });
+
+    expect(mocks.runOperation.mock.calls[0]![0].requestHash).toBe(
+      sha({ repoName: 'my-repo', mode: 'docs-only', owner: 'octo' }),
+    );
+    expect(seen.find((s) => s.method === 'POST')!.body).toMatchObject({ private: false });
+  });
+
+  it('the legacy environment credential always creates public, whatever was asked', async () => {
+    runOperationSends();
+    mocks.getCredentialForOperation.mockResolvedValue({ kind: 'legacy' });
+    githubRoutes['POST /user/repos'] = createdRepo('legacy-owner', 'my-repo');
+
+    await initRepo('av-1', 'my-repo', { userId: 'user-1' }, 'private');
+
+    // initRepo resolves a user connection here (getCredential), so this pins the
+    // operation-recorded legacy path: send() goes through authFor(legacy).
+    const create = seen.find((s) => s.method === 'POST')!;
+    expect(create.body).toMatchObject({ private: false });
+  });
+});
+
 describe('checkRepoName', () => {
   it("looks the name up under the project's owner with the caller's token", async () => {
     githubRoutes['GET /repos/acme/my-repo'] = { status: 200, body: { id: 1 } };
@@ -510,7 +629,17 @@ describe('checkRepoName', () => {
     expect(seen).toHaveLength(0);
   });
 
-  it('no owner -> GithubTargetRequiredError; no connection -> its error propagates; both before GitHub', async () => {
+  it("no owner -> the lookup runs under the connection's own login", async () => {
+    githubRoutes['GET /repos/octo/x'] = { status: 404, body: { message: 'Not Found' } };
+    await expect(checkRepoName('x', { userId: 'user-1' })).resolves.toEqual({
+      repoName: 'x',
+      status: 'available',
+    });
+    expect(seen[0]!.path).toBe('/repos/octo/x');
+  });
+
+  it('no owner and no account login -> GithubTargetRequiredError; no connection -> its error propagates; both before GitHub', async () => {
+    mocks.getCredential.mockResolvedValue(credential({ meta: {} }));
     await expect(checkRepoName('x', { userId: 'user-1' })).rejects.toBeInstanceOf(
       GithubTargetRequiredError,
     );
@@ -571,7 +700,7 @@ describe('previewInit - stays readable without a connection (FR-089)', () => {
     expect(preview).toMatchObject({
       mode: 'docs-only',
       repoName: 'shiftswap',
-      connection: { status: 'active', targetReady: true },
+      connection: { status: 'active', targetReady: true, accountName: null },
     });
     expect(seen[0]!.auth).toContain(USER_TOKEN);
   });
@@ -586,15 +715,23 @@ describe('previewInit - stays readable without a connection (FR-089)', () => {
     });
 
     expect(preview.repoName).toBe('shiftswap');
-    expect(preview.connection).toEqual({ status: 'none', targetReady: true });
+    expect(preview.connection).toEqual({ status: 'none', targetReady: false, accountName: null });
     expect(seen).toHaveLength(0);
   });
 
-  it('no owner chosen: targetReady=false and still no failure', async () => {
+  it("no owner chosen: still ready (the owner defaults to the account) and reports the account's name", async () => {
+    mocks.listConnections.mockResolvedValue([
+      { provider: 'github', status: 'active', displayName: 'octo' },
+    ]);
+    githubRoutes['GET /repos/octo/shiftswap'] = { status: 404, body: { message: 'Not Found' } };
     const preview = await previewInit('av-1', 'ShiftSwap', { userId: 'user-1' });
-    expect(preview.connection).toEqual({ status: 'active', targetReady: false });
+    expect(preview.connection).toEqual({
+      status: 'active',
+      targetReady: true,
+      accountName: 'octo',
+    });
     expect(preview.repoName).toBe('shiftswap');
-    expect(seen).toHaveLength(0);
+    expect(seen[0]!.path).toBe('/repos/octo/shiftswap');
   });
 
   it('a lapsed credential (401 on the lookup) still yields a preview, now reporting needs_reauth', async () => {

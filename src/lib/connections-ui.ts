@@ -1,5 +1,5 @@
-// Pure presentation helpers for the Connections screen, the connect-to-continue
-// prompt and the target pickers (UC-S7; TR FR-087..FR-090, API Contracts 10A).
+// Pure presentation helpers for the Integrations screen, the guided connection
+// steps and the target pickers (UC-S7; TR FR-087..FR-090, API Contracts 10A).
 // No DB, no `fetch`, no React - same contract as `external-preview.ts`, and the
 // testable surface for tests/unit/lib/connections-ui.test.ts. Nothing here ever
 // sees, formats or stores a token or key: only status and identity.
@@ -12,7 +12,10 @@ export type ConnectionStatus = ConnectionDTO['status'];
 /** Mirrors API Contracts `PreviewConnectionDTO` (returned by the three preview routes). */
 export interface PreviewConnection {
   status: ConnectionStatus;
+  /** GitHub/Stitch: true whenever connected (GitHub's owner defaults to the account). Jira: site + project saved. */
   targetReady: boolean;
+  /** The connected account's display name (its login for GitHub); null when unknown or not connected. */
+  accountName: string | null;
 }
 
 export const CONNECTION_PROVIDERS: readonly ConnectionProvider[] = ['github', 'jira', 'stitch'];
@@ -23,8 +26,15 @@ export const PROVIDER_LABEL: Record<ConnectionProvider, string> = {
   stitch: 'Stitch',
 };
 
-/** Where the user is sent to connect a provider (the Connections screen). */
+/** The Integrations screen (the route keeps its `/connections` path so OAuth redirects keep working). */
 export const CONNECTIONS_PATH = '/connections';
+
+/** What each integration is for, shown on its card and step. */
+export const PROVIDER_PURPOSE: Record<ConnectionProvider, string> = {
+  github: 'Create the repository',
+  jira: 'Export epics and stories',
+  stitch: 'Generate UI prototypes',
+};
 
 /**
  * A `returnTo` is only ever a same-site relative path (the server ignores
@@ -151,70 +161,96 @@ export function describeStitchConnectError(code: string | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// Connect-to-continue prompt (FR-089) and reconnect-required state (FR-090)
+// Guided steps at the top of each write screen (FR-089) and reconnect state (FR-090)
 // ---------------------------------------------------------------------------
 
-export type PromptKind = 'connect' | 'reconnect' | 'target';
+/** `done` = finished; `current` = what to do next; `ready` = available, not the focus; `locked` = blocked. */
+export type StepStatus = 'done' | 'current' | 'ready' | 'locked';
 
-export interface ConnectionPromptCopy {
-  kind: PromptKind;
-  message: string;
-  /** Link label; the link always goes to the Connections screen or the picker. */
-  actionLabel: string | null;
+export interface ConnectionStep {
+  id: 'connect' | 'configure' | 'write';
+  label: string;
+  status: StepStatus;
+  /** Why a `locked` step is locked (never colour-only); null otherwise. */
+  lockedReason: string | null;
+}
+
+const STEP_LABELS: Record<ConnectionProvider, [string, string, string]> = {
+  github: ['Connect GitHub', 'Review & name the repository', 'Create repository'],
+  jira: ['Connect Jira', 'Choose site and project', 'Export backlog'],
+  stitch: ['Connect Stitch', 'Review prompt', 'Generate'],
+};
+
+/**
+ * The three steps of a write screen from the preview's `connection` block:
+ * connect, then review/choose a target, then the write itself. Pure. An absent
+ * `connection` counts as not connected (the steps are only shown once loaded).
+ * `targetReady` matters for Jira only (GitHub's owner defaults to the account;
+ * Stitch has no target).
+ */
+export function describeConnectionSteps(
+  provider: ConnectionProvider,
+  connection: PreviewConnection | null | undefined,
+  targetReady: boolean = connection?.targetReady ?? false,
+): ConnectionStep[] {
+  const [connectLabel, configureLabel, writeLabel] = STEP_LABELS[provider];
+  const connected = connection?.status === 'active';
+  const connectFirst = `Connect ${PROVIDER_LABEL[provider]} first`;
+  const needsTarget = provider === 'jira';
+
+  const configure: ConnectionStep = !connected
+    ? { id: 'configure', label: configureLabel, status: 'locked', lockedReason: connectFirst }
+    : {
+        id: 'configure',
+        label: configureLabel,
+        status: needsTarget && targetReady ? 'done' : 'current',
+        lockedReason: null,
+      };
+
+  const write: ConnectionStep = !connected
+    ? { id: 'write', label: writeLabel, status: 'locked', lockedReason: connectFirst }
+    : needsTarget && !targetReady
+      ? {
+          id: 'write',
+          label: writeLabel,
+          status: 'locked',
+          lockedReason: 'Choose a site and project first',
+        }
+      : {
+          id: 'write',
+          label: writeLabel,
+          status: needsTarget ? 'current' : 'ready',
+          lockedReason: null,
+        };
+
+  return [
+    {
+      id: 'connect',
+      label: connectLabel,
+      status: connected ? 'done' : 'current',
+      lockedReason: null,
+    },
+    configure,
+    write,
+  ];
 }
 
 /**
- * The prompt shown in place of the write action, or `null` when the write is
- * available. Reads only the preview's `connection` block. An absent block
- * (older server, or the field not loaded yet) shows no prompt: the write route
- * is still the authority and answers `CONNECTION_REQUIRED` itself.
+ * The write button stays disabled until the connection is active (and, for Jira,
+ * its target is saved). An absent block (older server, or not loaded yet) does
+ * not withhold: the write route is still the authority and answers
+ * `CONNECTION_REQUIRED` itself.
  */
-export function describeConnectionPrompt(
-  provider: ConnectionProvider,
-  connection: PreviewConnection | null | undefined,
-): ConnectionPromptCopy | null {
-  if (!connection) return null;
-  const label = PROVIDER_LABEL[provider];
-  if (connection.status === 'none') {
-    return {
-      kind: 'connect',
-      message: `Connect your ${label} account to continue. The preview below is still yours to read.`,
-      actionLabel: `Connect ${label}`,
-    };
-  }
-  if (connection.status === 'needs_reauth' || connection.status === 'revoked') {
-    return {
-      kind: 'reconnect',
-      message: `Your ${label} connection needs to be reconnected before anything can be written. Your planning work is unaffected.`,
-      actionLabel: `Reconnect ${label}`,
-    };
-  }
-  if (!connection.targetReady && provider !== 'stitch') {
-    return {
-      kind: 'target',
-      message:
-        provider === 'github'
-          ? 'Choose the GitHub owner the repository is created under to continue.'
-          : 'Choose the Jira site and project to export to in order to continue.',
-      actionLabel: null,
-    };
-  }
-  return null;
-}
-
-/** The write button stays disabled exactly while a prompt is showing. */
-export function isWriteWithheld(
-  provider: ConnectionProvider,
-  connection: PreviewConnection | null | undefined,
-): boolean {
-  return describeConnectionPrompt(provider, connection) !== null;
+export function isWriteWithheld(connection: PreviewConnection | null | undefined): boolean {
+  if (!connection) return false;
+  return connection.status !== 'active' || !connection.targetReady;
 }
 
 /**
  * A `409` from a write route (`CONNECTION_REQUIRED`, `RECONNECT_REQUIRED`,
  * `TARGET_REQUIRED`) is a fresher answer than the preview's `connection`
- * block: fold it in so the prompt appears instead of a dead-end error.
- * Returns `null` for any other code.
+ * block: fold it in so the steps show the real state instead of a dead-end
+ * error. Returns `null` for any other code.
  */
 export function connectionAfterWriteError(
   code: string | undefined,
@@ -223,11 +259,15 @@ export function connectionAfterWriteError(
   const targetReady = current?.targetReady ?? true;
   switch (code) {
     case 'CONNECTION_REQUIRED':
-      return { status: 'none', targetReady };
+      return { status: 'none', targetReady, accountName: null };
     case 'RECONNECT_REQUIRED':
-      return { status: 'needs_reauth', targetReady };
+      return { status: 'needs_reauth', targetReady, accountName: current?.accountName ?? null };
     case 'TARGET_REQUIRED':
-      return { status: current?.status ?? 'active', targetReady: false };
+      return {
+        status: current?.status ?? 'active',
+        targetReady: false,
+        accountName: current?.accountName ?? null,
+      };
     default:
       return null;
   }
@@ -297,4 +337,38 @@ export function describeTargetError(code: string | undefined): TargetErrorCopy {
 /** Picker choices never carry text other than the provider's own owner/site/project names. */
 export function ownerOptionLabel(owner: { login: string; kind: 'user' | 'org' }): string {
   return owner.kind === 'org' ? `${owner.login} (organization)` : `${owner.login} (you)`;
+}
+
+// ---------------------------------------------------------------------------
+// The Integrations link in the header (status hint, computed server-side)
+// ---------------------------------------------------------------------------
+
+export interface IntegrationsSummary {
+  connected: number;
+  total: number;
+  needsReconnect: number;
+  /** True when something is not fully connected: the header shows a dot for it. */
+  attention: boolean;
+  /** Screen-reader text for the dot (the dot itself is never the only cue). */
+  hint: string;
+}
+
+/** Only status strings go in; nothing else about a connection reaches the header. */
+export function summarizeIntegrations(statuses: readonly ConnectionStatus[]): IntegrationsSummary {
+  const total = CONNECTION_PROVIDERS.length;
+  const connected = statuses.filter((status) => status === 'active').length;
+  const needsReconnect = statuses.filter(
+    (status) => status === 'needs_reauth' || status === 'revoked',
+  ).length;
+  const hint =
+    needsReconnect > 0
+      ? `${needsReconnect} ${needsReconnect === 1 ? 'integration needs' : 'integrations need'} reconnecting`
+      : `${connected} of ${total} connected`;
+  return {
+    connected,
+    total,
+    needsReconnect,
+    attention: needsReconnect > 0 || connected < total,
+    hint,
+  };
 }

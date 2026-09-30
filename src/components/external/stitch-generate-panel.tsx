@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CircleCheck } from 'lucide-react';
 import { FormMessage } from '@/components/auth/form-message';
@@ -11,12 +11,12 @@ import {
   readImpactFromError,
   stitchProjectUrl,
 } from '@/lib/external-preview';
-import { ConnectionPrompt } from '@/components/connection-prompt';
 import {
   connectionAfterWriteError,
   isWriteWithheld,
   type PreviewConnection,
 } from '@/lib/connections-ui';
+import { ConnectionSteps } from './connection-steps';
 import { PreviewShell, type PreviewState } from './preview-shell';
 import { ImpactGate } from './impact-gate';
 import { OperationStatus } from './operation-status';
@@ -72,6 +72,12 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
   const [retrying, setRetrying] = useState(false);
   const [connection, setConnection] = useState<PreviewConnection | null>(null);
 
+  // Re-load the preview (after a connect / disconnect made from the steps)
+  // without flipping the screen back to "loading": the effect below simply runs
+  // again, and the steps stay mounted.
+  const [reloadKey, setReloadKey] = useState(0);
+  const reloadPreview = useCallback(() => setReloadKey((key) => key + 1), []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -83,7 +89,7 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
         // form - the server still guards with ALREADY_GENERATED, handled below.
         const [response, existing] = await Promise.all([
           fetch(`/api/projects/${projectId}/stitch/preview`),
-          fetchOutput(projectId),
+          reloadKey === 0 ? fetchOutput(projectId) : Promise.resolve(null),
         ]);
 
         if (response.status === 401) {
@@ -119,12 +125,10 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
         setConnection((body as StitchPreviewData).connection ?? null);
         setState({ status: 'ready' });
       } catch {
-        if (!cancelled) {
-          setState({
-            status: 'error',
-            message: 'Could not reach the server. Check your connection and try again.',
-          });
-        }
+        setState({
+          status: 'error',
+          message: 'Could not reach the server. Check your connection and try again.',
+        });
       }
     }
 
@@ -132,7 +136,7 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [projectId, router]);
+  }, [projectId, router, reloadKey]);
 
   async function refreshOutput() {
     const existing = await fetchOutput(projectId);
@@ -196,7 +200,7 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
         }
 
         // FR-089: a 409 CONNECTION_REQUIRED / RECONNECT_REQUIRED is answered
-        // with the connect prompt, not a dead-end error.
+        // by the steps at the top, not a dead-end error.
         const nextConnection = connectionAfterWriteError(errorBody.error?.code, connection);
         if (nextConnection) {
           setConnection(nextConnection);
@@ -231,70 +235,80 @@ export function StitchGeneratePanel({ projectId }: StitchGeneratePanelProps) {
     }
   }
 
+  // Until Stitch is connected the prompt stays readable but locked.
+  const locked = connection !== null && connection.status !== 'active';
+
   return (
-    <PreviewShell state={state}>
-      {preview &&
-        (result ? (
-          <StitchResultView
-            result={result}
-            onCopy={handleCopy}
-            copied={copied}
-            onRetry={() => {
-              // Re-runs the normal generate flow, impact gate included.
-              setSubmitError(null);
-              setRetrying(true);
-              setResult(null);
-            }}
-            onSettled={refreshOutput}
-          />
-        ) : (
-          <div className="flex flex-col gap-6">
-            <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
-              <h3 className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase">
-                Prompt
-              </h3>
-              {/* NFR-005: model-derived text is rendered as escaped text,
+    <div className="flex flex-col gap-6">
+      {connection && (
+        <ConnectionSteps
+          provider="stitch"
+          connection={connection}
+          returnTo={`/projects/${projectId}/outputs/stitch`}
+          onChanged={reloadPreview}
+        />
+      )}
+      <PreviewShell state={state}>
+        {preview &&
+          (result ? (
+            <StitchResultView
+              result={result}
+              onCopy={handleCopy}
+              copied={copied}
+              onRetry={() => {
+                // Re-runs the normal generate flow, impact gate included.
+                setSubmitError(null);
+                setRetrying(true);
+                setResult(null);
+              }}
+              onSettled={refreshOutput}
+            />
+          ) : (
+            <div
+              inert={locked}
+              className={`flex flex-col gap-6 transition-opacity ${locked ? 'opacity-60' : ''}`}
+            >
+              <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
+                <h3 className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase">
+                  Prompt
+                </h3>
+                {/* NFR-005: model-derived text is rendered as escaped text,
                   never raw HTML - a `<pre>`/`whitespace-pre-wrap` block, no
                   `dangerouslySetInnerHTML`. */}
-              <pre className="text-on-surface bg-surface-container mt-2 max-h-96 overflow-auto rounded-lg p-3 text-xs leading-relaxed whitespace-pre-wrap">
-                {preview.prompt}
-              </pre>
+                <pre className="text-on-surface bg-surface-container mt-2 max-h-96 overflow-auto rounded-lg p-3 text-xs leading-relaxed whitespace-pre-wrap">
+                  {preview.prompt}
+                </pre>
+              </div>
+
+              <ImpactGate
+                impact={preview.impact}
+                acknowledged={acknowledged}
+                onAcknowledgedChange={setAcknowledged}
+                idPrefix="stitch-generate"
+              />
+
+              {submitError && <FormMessage variant="error">{submitError}</FormMessage>}
+
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={
+                  submitting ||
+                  isWriteWithheld(connection) ||
+                  isExternalWriteBlocked(preview.impact, acknowledged)
+                }
+                className={SUBMIT_CLASSNAME}
+              >
+                {submitting
+                  ? 'Generating…'
+                  : retrying
+                    ? 'Retry with Stitch'
+                    : 'Generate UI prototype'}
+              </button>
             </div>
-
-            <ImpactGate
-              impact={preview.impact}
-              acknowledged={acknowledged}
-              onAcknowledgedChange={setAcknowledged}
-              idPrefix="stitch-generate"
-            />
-
-            <ConnectionPrompt
-              provider="stitch"
-              connection={connection}
-              returnTo={`/projects/${projectId}/outputs/stitch`}
-            />
-
-            {submitError && <FormMessage variant="error">{submitError}</FormMessage>}
-
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={
-                submitting ||
-                isWriteWithheld('stitch', connection) ||
-                isExternalWriteBlocked(preview.impact, acknowledged)
-              }
-              className={SUBMIT_CLASSNAME}
-            >
-              {submitting
-                ? 'Generating…'
-                : retrying
-                  ? 'Retry with Stitch'
-                  : 'Generate UI prototype'}
-            </button>
-          </div>
-        ))}
-    </PreviewShell>
+          ))}
+      </PreviewShell>
+    </div>
   );
 }
 

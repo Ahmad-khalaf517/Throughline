@@ -31,7 +31,7 @@ export function ReconnectBadge({
         href={CONNECTIONS_PATH}
         className="text-primary-container hover:text-primary-container-hover focus-visible:ring-primary rounded font-medium focus-visible:ring-2 focus-visible:outline-none"
       >
-        Open Connections →
+        Open Integrations →
       </Link>
     </div>
   );

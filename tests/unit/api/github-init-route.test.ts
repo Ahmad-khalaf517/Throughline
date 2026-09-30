@@ -181,7 +181,7 @@ describe('POST /api/projects/:projectId/github/init', () => {
       repoName: 'suggested',
       starter: null,
       impact: [],
-      connection: { status: 'active', targetReady: true },
+      connection: { status: 'active', targetReady: true, accountName: null },
     });
   });
 
@@ -260,7 +260,7 @@ describe('POST /api/projects/:projectId/github/init', () => {
           acknowledged: false,
         },
       ],
-      connection: { status: 'active', targetReady: true },
+      connection: { status: 'active', targetReady: true, accountName: null },
     });
     mockedGetDisplayKeys.mockResolvedValue(new Map([['iv-1', 'ADR-01']]));
 
@@ -289,7 +289,12 @@ describe('POST /api/projects/:projectId/github/init', () => {
     expect(body).toMatchObject({ status: 'completed', ref: { id: 'ref-1', provider: 'github' } });
     // Round 14: the ctx is built by the route from the verified user and the
     // project's chosen owner (Module Boundaries 4.6, D1).
-    expect(mockedInitRepo).toHaveBeenCalledWith('arch-v1', 'my-repo', { userId: 'user-1' });
+    expect(mockedInitRepo).toHaveBeenCalledWith(
+      'arch-v1',
+      'my-repo',
+      { userId: 'user-1' },
+      'public',
+    );
     // init only wants the impact re-check from the preview - it must not pass
     // a project name, which would make previewInit look names up on GitHub.
     expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1', undefined, { userId: 'user-1' });
@@ -301,10 +306,35 @@ describe('POST /api/projects/:projectId/github/init', () => {
 
     await POST(postRequest({ repoName: 'r', impactAcknowledged: true }), paramsFor('project-1'));
 
-    expect(mockedInitRepo).toHaveBeenCalledWith('arch-v1', 'r', {
-      userId: 'user-1',
-      githubOwner: 'acme',
-    });
+    expect(mockedInitRepo).toHaveBeenCalledWith(
+      'arch-v1',
+      'r',
+      { userId: 'user-1', githubOwner: 'acme' },
+      'public',
+    );
+  });
+
+  it('passes visibility: private through to initRepo', async () => {
+    mockedInitRepo.mockResolvedValue(makeRef());
+
+    const response = await POST(
+      postRequest({ repoName: 'r', impactAcknowledged: true, visibility: 'private' }),
+      paramsFor('project-1'),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockedInitRepo).toHaveBeenCalledWith('arch-v1', 'r', { userId: 'user-1' }, 'private');
+  });
+
+  it('rejects an unknown visibility with VALIDATION_ERROR before anything is written', async () => {
+    const response = await POST(
+      postRequest({ repoName: 'r', impactAcknowledged: true, visibility: 'internal' }),
+      paramsFor('project-1'),
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe('VALIDATION_ERROR');
+    expect(mockedInitRepo).not.toHaveBeenCalled();
   });
 
   it('returns 409 TARGET_REQUIRED { target: githubOwner } when the project has no owner', async () => {

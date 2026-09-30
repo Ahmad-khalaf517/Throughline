@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { FormMessage } from '@/components/auth/form-message';
 import { FlaggedGlyph } from '@/components/status/status-badge';
@@ -12,13 +12,14 @@ import {
   missingJiraDecisions,
   readImpactFromError,
 } from '@/lib/external-preview';
-import { ConnectionPrompt } from '@/components/connection-prompt';
 import {
   connectionAfterWriteError,
+  describeConnectionSteps,
   isWriteWithheld,
   type PreviewConnection,
 } from '@/lib/connections-ui';
 import { PreviewShell, type PreviewState } from './preview-shell';
+import { ConnectionSteps } from './connection-steps';
 import { JiraTargetPicker, type ProjectTargets } from './target-pickers';
 import { ImpactGate } from './impact-gate';
 import { OperationStatus } from './operation-status';
@@ -82,6 +83,12 @@ export function JiraExportPanel({ projectId, jiraTarget }: JiraExportPanelProps)
   const [result, setResult] = useState<JiraExportResult | null>(null);
   const [connection, setConnection] = useState<PreviewConnection | null>(null);
 
+  // Re-load the preview (after a connect / disconnect made from the steps)
+  // without flipping the screen back to "loading": the effect below simply runs
+  // again, and the steps stay mounted.
+  const [reloadKey, setReloadKey] = useState(0);
+  const reloadPreview = useCallback(() => setReloadKey((key) => key + 1), []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -121,12 +128,10 @@ export function JiraExportPanel({ projectId, jiraTarget }: JiraExportPanelProps)
         setConnection((body as JiraPreviewData).connection ?? null);
         setState({ status: 'ready' });
       } catch {
-        if (!cancelled) {
-          setState({
-            status: 'error',
-            message: 'Could not reach the server. Check your connection and try again.',
-          });
-        }
+        setState({
+          status: 'error',
+          message: 'Could not reach the server. Check your connection and try again.',
+        });
       }
     }
 
@@ -134,7 +139,7 @@ export function JiraExportPanel({ projectId, jiraTarget }: JiraExportPanelProps)
     return () => {
       cancelled = true;
     };
-  }, [projectId, router]);
+  }, [projectId, router, reloadKey]);
 
   const displayKeyByLogicalItemId = useMemo(() => {
     const map = new Map<string, string>();
@@ -208,7 +213,7 @@ export function JiraExportPanel({ projectId, jiraTarget }: JiraExportPanelProps)
         }
 
         // FR-089: a 409 CONNECTION_REQUIRED / RECONNECT_REQUIRED / TARGET_REQUIRED
-        // is answered with the connect prompt, not a dead-end error.
+        // is answered by the steps at the top, not a dead-end error.
         const nextConnection = connectionAfterWriteError(errorBody.error?.code, connection);
         if (nextConnection) {
           setConnection(nextConnection);
@@ -238,14 +243,27 @@ export function JiraExportPanel({ projectId, jiraTarget }: JiraExportPanelProps)
     );
   }
 
+  // Until Jira is connected the preview stays readable but locked; a missing
+  // target only holds back the export button (step 3 says why).
+  const locked = connection !== null && connection.status !== 'active';
+  const writeStep = describeConnectionSteps('jira', connection)[2]!;
+
   return (
     <div className="flex flex-col gap-6">
       {connection && (
-        <JiraTargetPicker
-          projectId={projectId}
-          current={jiraTarget}
+        <ConnectionSteps
+          provider="jira"
           connection={connection}
-          onSaved={handleTargetSaved}
+          returnTo={`/projects/${projectId}/outputs/jira`}
+          onChanged={reloadPreview}
+          configure={
+            <JiraTargetPicker
+              projectId={projectId}
+              current={jiraTarget}
+              connection={connection}
+              onSaved={handleTargetSaved}
+            />
+          }
         />
       )}
       <PreviewShell state={state}>
@@ -253,7 +271,11 @@ export function JiraExportPanel({ projectId, jiraTarget }: JiraExportPanelProps)
           (result ? (
             <JiraResultView result={result} displayKeyByLogicalItemId={displayKeyByLogicalItemId} />
           ) : (
-            <form onSubmit={handleSubmit} className="flex flex-col gap-6">
+            <form
+              onSubmit={handleSubmit}
+              inert={locked}
+              className={`flex flex-col gap-6 transition-opacity ${locked ? 'opacity-60' : ''}`}
+            >
               <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
                 <p className="text-on-surface text-sm font-medium">
                   {preview.epics} Epic{preview.epics === 1 ? '' : 's'} · {preview.stories} Stor
@@ -309,19 +331,13 @@ export function JiraExportPanel({ projectId, jiraTarget }: JiraExportPanelProps)
                 </p>
               )}
 
-              <ConnectionPrompt
-                provider="jira"
-                connection={connection}
-                returnTo={`/projects/${projectId}/outputs/jira`}
-              />
-
               {submitError && <FormMessage variant="error">{submitError}</FormMessage>}
 
               <button
                 type="submit"
                 disabled={
                   submitting ||
-                  isWriteWithheld('jira', connection) ||
+                  isWriteWithheld(connection) ||
                   missing.length > 0 ||
                   isExternalWriteBlocked(preview.impact, acknowledged)
                 }
@@ -329,6 +345,9 @@ export function JiraExportPanel({ projectId, jiraTarget }: JiraExportPanelProps)
               >
                 {submitting ? 'Exporting…' : 'Export to Jira'}
               </button>
+              {!locked && writeStep.status === 'locked' && writeStep.lockedReason && (
+                <p className="text-on-surface-variant -mt-3 text-xs">{writeStep.lockedReason}.</p>
+              )}
             </form>
           ))}
       </PreviewShell>

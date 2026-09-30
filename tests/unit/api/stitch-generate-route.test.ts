@@ -147,7 +147,7 @@ describe('POST /api/projects/:projectId/stitch/generate', () => {
     mockedPreviewPrompt.mockResolvedValue({
       prompt: 'Generate...',
       impact: [],
-      connection: { status: 'active', targetReady: true },
+      connection: { status: 'active', targetReady: true, accountName: null },
     });
   });
 
@@ -188,7 +188,7 @@ describe('POST /api/projects/:projectId/stitch/generate', () => {
   it('returns 409 IMPACT_NOT_ACKNOWLEDGED with details.impact when impact is unacknowledged', async () => {
     mockedPreviewPrompt.mockResolvedValue({
       prompt: 'Generate...',
-      connection: { status: 'active', targetReady: true },
+      connection: { status: 'active', targetReady: true, accountName: null },
       impact: [
         {
           subjectKind: 'item_version',

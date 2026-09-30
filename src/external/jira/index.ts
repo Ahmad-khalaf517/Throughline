@@ -193,6 +193,8 @@ export interface PreviewConnection {
   status: ConnectionStatus['status'];
   /** `project.jira_cloud_id` and `project.jira_project_key` are both set. */
   targetReady: boolean;
+  /** The connected account's display name, or null. Never a token. */
+  accountName: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -637,6 +639,7 @@ export async function previewExport(
   const connection: PreviewConnection = {
     status: jira?.status ?? 'none',
     targetReady: target !== null,
+    accountName: jira?.displayName ?? null,
   };
 
   return { epics: epics.length, stories: stories.length, skipped, impact, connection };

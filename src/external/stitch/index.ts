@@ -94,6 +94,8 @@ export type StitchCtx = { userId: string };
 export interface PreviewConnection {
   status: ConnectionStatus['status'];
   targetReady: true;
+  /** The connected account's display name, or null. Never a key. */
+  accountName: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +243,11 @@ export async function previewPrompt(
 
   // Read last, as the other providers' previews do, so the status is as current as it can be.
   const stitch = (await listConnections(ctx.userId)).find((c) => c.provider === 'stitch');
-  const connection: PreviewConnection = { status: stitch?.status ?? 'none', targetReady: true };
+  const connection: PreviewConnection = {
+    status: stitch?.status ?? 'none',
+    targetReady: true,
+    accountName: stitch?.displayName ?? null,
+  };
 
   return { prompt, impact, connection };
 }

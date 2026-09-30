@@ -411,7 +411,11 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
           displayKey: story.displayKey,
         }),
       );
-      expect(preview.connection).toEqual({ status: 'active', targetReady: true });
+      expect(preview.connection).toEqual({
+        status: 'active',
+        targetReady: true,
+        accountName: null,
+      });
 
       // No decision supplied -> refuses loudly. Never a silent skip or a
       // silent duplicate.
@@ -842,7 +846,7 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       const ctx = { userId, jiraCloudId: CLOUD_ID, jiraProjectKey: DEFAULT_PROJECT_KEY };
 
       const preview = await jira.previewExport(versionId, ctx);
-      expect(preview.connection).toEqual({ status: 'none', targetReady: true });
+      expect(preview.connection).toEqual({ status: 'none', targetReady: true, accountName: null });
       await expect(jira.exportBacklog(versionId, new Map(), ctx)).rejects.toBeInstanceOf(
         connections.ConnectionRequiredError,
       );

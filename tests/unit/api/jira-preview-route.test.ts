@@ -167,7 +167,7 @@ describe('GET /api/projects/:projectId/jira/preview', () => {
         },
       ],
       impact: [],
-      connection: { status: 'active', targetReady: true },
+      connection: { status: 'active', targetReady: true, accountName: null },
     });
 
     const response = await GET(request(), paramsFor('project-1'));
@@ -187,7 +187,7 @@ describe('GET /api/projects/:projectId/jira/preview', () => {
     });
     expect(body.impact).toEqual([]);
     // Round 14 (FR-089): the connection block rides along untouched.
-    expect(body.connection).toEqual({ status: 'active', targetReady: true });
+    expect(body.connection).toEqual({ status: 'active', targetReady: true, accountName: null });
   });
 
   it('passes the JiraCtx built from the verified user and the project targets to previewExport', async () => {
@@ -201,7 +201,7 @@ describe('GET /api/projects/:projectId/jira/preview', () => {
       stories: 0,
       skipped: [],
       impact: [],
-      connection: { status: 'none', targetReady: true },
+      connection: { status: 'none', targetReady: true, accountName: null },
     });
 
     const response = await GET(request(), paramsFor('project-1'));
@@ -221,12 +221,16 @@ describe('GET /api/projects/:projectId/jira/preview', () => {
       stories: 1,
       skipped: [],
       impact: [],
-      connection: { status: 'none', targetReady: false },
+      connection: { status: 'none', targetReady: false, accountName: null },
     });
 
     const response = await GET(request(), paramsFor('project-1'));
 
     expect(mockedPreviewExport).toHaveBeenCalledWith('backlog-v1', { userId: 'user-1' });
-    expect((await response.json()).connection).toEqual({ status: 'none', targetReady: false });
+    expect((await response.json()).connection).toEqual({
+      status: 'none',
+      targetReady: false,
+      accountName: null,
+    });
   });
 });

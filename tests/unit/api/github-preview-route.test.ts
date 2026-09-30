@@ -56,7 +56,7 @@ const mockedPreviewInit = vi.mocked(previewInit);
 
 const user = { id: 'user-1', email: 'a@b.com', displayName: null };
 const now = new Date('2024-01-01T00:00:00.000Z');
-const CONNECTION = { status: 'active' as const, targetReady: true };
+const CONNECTION = { status: 'active' as const, targetReady: true, accountName: null };
 
 function baseProject(architectureApproved: string | null = 'arch-v1') {
   const artifacts = emptyArtifactSummaries();
@@ -240,6 +240,7 @@ describe('POST /api/projects/:projectId/github/preview', () => {
       mode: 'docs-only',
       repoName: 'throughline-project-project-1',
       starter: null,
+      visibility: 'public',
       impact: [],
       connection: CONNECTION,
     });

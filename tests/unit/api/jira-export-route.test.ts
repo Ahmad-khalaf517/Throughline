@@ -169,7 +169,7 @@ describe('POST /api/projects/:projectId/jira/export', () => {
       stories: 3,
       skipped: [skippedPreviewItem, needsDecisionPreviewItem],
       impact: [],
-      connection: { status: 'active', targetReady: true },
+      connection: { status: 'active', targetReady: true, accountName: null },
     });
   });
 
@@ -258,7 +258,7 @@ describe('POST /api/projects/:projectId/jira/export', () => {
           acknowledged: false,
         },
       ],
-      connection: { status: 'active', targetReady: true },
+      connection: { status: 'active', targetReady: true, accountName: null },
     });
     mockedGetDisplayKeys.mockResolvedValue(
       new Map([

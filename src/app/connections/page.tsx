@@ -11,7 +11,7 @@ interface ConnectionsPageProps {
 }
 
 /**
- * The Connections screen (FR-087, API Contracts 10A): status and identity per
+ * The Integrations screen (FR-087, API Contracts 10A): status and identity per
  * provider, never a token. Reads through `connections.listConnections` (pages may
  * import every module) and maps with `toConnectionDTO`, the same mapping
  * `GET /api/connections` uses, so no secret-bearing field can reach the client.
@@ -42,10 +42,11 @@ export default async function ConnectionsPage({ searchParams }: ConnectionsPageP
       </Link>
 
       <header className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
-        <h1 className="text-on-surface text-display-sm font-semibold">Connections</h1>
+        <h1 className="text-on-surface text-display-sm font-semibold">Integrations</h1>
         <p className="text-on-surface-variant mt-1 text-sm">
           Throughline writes to GitHub, Jira and Stitch with your own accounts. Planning never needs
-          a connection - only creating things there does.
+          an integration - only creating things there does. Connect them here before you create a
+          repository, export epics or generate a prototype.
         </p>
       </header>
 

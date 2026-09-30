@@ -273,7 +273,11 @@ describe('previewPrompt (FR-089)', () => {
 
     const preview = await previewPrompt(VERSION, CTX);
 
-    expect(preview.connection).toEqual({ status: 'needs_reauth', targetReady: true });
+    expect(preview.connection).toEqual({
+      status: 'needs_reauth',
+      targetReady: true,
+      accountName: null,
+    });
     expect(preview.prompt).toContain('UI-01');
     expect(mocks.listConnections).toHaveBeenCalledWith('user-1');
     expect(mocks.getCredential).not.toHaveBeenCalled();
@@ -284,6 +288,7 @@ describe('previewPrompt (FR-089)', () => {
     expect((await previewPrompt(VERSION, CTX)).connection).toEqual({
       status: 'none',
       targetReady: true,
+      accountName: null,
     });
   });
 });

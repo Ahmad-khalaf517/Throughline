@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CircleAlert, CircleCheck } from 'lucide-react';
 import { FieldShell } from '@/components/auth/field-shell';
@@ -25,8 +25,8 @@ const SELECT_CLASSNAME =
 const SAVE_CLASSNAME =
   'border-outline-variant text-on-surface hover:bg-surface-container-low focus-visible:ring-primary h-11 shrink-0 rounded-lg border px-4 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60';
 
-const CARD_CLASSNAME =
-  'border-surface-dim bg-surface-container-lowest flex flex-col gap-3 rounded-xl border p-6';
+// Sits inside a guided-steps card, so it has no border or padding of its own.
+const CARD_CLASSNAME = 'flex flex-col gap-3';
 
 async function readCode(response: Response): Promise<string | undefined> {
   const body = (await response.json().catch(() => null)) as ErrorBody | null;
@@ -36,7 +36,7 @@ async function readCode(response: Response): Promise<string | undefined> {
 /** `PATCH /api/projects/:id/targets`; resolves to the saved targets or an error copy. */
 async function saveTargets(
   projectId: string,
-  patch: { githubOwner: string } | { jira: { cloudId: string; projectKey: string } },
+  patch: { githubOwner: string | null } | { jira: { cloudId: string; projectKey: string } },
 ): Promise<
   | { ok: true; targets: ProjectTargets }
   | { ok: false; unauthenticated?: boolean; error: TargetErrorCopy }
@@ -77,39 +77,48 @@ function Feedback({ error, saved }: { error: TargetErrorCopy | null; saved: bool
   );
 }
 
-interface GithubOwnerPickerProps {
+interface GithubOwnerRowProps {
   projectId: string;
-  current: string | null;
-  connection: PreviewConnection | null;
+  /** The project's saved owner, or `null` = the default (the connected account). */
+  savedOwner: string | null;
+  /** The connected account's own login - the default owner. */
+  accountLogin: string | null;
   onSaved: (targets: ProjectTargets) => void;
 }
 
 /**
- * FR-088: the GitHub owner (own login or an organization) new repositories are
- * created under. Options come from `GET /api/connections/github/owners`, which
- * needs a usable connection - without one the picker just says so (the
- * connect-to-continue prompt carries the action). `TARGET_LOCKED` (an export
- * already exists) disables it with an explanation.
+ * FR-088: where the repository is created. It defaults to the connected
+ * account's own login, so nothing has to be chosen; "Change" expands the list
+ * (`GET /api/connections/github/owners`) for an organization. Picking the
+ * account's own login sends `{ githubOwner: null }` (reset to the default).
+ * `TARGET_LOCKED` (a repository export already exists) removes the affordance and
+ * says why; `TARGET_NOT_ACCESSIBLE` shows inline.
  */
-export function GithubOwnerPicker({
+export function GithubOwnerRow({
   projectId,
-  current,
-  connection,
+  savedOwner,
+  accountLogin,
   onSaved,
-}: GithubOwnerPickerProps) {
+}: GithubOwnerRowProps) {
   const router = useRouter();
-  const usable = connection?.status === 'active';
+  const [changing, setChanging] = useState(false);
   const [owners, setOwners] = useState<{ login: string; kind: 'user' | 'org' }[] | null>(null);
   const [loadError, setLoadError] = useState<TargetErrorCopy | null>(null);
-  const [selected, setSelected] = useState(current ?? '');
-  const [saved, setSaved] = useState(current);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<TargetErrorCopy | null>(null);
   const [locked, setLocked] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
+  const changeRef = useRef<HTMLButtonElement>(null);
 
+  const effective = savedOwner ?? accountLogin;
+  const isAccount =
+    effective !== null &&
+    accountLogin !== null &&
+    effective.toLowerCase() === accountLogin.toLowerCase();
+
+  // Owners are only listed once the user opens "Change".
   useEffect(() => {
-    if (!usable) return;
+    if (!changing || owners !== null) return;
     let cancelled = false;
     (async () => {
       try {
@@ -135,58 +144,75 @@ export function GithubOwnerPicker({
     return () => {
       cancelled = true;
     };
-  }, [usable, router]);
+  }, [changing, owners, router]);
 
-  async function handleSave() {
-    if (!selected || pending) return;
+  async function handleChange(login: string) {
+    if (login === '' || pending) return;
+    const own = accountLogin !== null && login.toLowerCase() === accountLogin.toLowerCase();
     setPending(true);
     setError(null);
     setJustSaved(false);
-    const result = await saveTargets(projectId, { githubOwner: selected });
+    const result = await saveTargets(projectId, { githubOwner: own ? null : login });
     setPending(false);
     if (!result.ok) {
       if (result.unauthenticated) {
         router.push('/sign-in');
         return;
       }
-      if (result.error.kind === 'locked') setLocked(true);
+      if (result.error.kind === 'locked') {
+        setLocked(true);
+        setChanging(false);
+      }
       setError(result.error);
       return;
     }
-    setSaved(result.targets.githubOwner);
     setJustSaved(true);
+    setChanging(false);
     onSaved(result.targets);
+    changeRef.current?.focus();
   }
 
-  const disabled = !usable || locked || pending || owners === null;
-  const unchanged = selected === (saved ?? '');
-
   return (
-    <div className={CARD_CLASSNAME}>
-      <FieldShell
-        id="github-owner"
-        label="GitHub owner"
-        helperText={
-          locked ? undefined : 'New repositories are created under this account or organization.'
-        }
-      >
-        <div className="flex gap-2">
-          <select
-            id="github-owner"
-            value={selected}
-            onChange={(event) => {
-              setSelected(event.target.value);
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+        <p className="text-on-surface">
+          Repository owner:{' '}
+          <strong className="font-medium">
+            {effective ? `@${effective}` : 'your GitHub account'}
+          </strong>{' '}
+          <span className="text-on-surface-variant">
+            ({isAccount || !effective ? 'your account' : 'organization'})
+          </span>
+        </p>
+        {!locked && !changing && (
+          <button
+            ref={changeRef}
+            type="button"
+            onClick={() => {
+              setChanging(true);
               setJustSaved(false);
               setError(null);
             }}
-            disabled={disabled}
-            className={SELECT_CLASSNAME}
+            className="text-primary-container hover:text-primary-container-hover focus-visible:ring-primary rounded text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
           >
-            <option value="">{usable ? 'Choose an owner…' : 'Connect GitHub first'}</option>
-            {/* A saved owner that is not in the list (e.g. list not loaded) stays selectable. */}
-            {saved && !owners?.some((owner) => owner.login === saved) && (
-              <option value={saved}>{saved}</option>
-            )}
+            Change
+          </button>
+        )}
+      </div>
+
+      {changing && (
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor="github-owner" className="sr-only">
+            Repository owner
+          </label>
+          <select
+            id="github-owner"
+            value={effective ?? ''}
+            onChange={(event) => handleChange(event.target.value)}
+            disabled={pending || owners === null}
+            className={`${SELECT_CLASSNAME} max-w-xs`}
+          >
+            {owners === null && <option value={effective ?? ''}>Loading…</option>}
             {owners?.map((owner) => (
               <option key={owner.login} value={owner.login}>
                 {ownerOptionLabel(owner)}
@@ -195,25 +221,26 @@ export function GithubOwnerPicker({
           </select>
           <button
             type="button"
-            onClick={handleSave}
-            disabled={disabled || !selected || unchanged}
+            onClick={() => setChanging(false)}
+            disabled={pending}
             className={SAVE_CLASSNAME}
           >
-            {pending ? 'Saving…' : 'Save owner'}
+            Cancel
           </button>
         </div>
-      </FieldShell>
+      )}
+
       {locked && (
         <p className="text-on-surface-variant text-xs leading-relaxed">
           {describeTargetError('TARGET_LOCKED').message}
         </p>
       )}
-      {!usable && (
+      {!changing && !locked && !error && !justSaved && (
         <p className="text-on-surface-variant text-xs">
-          Owners are listed once your GitHub connection is active.
+          Repositories are created under your own account unless you change this.
         </p>
       )}
-      <Feedback error={error ?? loadError} saved={justSaved} />
+      {!locked && <Feedback error={error ?? loadError} saved={justSaved} />}
     </div>
   );
 }
@@ -267,7 +294,11 @@ export function JiraTargetPicker({
         const body = (await response.json()) as {
           sites: { cloudId: string; url: string; name: string }[];
         };
-        if (!cancelled) setSites(body.sites);
+        if (!cancelled) {
+          setSites(body.sites);
+          // Exactly one accessible site: nothing to choose. Saving stays explicit.
+          if (body.sites.length === 1) setCloudId((chosen) => chosen || body.sites[0]!.cloudId);
+        }
       } catch {
         if (!cancelled) setLoadError({ kind: 'other', message: 'Could not load your Jira sites.' });
       }
@@ -297,7 +328,12 @@ export function JiraTargetPicker({
           return;
         }
         const body = (await response.json()) as { projects: { key: string; name: string }[] };
-        if (!cancelled) setProjects(body.projects);
+        if (!cancelled) {
+          setProjects(body.projects);
+          // Exactly one project on the site: pre-select it. Saving stays explicit.
+          if (body.projects.length === 1)
+            setProjectKey((chosen) => chosen || body.projects[0]!.key);
+        }
       } catch {
         if (!cancelled) {
           setProjects([]);

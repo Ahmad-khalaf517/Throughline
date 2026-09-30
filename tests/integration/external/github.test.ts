@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
 import type postgres from 'postgres';
 import { connect } from '../support/connection';
@@ -104,8 +104,17 @@ async function ctxForVersion(architectureVersionId: string) {
   return { userId: row!.owner_user_id, githubOwner: FAKE_OWNER };
 }
 
-const initRepo = async (architectureVersionId: string, repoName: string) =>
-  github.initRepo(architectureVersionId, repoName, await ctxForVersion(architectureVersionId));
+const initRepo = async (
+  architectureVersionId: string,
+  repoName: string,
+  visibility?: 'public' | 'private',
+) =>
+  github.initRepo(
+    architectureVersionId,
+    repoName,
+    await ctxForVersion(architectureVersionId),
+    visibility,
+  );
 
 const previewInit = async (architectureVersionId: string, projectName?: string) =>
   github.previewInit(
@@ -1036,7 +1045,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
   // selected option and each ADR's item-version payload (see repo-docs.ts,
   // whose builders are unit-tested on their own) - not just ids.
   describe('initRepo - repository visibility', () => {
-    it('always asks GitHub for a public repository, never a private one', async () => {
+    it('asks GitHub for a public repository by default', async () => {
       const { architectureVersionId } = await approvedArchitecture('github visibility');
       const repoName = `public-repo-${randomUUID().slice(0, 8)}`;
       const fake = createFakeGitHub(FAKE_OWNER);
@@ -1050,6 +1059,59 @@ describe('github (E4-S2 / SCRUM-51)', () => {
         name: github.normalizeRepoName(repoName),
         private: false,
       });
+    });
+
+    it('asks GitHub for a private repository when the user chose private, and records it on the operation', async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('github private');
+      const repoName = `private-repo-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        await initRepo(architectureVersionId, repoName, 'private');
+      });
+
+      expect(fake.createRequests).toHaveLength(1);
+      expect(fake.createRequests[0]).toMatchObject({
+        name: github.normalizeRepoName(repoName),
+        private: true,
+      });
+      const [op] = await sql<{ visibility: string | null; request_hash: string }[]>`
+        SELECT target_descriptor->>'visibility' AS visibility, request_hash
+        FROM external_operation WHERE project_id = ${projectId} AND provider = 'github'
+      `;
+      expect(op!.visibility).toBe('private');
+      // private joins the hash, so it differs from the public request's hash
+      const normalized = github.normalizeRepoName(repoName);
+      const publicHash = createHash('sha256')
+        .update(JSON.stringify({ repoName: normalized, mode: 'docs-only', owner: FAKE_OWNER }))
+        .digest('hex');
+      expect(op!.request_hash).not.toBe(publicHash);
+    });
+
+    it('keeps the public request hash unchanged (no visibility in it) and records public', async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('github public hash');
+      const repoName = `public-hash-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        await initRepo(architectureVersionId, repoName);
+      });
+
+      const [op] = await sql<{ visibility: string | null; request_hash: string }[]>`
+        SELECT target_descriptor->>'visibility' AS visibility, request_hash
+        FROM external_operation WHERE project_id = ${projectId} AND provider = 'github'
+      `;
+      expect(op!.visibility).toBe('public');
+      const expected = createHash('sha256')
+        .update(
+          JSON.stringify({
+            repoName: github.normalizeRepoName(repoName),
+            mode: 'docs-only',
+            owner: FAKE_OWNER,
+          }),
+        )
+        .digest('hex');
+      expect(op!.request_hash).toBe(expected);
     });
   });
 
@@ -1311,19 +1373,23 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       expect(spy).not.toHaveBeenCalled();
     });
 
-    it('no github_owner on the project -> GithubTargetRequiredError, no row, no network', async () => {
+    it("no github_owner on the project -> the repository is created under the connection's own login", async () => {
       const { projectId, architectureVersionId } = await approvedArchitecture('github r14 target');
       const ctx = await ctxForVersion(architectureVersionId);
-      const spy = vi.fn();
+      const fake = createFakeGitHub(FAKE_OWNER);
 
-      await withFakeFetch(spy as never, async () => {
-        await expect(
-          github.initRepo(architectureVersionId, 'no-owner', { userId: ctx.userId }),
-        ).rejects.toBeInstanceOf(github.GithubTargetRequiredError);
+      await withFakeFetch(fake.fetch, async () => {
+        const ref = await github.initRepo(architectureVersionId, 'no-owner', {
+          userId: ctx.userId,
+          githubOwner: null,
+        });
+        expect(ref.externalKey).toBe(`${FAKE_OWNER}/no-owner`);
       });
 
-      expect(await githubOperationRows(projectId)).toHaveLength(0);
-      expect(spy).not.toHaveBeenCalled();
+      const [op] = await operationColumns(projectId);
+      expect(op!.status).toBe('completed');
+      expect(op!.owner).toBe(FAKE_OWNER);
+      expect(fake.createRequests).toHaveLength(1);
     });
 
     it('a 401 on create -> connection needs_reauth + ReconnectRequiredError, the operation is NOT failed (T49)', async () => {

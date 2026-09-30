@@ -913,7 +913,7 @@ describe('stitch per-user connection (SCRUM-98; ERD 7.5/7.6, T45/T49/T51 stitch 
     expect(sdkWorld.createProjectCalls).toBe(0);
     // The preview needs no connection.
     const preview = await stitch.previewPrompt(versionId, { userId });
-    expect(preview.connection).toEqual({ status: 'none', targetReady: true });
+    expect(preview.connection).toEqual({ status: 'none', targetReady: true, accountName: null });
   });
 
   it('T49 (stitch half): AUTH_FAILED -> connection needs_reauth, operation untouched (not failed), no fallback row; retry stops before any SDK call', async () => {

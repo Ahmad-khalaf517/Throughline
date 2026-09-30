@@ -83,7 +83,12 @@ export async function POST(request: Request, { params }: RouteParams) {
     }
 
     try {
-      const ref = await initRepo(architectureVersionId, parsed.data.repoName, ctx);
+      const ref = await initRepo(
+        architectureVersionId,
+        parsed.data.repoName,
+        ctx,
+        parsed.data.visibility,
+      );
       return NextResponse.json({ status: 'completed', ref: await serializeRefWithFreshDrift(ref) });
     } catch (error) {
       if (error instanceof GithubTargetRequiredError) {

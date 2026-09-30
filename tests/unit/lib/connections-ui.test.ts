@@ -3,7 +3,7 @@ import {
   availableActions,
   connectionAfterWriteError,
   connectStartHref,
-  describeConnectionPrompt,
+  describeConnectionSteps,
   describeConnectionStatus,
   describeDisconnectResult,
   describeNeedsReconnect,
@@ -12,6 +12,7 @@ import {
   isSafeReturnTo,
   isWriteWithheld,
   readConnectionsBanner,
+  summarizeIntegrations,
 } from '@/lib/connections-ui';
 import type { ConnectionDTO } from '@/lib/serialize';
 
@@ -101,42 +102,146 @@ describe('describeStitchConnectError', () => {
   });
 });
 
-describe('connect-to-continue prompt (FR-089)', () => {
-  it('shows nothing for an active, target-ready connection or an absent block', () => {
-    expect(describeConnectionPrompt('github', { status: 'active', targetReady: true })).toBeNull();
-    expect(describeConnectionPrompt('github', undefined)).toBeNull();
-    expect(isWriteWithheld('jira', { status: 'active', targetReady: true })).toBe(false);
+const ACTIVE = { status: 'active', targetReady: true, accountName: 'octo' } as const;
+
+function statuses(
+  provider: 'github' | 'jira' | 'stitch',
+  connection: Parameters<typeof describeConnectionSteps>[1],
+) {
+  return describeConnectionSteps(provider, connection).map((step) => step.status);
+}
+
+describe('describeConnectionSteps (FR-089)', () => {
+  it('not connected: step 1 is current, the rest are locked and say why', () => {
+    const steps = describeConnectionSteps('github', {
+      status: 'none',
+      targetReady: false,
+      accountName: null,
+    });
+    expect(steps.map((step) => step.label)).toEqual([
+      'Connect GitHub',
+      'Review & name the repository',
+      'Create repository',
+    ]);
+    expect(steps.map((step) => step.status)).toEqual(['current', 'locked', 'locked']);
+    expect(steps[1]!.lockedReason).toBe('Connect GitHub first');
+    expect(steps[2]!.lockedReason).toBe('Connect GitHub first');
+    expect(steps[0]!.lockedReason).toBeNull();
   });
 
-  it('prompts to connect, reconnect, or pick a target, and withholds the write', () => {
-    expect(describeConnectionPrompt('jira', { status: 'none', targetReady: false })?.kind).toBe(
-      'connect',
-    );
-    expect(describeConnectionPrompt('github', { status: 'revoked', targetReady: true })?.kind).toBe(
-      'reconnect',
-    );
-    expect(describeConnectionPrompt('github', { status: 'active', targetReady: false })?.kind).toBe(
-      'target',
-    );
-    expect(isWriteWithheld('github', { status: 'needs_reauth', targetReady: true })).toBe(true);
+  it('an absent connection block counts as not connected', () => {
+    expect(statuses('stitch', null)).toEqual(['current', 'locked', 'locked']);
+    expect(statuses('jira', undefined)).toEqual(['current', 'locked', 'locked']);
   });
 
-  it('never asks Stitch for a target', () => {
-    expect(describeConnectionPrompt('stitch', { status: 'active', targetReady: false })).toBeNull();
+  it('a lapsed connection is not connected: reconnect is the current step', () => {
+    for (const status of ['needs_reauth', 'revoked'] as const) {
+      expect(statuses('github', { status, targetReady: true, accountName: 'octo' })).toEqual([
+        'current',
+        'locked',
+        'locked',
+      ]);
+    }
   });
 
+  it('GitHub and Stitch: connected means review is current and the write is available', () => {
+    expect(statuses('github', ACTIVE)).toEqual(['done', 'current', 'ready']);
+    expect(statuses('stitch', ACTIVE)).toEqual(['done', 'current', 'ready']);
+    expect(describeConnectionSteps('stitch', ACTIVE).map((step) => step.label)).toEqual([
+      'Connect Stitch',
+      'Review prompt',
+      'Generate',
+    ]);
+  });
+
+  it('Jira: connected without a saved site + project keeps the export locked and says why', () => {
+    const steps = describeConnectionSteps('jira', { ...ACTIVE, targetReady: false });
+    expect(steps.map((step) => step.status)).toEqual(['done', 'current', 'locked']);
+    expect(steps[2]!.lockedReason).toBe('Choose a site and project first');
+    expect(steps.map((step) => step.label)).toEqual([
+      'Connect Jira',
+      'Choose site and project',
+      'Export backlog',
+    ]);
+  });
+
+  it('Jira: connected with a saved target finishes step 2 and makes the export current', () => {
+    expect(statuses('jira', ACTIVE)).toEqual(['done', 'done', 'current']);
+  });
+
+  it('takes an explicit targetReady over the connection block', () => {
+    expect(
+      describeConnectionSteps('jira', { ...ACTIVE, targetReady: false }, true).map(
+        (step) => step.status,
+      ),
+    ).toEqual(['done', 'done', 'current']);
+  });
+});
+
+describe('isWriteWithheld', () => {
+  it('is false for an active, target-ready connection or an absent block', () => {
+    expect(isWriteWithheld(ACTIVE)).toBe(false);
+    expect(isWriteWithheld(undefined)).toBe(false);
+    expect(isWriteWithheld(null)).toBe(false);
+  });
+
+  it('is true until connected (and, for Jira, until the target is saved)', () => {
+    expect(isWriteWithheld({ status: 'none', targetReady: false, accountName: null })).toBe(true);
+    expect(isWriteWithheld({ status: 'revoked', targetReady: true, accountName: null })).toBe(true);
+    expect(isWriteWithheld({ ...ACTIVE, targetReady: false })).toBe(true);
+  });
+});
+
+describe('connectionAfterWriteError', () => {
   it('folds a 409 from a write into the connection state', () => {
-    const active = { status: 'active', targetReady: true } as const;
-    expect(connectionAfterWriteError('CONNECTION_REQUIRED', active)).toEqual({
+    expect(connectionAfterWriteError('CONNECTION_REQUIRED', ACTIVE)).toEqual({
       status: 'none',
       targetReady: true,
+      accountName: null,
     });
-    expect(connectionAfterWriteError('RECONNECT_REQUIRED', active)?.status).toBe('needs_reauth');
-    expect(connectionAfterWriteError('TARGET_REQUIRED', active)).toEqual({
+    expect(connectionAfterWriteError('RECONNECT_REQUIRED', ACTIVE)).toEqual({
+      status: 'needs_reauth',
+      targetReady: true,
+      accountName: 'octo',
+    });
+    expect(connectionAfterWriteError('TARGET_REQUIRED', ACTIVE)).toEqual({
       status: 'active',
       targetReady: false,
+      accountName: 'octo',
     });
-    expect(connectionAfterWriteError('NAME_TAKEN_BY_OTHER', active)).toBeNull();
+    expect(connectionAfterWriteError('NAME_TAKEN_BY_OTHER', ACTIVE)).toBeNull();
+  });
+});
+
+describe('summarizeIntegrations (header hint)', () => {
+  it('shows no attention when all three are connected', () => {
+    expect(summarizeIntegrations(['active', 'active', 'active'])).toMatchObject({
+      connected: 3,
+      total: 3,
+      needsReconnect: 0,
+      attention: false,
+      hint: '3 of 3 connected',
+    });
+  });
+
+  it('counts connected ones and flags the rest', () => {
+    expect(summarizeIntegrations(['active', 'none', 'none'])).toMatchObject({
+      connected: 1,
+      attention: true,
+      hint: '1 of 3 connected',
+    });
+    expect(summarizeIntegrations([])).toMatchObject({ connected: 0, attention: true });
+  });
+
+  it('says a lapsed integration needs reconnecting', () => {
+    expect(summarizeIntegrations(['active', 'needs_reauth', 'none'])).toMatchObject({
+      needsReconnect: 1,
+      attention: true,
+      hint: '1 integration needs reconnecting',
+    });
+    expect(summarizeIntegrations(['revoked', 'needs_reauth', 'active']).hint).toBe(
+      '2 integrations need reconnecting',
+    );
   });
 });
 

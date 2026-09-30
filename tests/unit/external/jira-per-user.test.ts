@@ -634,7 +634,11 @@ describe('previewExport - local state only', () => {
 
     expect(preview.epics).toBe(1);
     expect(preview.stories).toBe(1);
-    expect(preview.connection).toEqual({ status: 'needs_reauth', targetReady: true });
+    expect(preview.connection).toEqual({
+      status: 'needs_reauth',
+      targetReady: true,
+      accountName: null,
+    });
     expect(mocks.getCredential).not.toHaveBeenCalled();
     expect(mocks.getCredentialForOperation).not.toHaveBeenCalled();
     expect(seen).toHaveLength(0);
@@ -645,7 +649,7 @@ describe('previewExport - local state only', () => {
 
     const preview = await previewExport('backlog-v1', { userId: 'user-1' });
 
-    expect(preview.connection).toEqual({ status: 'none', targetReady: false });
+    expect(preview.connection).toEqual({ status: 'none', targetReady: false, accountName: null });
     expect(preview.skipped).toEqual([]);
     expect(mocks.getRefsForLogicalItem).not.toHaveBeenCalled();
   });

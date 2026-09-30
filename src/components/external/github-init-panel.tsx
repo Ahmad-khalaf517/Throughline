@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { CircleAlert, CircleCheck } from 'lucide-react';
 import { FieldShell } from '@/components/auth/field-shell';
@@ -16,20 +16,20 @@ import {
   type ExistingRepository,
   type RepoNameAvailability,
 } from '@/lib/external-preview';
-import { ConnectionPrompt } from '@/components/connection-prompt';
 import {
   connectionAfterWriteError,
   isWriteWithheld,
   type PreviewConnection,
 } from '@/lib/connections-ui';
 import { PreviewShell, type PreviewState } from './preview-shell';
-import { GithubOwnerPicker, type ProjectTargets } from './target-pickers';
+import { ConnectionSteps } from './connection-steps';
+import { GithubOwnerRow, type ProjectTargets } from './target-pickers';
 import { ImpactGate } from './impact-gate';
 import { OperationStatus } from './operation-status';
 
 interface GithubInitPanelProps {
   projectId: string;
-  /** The project's saved GitHub owner (FR-088), `null` until one is picked. */
+  /** The project's saved GitHub owner (FR-088); `null` = the default, the connected account. */
   githubOwner: string | null;
 }
 
@@ -39,9 +39,11 @@ interface GithubPreviewData {
   /** The pinned starter whose files will be added, or `null` (docs-only). */
   starter: { id: string; label: string; files: string[]; notScaffolded: string[] } | null;
   impact: ImpactRowDTO[];
-  /** FR-089: connection status + whether the owner target is set. */
+  /** FR-089: connection status and the connected account's name. */
   connection?: PreviewConnection;
 }
+
+type Visibility = 'public' | 'private';
 
 type GithubWriteResult =
   { kind: 'completed'; ref: ExternalRefDTO } | { kind: 'pending'; operationId: string };
@@ -60,6 +62,19 @@ const AVAILABILITY_TONE = {
   success: { className: 'text-success', Icon: CircleCheck },
   error: { className: 'text-error', Icon: CircleAlert },
 } as const;
+
+const VISIBILITY_OPTIONS: { value: Visibility; label: string; description: string }[] = [
+  {
+    value: 'public',
+    label: 'Public',
+    description: 'anyone on GitHub can read the README and ADRs',
+  },
+  {
+    value: 'private',
+    label: 'Private',
+    description: 'only you and people you add on GitHub',
+  },
+];
 
 const INPUT_CLASSNAME =
   'border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus:border-primary focus:bg-surface-container-low focus:ring-primary h-11 w-full rounded-lg border px-3.5 text-sm transition-colors focus:ring-1 focus:outline-none';
@@ -95,7 +110,19 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
   // with a link) - the screen then shows that repository instead of a form.
   const [existing, setExisting] = useState<ExistingRepository | null>(null);
   const [connection, setConnection] = useState<PreviewConnection | null>(null);
+  const [visibility, setVisibility] = useState<Visibility>('public');
+  const [owner, setOwner] = useState<string | null>(githubOwner);
+  // Bumped when the owner changes so the name availability is checked again.
+  const [ownerVersion, setOwnerVersion] = useState(0);
   const typedName = repoName.trim();
+  // The name check needs the caller's own connection; without one it stays quiet.
+  const connected = connection?.status === 'active';
+
+  // Re-load the preview (after a connect / disconnect made from the steps)
+  // without flipping the screen back to "loading": the effect below simply runs
+  // again, and the steps stay mounted.
+  const [reloadKey, setReloadKey] = useState(0);
+  const reloadPreview = useCallback(() => setReloadKey((key) => key + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -151,15 +178,13 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
         const data = body as GithubPreviewData;
         setPreview(data);
         setConnection(data.connection ?? null);
-        setRepoName(data.repoName);
+        setRepoName((current) => current || data.repoName);
         setState({ status: 'ready' });
       } catch {
-        if (!cancelled) {
-          setState({
-            status: 'error',
-            message: 'Could not reach the server. Check your connection and try again.',
-          });
-        }
+        setState({
+          status: 'error',
+          message: 'Could not reach the server. Check your connection and try again.',
+        });
       }
     }
 
@@ -167,7 +192,7 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
     return () => {
       cancelled = true;
     };
-  }, [projectId, router]);
+  }, [projectId, router, reloadKey]);
 
   // `POST .../github/check-name` (API Contracts section 8), advisory only:
   // `github/init` still decides for real. Waits for the preview (which
@@ -175,7 +200,7 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
   // edit. No state is set synchronously here - "checking" is derived from
   // `availability` being for different text than the field holds now.
   useEffect(() => {
-    if (state.status !== 'ready' || result || typedName === '') return;
+    if (state.status !== 'ready' || !connected || result || typedName === '') return;
 
     const controller = new AbortController();
     const timer = setTimeout(async () => {
@@ -220,7 +245,7 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
       clearTimeout(timer);
       controller.abort();
     };
-  }, [projectId, router, state.status, result, typedName]);
+  }, [projectId, router, state.status, connected, result, typedName, ownerVersion]);
 
   const availabilityCopy = describeRepoNameAvailability(availability, typedName);
   const availabilityTone = availabilityCopy ? AVAILABILITY_TONE[availabilityCopy.tone] : null;
@@ -237,7 +262,7 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
       const response = await fetch(`/api/projects/${projectId}/github/init`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repoName, impactAcknowledged: acknowledged }),
+        body: JSON.stringify({ repoName, impactAcknowledged: acknowledged, visibility }),
       });
 
       if (response.status === 401) {
@@ -277,9 +302,14 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
           // re-enabling submit.
         }
 
-        // FR-089: a 409 CONNECTION_REQUIRED / RECONNECT_REQUIRED / TARGET_REQUIRED
-        // is answered with the connect prompt, not a dead-end error.
-        const nextConnection = connectionAfterWriteError(errorBody.error?.code, connection);
+        // FR-089: a 409 CONNECTION_REQUIRED / RECONNECT_REQUIRED is answered by
+        // the steps at the top (connect / reconnect), not a dead-end error.
+        // (TARGET_REQUIRED is not folded in: GitHub needs no chosen target, so
+        // it is shown as the error it is.)
+        const nextConnection =
+          errorBody.error?.code === 'TARGET_REQUIRED'
+            ? null
+            : connectionAfterWriteError(errorBody.error?.code, connection);
         if (nextConnection) {
           setConnection(nextConnection);
           return;
@@ -307,20 +337,33 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
 
   if (existing) return <ExistingRepositoryCard repository={existing} />;
 
-  function handleTargetSaved(targets: ProjectTargets) {
-    setConnection((current) =>
-      current ? { ...current, targetReady: targets.githubOwner !== null } : current,
-    );
+  function handleOwnerSaved(targets: ProjectTargets) {
+    setOwner(targets.githubOwner);
+    // The name may be free under one owner and taken under another.
+    setAvailability(null);
+    setOwnerVersion((version) => version + 1);
   }
+
+  // Until GitHub is connected the preview stays readable but locked (dimmed,
+  // `inert` so no control - the submit included - can be reached by keyboard).
+  const locked = connection !== null && !connected;
 
   return (
     <div className="flex flex-col gap-6">
       {connection && (
-        <GithubOwnerPicker
-          projectId={projectId}
-          current={githubOwner}
+        <ConnectionSteps
+          provider="github"
           connection={connection}
-          onSaved={handleTargetSaved}
+          returnTo={`/projects/${projectId}/outputs/github`}
+          onChanged={reloadPreview}
+          configure={
+            <GithubOwnerRow
+              projectId={projectId}
+              savedOwner={owner}
+              accountLogin={connection.accountName}
+              onSaved={handleOwnerSaved}
+            />
+          }
         />
       )}
       <PreviewShell state={state}>
@@ -328,14 +371,18 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
           (result ? (
             <GithubResultView result={result} />
           ) : (
-            <form onSubmit={handleSubmit} className="flex flex-col gap-6">
+            <form
+              onSubmit={handleSubmit}
+              inert={locked}
+              className={`flex flex-col gap-6 transition-opacity ${locked ? 'opacity-60' : ''}`}
+            >
               <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
                 <p className="text-on-surface text-sm font-medium">
                   Mode: <span className="font-mono-code">{preview.mode}</span>
                   <span className="text-outline mx-2" aria-hidden="true">
                     ·
                   </span>
-                  Visibility: <span className="font-mono-code">public</span>
+                  Visibility: <span className="font-mono-code">{visibility}</span>
                 </p>
                 <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
                   {preview.starter
@@ -363,8 +410,10 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
                   </>
                 )}
                 <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
-                  The repository is created <strong className="font-medium">public</strong> - anyone
-                  on GitHub can read its README and ADRs.
+                  The repository is created <strong className="font-medium">{visibility}</strong> -{' '}
+                  {visibility === 'public'
+                    ? 'anyone on GitHub can read its README and ADRs.'
+                    : 'only you and the people you add on GitHub can read it.'}
                 </p>
               </div>
 
@@ -392,17 +441,34 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
                 </p>
               </FieldShell>
 
+              <fieldset className="flex flex-col gap-2">
+                <legend className="text-on-surface mb-1 text-sm font-medium">Visibility</legend>
+                {VISIBILITY_OPTIONS.map((option) => (
+                  <label
+                    key={option.value}
+                    className="text-on-surface flex items-start gap-2 text-sm"
+                  >
+                    <input
+                      type="radio"
+                      name="github-visibility"
+                      value={option.value}
+                      checked={visibility === option.value}
+                      onChange={() => setVisibility(option.value)}
+                      className="text-primary-container focus-visible:ring-primary mt-1 focus-visible:ring-2 focus-visible:outline-none"
+                    />
+                    <span>
+                      <span className="font-medium">{option.label}</span>
+                      <span className="text-on-surface-variant"> - {option.description}</span>
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+
               <ImpactGate
                 impact={preview.impact}
                 acknowledged={acknowledged}
                 onAcknowledgedChange={setAcknowledged}
                 idPrefix="github-init"
-              />
-
-              <ConnectionPrompt
-                provider="github"
-                connection={connection}
-                returnTo={`/projects/${projectId}/outputs/github`}
               />
 
               {submitError && <FormMessage variant="error">{submitError}</FormMessage>}
@@ -411,7 +477,7 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
                 type="submit"
                 disabled={
                   submitting ||
-                  isWriteWithheld('github', connection) ||
+                  isWriteWithheld(connection) ||
                   typedName.length === 0 ||
                   isRepoNameBlocked(availability, typedName) ||
                   isExternalWriteBlocked(preview.impact, acknowledged)

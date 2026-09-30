@@ -118,15 +118,19 @@ export class GithubLookupRejectedError extends Error {
 }
 
 /**
- * Round 14 (FR-088): the project has no `github_owner`, so there is nowhere to
- * create the repository. -> API 409 `TARGET_REQUIRED` `{ target: 'githubOwner' }`.
- * Thrown before any operation row exists.
+ * Round 14 (FR-088): no owner could be resolved - the project has no
+ * `github_owner` AND the connection carries no account login to default to, so
+ * there is nowhere to create the repository. Defensive only: `getCredential`'s
+ * `ConnectionRequiredError` comes first in practice. -> API 409 `TARGET_REQUIRED`
+ * `{ target: 'githubOwner' }`. Thrown before any operation row exists.
  */
 export class GithubTargetRequiredError extends Error {
   readonly target = 'githubOwner' as const;
 
   constructor() {
-    super('This project has no GitHub owner chosen yet. Choose where the repository goes first.');
+    super(
+      'No GitHub owner could be determined. Reconnect GitHub or choose where the repository goes.',
+    );
     this.name = 'GithubTargetRequiredError';
   }
 }
@@ -291,23 +295,31 @@ type GithubAuth =
   | { kind: 'user'; octokit: Octokit; owner: string; credential: Credential }
   | { kind: 'legacy'; octokit: Octokit; owner: string };
 
-function requireTarget(ctx: GithubCtx): string {
-  if (!ctx.githubOwner) throw new GithubTargetRequiredError();
-  return ctx.githubOwner;
+/**
+ * The owner a user-connection call runs under: the project's chosen owner when
+ * there is one, otherwise the connected account's own login (the default - no
+ * choice is needed to create a repository). The login is the connection's
+ * `meta.login`; the account display name (the same login, as stored) is the
+ * fallback. Neither exists -> `GithubTargetRequiredError`.
+ */
+async function resolveOwner(ctx: GithubCtx, credential: Credential): Promise<string> {
+  if (ctx.githubOwner) return ctx.githubOwner;
+  const login = credential.meta.login;
+  if (login) return login;
+  const account = (await listConnections(ctx.userId)).find((c) => c.provider === 'github');
+  if (account?.displayName) return account.displayName;
+  throw new GithubTargetRequiredError();
 }
 
-function authFor(
-  recorded: Credential | { kind: 'legacy' },
-  ctxOwner: string | undefined,
-): GithubAuth {
+function authFor(recorded: Credential | { kind: 'legacy' }, owner: string | null): GithubAuth {
   if ('kind' in recorded) {
     return { kind: 'legacy', octokit: createOctokitClient(), owner: requireOwner() };
   }
-  if (!ctxOwner) throw new GithubTargetRequiredError();
+  if (!owner) throw new GithubTargetRequiredError();
   return {
     kind: 'user',
     octokit: createOctokitClient(recorded.accessToken),
-    owner: ctxOwner,
+    owner,
     credential: recorded,
   };
 }
@@ -417,7 +429,10 @@ export interface RepoNameCheck {
  * verified project owner and the project's chosen GitHub owner. This module
  * cannot read `project` or resolve users itself.
  */
-export type GithubCtx = { userId: string; githubOwner?: string };
+export type GithubCtx = { userId: string; githubOwner?: string | null };
+
+/** Who can read the created repository. `public` is the default and what every earlier operation used. */
+export type RepoVisibility = 'public' | 'private';
 
 /** One `GET /repos/{owner}/{name}` with an already-resolved credential. */
 async function lookupRepoName(auth: GithubAuth, normalized: string): Promise<RepoNameCheck> {
@@ -438,10 +453,10 @@ async function lookupRepoName(auth: GithubAuth, normalized: string): Promise<Rep
   }
 }
 
-/** The caller's own credential and the project's chosen owner - step 0 of every new call. */
+/** The caller's own credential and the resolved owner (chosen, else own login) - step 0 of every new call. */
 async function userAuth(ctx: GithubCtx): Promise<GithubAuth> {
   const credential = await getCredential(ctx.userId, 'github');
-  return authFor(credential, ctx.githubOwner);
+  return authFor(credential, await resolveOwner(ctx, credential));
 }
 
 /**
@@ -586,8 +601,13 @@ async function suggestRepoName(
  */
 export interface PreviewConnection {
   status: ConnectionStatus['status'];
-  /** `project.github_owner` is set. */
+  /**
+   * GitHub needs no chosen target: the owner defaults to the connected account,
+   * so this is true whenever the connection is `active`.
+   */
   targetReady: boolean;
+  /** The connected account's display name (its login), or null. Never a token. */
+  accountName: string | null;
 }
 
 export async function previewInit(
@@ -629,7 +649,8 @@ export async function previewInit(
   const github = (await listConnections(ctx.userId)).find((c) => c.provider === 'github');
   const connection: PreviewConnection = {
     status: github?.status ?? 'none',
-    targetReady: Boolean(ctx.githubOwner),
+    targetReady: github?.status === 'active',
+    accountName: github?.displayName ?? null,
   };
 
   return {
@@ -716,6 +737,7 @@ async function sendCreateRepo(args: {
   selected: SelectedArchitectureOption;
   architectureVersionId: string;
   adrItems: ArchitectureDecisionItem[];
+  visibility: RepoVisibility;
 }): Promise<{
   externalId: string;
   externalKey: string;
@@ -729,13 +751,13 @@ async function sendCreateRepo(args: {
     const repository = {
       name: args.repoName,
       description: `${MARKER_PREFIX}${args.marker}`,
-      // Always public: the repository exists to be shown (demoed, linked,
+      // Public by default: the repository exists to be shown (demoed, linked,
       // read by people without access to Throughline), and everything
       // written to it - README, ADRs, lineage.json - is architecture
-      // documentation and ids, never a secret. There is deliberately no
-      // visibility option (FR-030 only asks for one "if configurable"); the
-      // GitHub screen tells the user up front that the repository is public.
-      private: false,
+      // documentation and ids, never a secret. The user may choose private on
+      // the GitHub screen (user connections only); the legacy environment
+      // credential path always creates public, as before.
+      private: auth.kind === 'user' && args.visibility === 'private',
     };
     // Round 14: an owner that is not the connected account's own login is an
     // organization, which has its own create endpoint. The legacy environment
@@ -942,9 +964,10 @@ async function writeProvenanceFiles(
 
 /**
  * Round 14 (ERD 7.2 step 0): the repository is created with the caller's own
- * GitHub connection under `ctx.githubOwner`. The credential is resolved BEFORE
+ * GitHub connection under `ctx.githubOwner`, or - when the project has none -
+ * under the connected account's own login. The credential is resolved BEFORE
  * `runOperation`, so `ConnectionRequiredError` (no connection) and
- * `GithubTargetRequiredError` (no owner chosen) leave no `external_operation`
+ * `GithubTargetRequiredError` (no owner resolvable) leave no `external_operation`
  * row behind. The connection id and the provider's account id are handed to
  * `runOperation`, which records them on the row; the owner goes into the
  * request hash and the target descriptor.
@@ -953,10 +976,16 @@ export async function initRepo(
   architectureVersionId: string,
   repoName: string,
   ctx: GithubCtx,
+  visibility: RepoVisibility = 'public',
 ): Promise<ExternalRef> {
   const credential = await getCredential(ctx.userId, 'github');
-  requireTarget(ctx);
-  return createRepository({ architectureVersionId, repoName, ctx, recorded: credential });
+  return createRepository({
+    architectureVersionId,
+    repoName,
+    ctx,
+    recorded: credential,
+    visibility,
+  });
 }
 
 /**
@@ -983,6 +1012,10 @@ export async function retryOperation(
   if (typeof repoName !== 'string') {
     throw new Error(`github external_operation ${operationId} has a malformed target_descriptor`);
   }
+  // The visibility the operation was created with (an operation recorded before
+  // visibility existed has none: public).
+  const recordedVisibility = (operation.targetDescriptor as { visibility?: unknown }).visibility;
+  const visibility: RepoVisibility = recordedVisibility === 'private' ? 'private' : 'public';
   const recorded = await getCredentialForOperation(operationId);
 
   try {
@@ -991,6 +1024,7 @@ export async function retryOperation(
       repoName,
       ctx,
       recorded,
+      visibility,
     });
     return { status: 'completed', ref };
   } catch (error) {
@@ -1009,6 +1043,7 @@ async function createRepository(args: {
   repoName: string;
   ctx: GithubCtx;
   recorded: Credential | { kind: 'legacy' };
+  visibility: RepoVisibility;
 }): Promise<ExternalRef> {
   const { architectureVersionId, ctx, recorded } = args;
   const credential = 'kind' in recorded ? null : recorded;
@@ -1019,9 +1054,19 @@ async function createRepository(args: {
   const operationKey = `github:create_repo:${selected.projectId}:${normalizedRepoName}`;
   // A connection-backed request carries its owner (ERD 7.3/4.14, R14-4); the
   // legacy shape is unchanged so a legacy operation's stored hash still matches.
-  const owner = credential ? requireTarget(ctx) : requireOwner();
+  const owner = credential ? await resolveOwner(ctx, credential) : requireOwner();
+  // The legacy environment credential always creates public repositories.
+  const visibility: RepoVisibility = credential ? args.visibility : 'public';
+  // `visibility` joins the request hash ONLY when private, so the hash of every
+  // existing (public) operation is unchanged and its retries keep matching; a
+  // resend under the same key with a different visibility is a hash conflict.
   const requestFacts = credential
-    ? { repoName: normalizedRepoName, mode, owner }
+    ? {
+        repoName: normalizedRepoName,
+        mode,
+        owner,
+        ...(visibility === 'private' ? { visibility } : {}),
+      }
     : { repoName: normalizedRepoName, mode };
   // Request fingerprint (ERD 7.2/29): same repoName + mode (+ owner) must
   // round-trip to the same hash so a genuine resend (same inputs) is never
@@ -1035,7 +1080,7 @@ async function createRepository(args: {
 
   // Every send/reconcile of THIS row resolves its credential from the row itself.
   const authForOperation = async (operationId: string): Promise<GithubAuth> =>
-    authFor(await getCredentialForOperation(operationId), ctx.githubOwner);
+    authFor(await getCredentialForOperation(operationId), credential ? owner : null);
 
   const result = await runOperation({
     projectId: selected.projectId,
@@ -1043,7 +1088,8 @@ async function createRepository(args: {
     operationType: 'create_repo',
     operationKey,
     requestHash,
-    targetDescriptor: requestFacts,
+    // A connection-backed descriptor always records the visibility (missing = public on read).
+    targetDescriptor: credential ? { ...requestFacts, visibility } : requestFacts,
     sourceArtifactVersionId: architectureVersionId,
     connectionId: credential?.connectionId ?? null,
     accountId: credential?.accountId ?? null,
@@ -1059,6 +1105,7 @@ async function createRepository(args: {
           selected,
           architectureVersionId,
           adrItems,
+          visibility,
         }),
       );
     },
