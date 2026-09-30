@@ -414,7 +414,7 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       expect(preview.connection).toEqual({
         status: 'active',
         targetReady: true,
-        accountName: null,
+        accountName: 'Test User',
       });
 
       // No decision supplied -> refuses loudly. Never a silent skip or a

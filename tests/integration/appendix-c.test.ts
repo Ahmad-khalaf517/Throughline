@@ -5355,7 +5355,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
                      WHERE x.project_id IN (${projectId}, ${other.projectId})), '') || '#' ||
           coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.id) FROM logical_item x
                      WHERE x.project_id IN (${projectId}, ${other.projectId})), '') || '#' ||
-          coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.id) FROM semantic_dependency x
+          coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.downstream_item_version_id, x.upstream_item_version_id) FROM semantic_dependency x
                      WHERE x.project_id IN (${projectId}, ${other.projectId})), '') || '#' ||
           coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.id) FROM artifact x
                      WHERE x.project_id IN (${projectId}, ${other.projectId})), '') || '#' ||
