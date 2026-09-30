@@ -18,7 +18,7 @@ export default async function ProjectsLayout({ children }: LayoutProps<'/project
   ]);
 
   return (
-    <div className="bg-surface text-on-surface min-h-screen">
+    <div className="app-shell bg-surface text-on-surface min-h-screen">
       <AppHeader
         displayName={appUser?.displayName ?? null}
         email={user.email}
@@ -26,7 +26,7 @@ export default async function ProjectsLayout({ children }: LayoutProps<'/project
         signOutAction={signOutAction}
         updateDisplayNameAction={updateDisplayNameAction}
       />
-      <div className="mx-auto flex w-full max-w-[1440px]">
+      <div className="flex w-full">
         <ProjectSidebar />
         <div className="min-w-0 flex-1">{children}</div>
       </div>

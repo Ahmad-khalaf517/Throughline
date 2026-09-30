@@ -90,49 +90,96 @@ export async function POST(request: Request, { params }: RouteParams) {
     // made inside the callback below, and would narrow a plain `let` to
     // `undefined` at the read after the await.
     const generated: { output?: GenerateOutput } = {};
-    const result = await createDraftFromGeneration({
-      projectId,
-      artifactId,
-      ...(dispatch.defaultItemType ? { itemType: dispatch.defaultItemType } : {}),
-      contextSourceVersionIds: prerequisiteVersionIds(project, type),
-      actorUserId: user.id,
-      // Thread the ids `createDraftFromGeneration` captured (the same
-      // `contextSourceVersionIds` passed just above, plus the `baseVersionId` it
-      // read) into the module, so the prompt is built from exactly the versions
-      // the draft is recorded against rather than a third read of the project
-      // (INV-006: the model must see what `generation_context_ref` says it saw).
-      generate: async (ctx) => {
-        const output = await dispatch.generate({
-          projectId,
-          feedback: parsed.data.feedback,
-          contextSourceVersionIds: ctx.contextSourceVersionIds,
-          baseVersionId: ctx.baseVersionId,
-        });
-        generated.output = output;
-        return output;
+    const runGeneration = async (onDelta?: (delta: string) => void) => {
+      const result = await createDraftFromGeneration({
+        projectId,
+        artifactId,
+        ...(dispatch.defaultItemType ? { itemType: dispatch.defaultItemType } : {}),
+        contextSourceVersionIds: prerequisiteVersionIds(project, type),
+        actorUserId: user.id,
+        // Thread the ids `createDraftFromGeneration` captured (the same
+        // `contextSourceVersionIds` passed just above, plus the `baseVersionId` it
+        // read) into the module, so the prompt is built from exactly the versions
+        // the draft is recorded against rather than a third read of the project
+        // (INV-006: the model must see what `generation_context_ref` says it saw).
+        generate: async (ctx) => {
+          const output = await dispatch.generate({
+            projectId,
+            feedback: parsed.data.feedback,
+            contextSourceVersionIds: ctx.contextSourceVersionIds,
+            baseVersionId: ctx.baseVersionId,
+            ...(onDelta ? { onDelta } : {}),
+          });
+          generated.output = output;
+          return output;
+        },
+      });
+
+      if (result.stale) {
+        return {
+          status: 'stale',
+          version: await loadVersionDTO(result.version.id),
+          reason: result.reason,
+        };
+      }
+
+      if (type === 'architecture') {
+        if (!generated.output?.options) {
+          // architecture.generate always returns its two options; reaching here
+          // would mean the dispatch table is wired to the wrong module.
+          throw new Error('architecture generate returned no options');
+        }
+        await createOptions(result.version.id, generated.output.options);
+      }
+
+      return { status: 'ok', version: await loadVersionDTO(result.version.id) };
+    };
+
+    if (!request.headers.get('accept')?.includes('text/event-stream')) {
+      return NextResponse.json(await runGeneration());
+    }
+
+    const encoder = new TextEncoder();
+    let writable = true;
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const send = (event: string, data: unknown) => {
+          if (!writable) return;
+          try {
+            controller.enqueue(
+              encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+            );
+          } catch {
+            writable = false;
+          }
+        };
+        try {
+          send('started', {});
+          const result = await runGeneration((delta) => send('delta', { delta }));
+          send('complete', result);
+        } catch (error) {
+          const response = errorResponse(error);
+          send('error', await response.json());
+        } finally {
+          if (writable) {
+            try {
+              controller.close();
+            } catch {
+              writable = false;
+            }
+          }
+        }
+      },
+      cancel() {
+        writable = false;
       },
     });
-
-    if (result.stale) {
-      return NextResponse.json({
-        status: 'stale',
-        version: await loadVersionDTO(result.version.id),
-        reason: result.reason,
-      });
-    }
-
-    if (type === 'architecture') {
-      if (!generated.output?.options) {
-        // architecture.generate always returns its two options; reaching here
-        // would mean the dispatch table is wired to the wrong module.
-        throw new Error('architecture generate returned no options');
-      }
-      await createOptions(result.version.id, generated.output.options);
-    }
-
-    return NextResponse.json({
-      status: 'ok',
-      version: await loadVersionDTO(result.version.id),
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'X-Accel-Buffering': 'no',
+      },
     });
   } catch (error) {
     return errorResponse(error);

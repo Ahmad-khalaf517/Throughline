@@ -606,6 +606,7 @@ export async function generate(ctx: {
   feedback?: string | undefined;
   contextSourceVersionIds?: string[] | undefined;
   baseVersionId?: string | null | undefined;
+  onDelta?: (delta: string) => void;
 }): Promise<{
   payload: unknown;
   candidates: Candidate[];
@@ -639,6 +640,7 @@ export async function generate(ctx: {
     purpose: 'generation',
     prompt,
     schema: outputSchema,
+    ...(ctx.onDelta ? { onDelta: ctx.onDelta } : {}),
   });
 
   return {

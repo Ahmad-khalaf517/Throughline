@@ -159,6 +159,63 @@ describe('POST /api/projects/:projectId/artifacts/:type/generate', () => {
     draftCreatedAs();
   });
 
+  it('streams provider deltas before the final saved version while keeping the JSON path intact', async () => {
+    mockedGenerate.requirements.mockImplementation(async (ctx) => {
+      ctx.onDelta?.('{"items":');
+      ctx.onDelta?.('[]}');
+      return { payload: {}, candidates: [], runId: 'run-1' };
+    });
+    const request = new Request(urlFor('requirements'), {
+      method: 'POST',
+      headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const response = await POST(request, {
+      params: Promise.resolve({ projectId: 'project-1', type: 'requirements' }),
+    });
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    const events = await response.text();
+    expect(events).toContain('event: delta\ndata: {"delta":"{\\"items\\":"}');
+    expect(events).toContain('event: delta\ndata: {"delta":"[]}"}');
+    expect(events.indexOf('event: delta')).toBeLessThan(events.indexOf('event: complete'));
+    expect(events).toContain('event: complete');
+  });
+
+  it('keeps prerequisite errors as HTTP JSON before opening a stream', async () => {
+    mockedGetProjectById.mockResolvedValue(makeProject());
+    const response = await POST(
+      new Request(urlFor('architecture'), {
+        method: 'POST',
+        headers: { Accept: 'text/event-stream' },
+      }),
+      { params: Promise.resolve({ projectId: 'project-1', type: 'architecture' }) },
+    );
+    expect(response.status).toBe(409);
+    expect(response.headers.get('content-type')).toContain('application/json');
+    expect(mockedCreateDraft).not.toHaveBeenCalled();
+  });
+
+  it('reports a model failure inside the stream without claiming completion', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockedGenerate.requirements.mockImplementation(async (ctx) => {
+      ctx.onDelta?.('{"partial":');
+      throw new Error('provider secret');
+    });
+    const response = await POST(
+      new Request(urlFor('requirements'), {
+        method: 'POST',
+        headers: { Accept: 'text/event-stream' },
+      }),
+      { params: Promise.resolve({ projectId: 'project-1', type: 'requirements' }) },
+    );
+    const events = await response.text();
+    expect(events).toContain('event: delta');
+    expect(events).toContain('event: error');
+    expect(events).not.toContain('event: complete');
+    expect(events).not.toContain('provider secret');
+    consoleSpy.mockRestore();
+  });
+
   it('returns 401 UNAUTHENTICATED when there is no verified user', async () => {
     mockedGetVerifiedUser.mockResolvedValue(null);
 

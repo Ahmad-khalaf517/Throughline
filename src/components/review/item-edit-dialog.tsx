@@ -175,7 +175,7 @@ export function ItemEditDialog({ versionId, item, onCancel, onSave }: ItemEditDi
             value={text}
             onChange={(event) => setText(event.target.value)}
             rows={5}
-            className="border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus:border-primary focus:ring-primary mt-1 w-full resize-y rounded-lg border px-3.5 py-3 text-sm font-normal transition-colors focus:ring-1 focus:outline-none"
+            className="border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus:border-primary focus:ring-primary mt-1 min-h-44 w-full resize-none rounded-lg border px-3.5 py-3 text-sm font-normal transition-colors focus:ring-1 focus:outline-none"
           />
         </label>
 

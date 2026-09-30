@@ -20,7 +20,7 @@ export default async function ConnectionsLayout({ children }: LayoutProps<'/conn
   ]);
 
   return (
-    <div className="bg-surface text-on-surface min-h-screen">
+    <div className="app-shell bg-surface text-on-surface min-h-screen">
       <AppHeader
         displayName={appUser?.displayName ?? null}
         email={user.email}
@@ -28,7 +28,7 @@ export default async function ConnectionsLayout({ children }: LayoutProps<'/conn
         signOutAction={signOutAction}
         updateDisplayNameAction={updateDisplayNameAction}
       />
-      <div className="mx-auto w-full max-w-[1440px]">{children}</div>
+      <div className="w-full">{children}</div>
     </div>
   );
 }

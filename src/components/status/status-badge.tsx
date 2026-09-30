@@ -1,6 +1,5 @@
 'use client';
 
-import { motion } from 'framer-motion';
 import { Check, Pencil, Redo2, TriangleAlert, X } from 'lucide-react';
 import type { ArtifactVersionStatus } from '@/lib/serialize';
 import { cn } from '@/lib/utils';
@@ -77,13 +76,9 @@ export function FlaggedGlyph({ title, className }: { title: string; className?: 
       className={cn('text-primary-container inline-flex items-center', className)}
       title={title}
     >
-      <motion.span
-        className="inline-flex"
-        animate={{ opacity: [1, 0.55, 1], scale: [1, 1.08, 1] }}
-        transition={{ duration: 2.2, repeat: Infinity, ease: 'easeInOut' }}
-      >
+      <span className="inline-flex">
         <TriangleAlert className="size-3.5" aria-hidden="true" strokeWidth={2.5} />
-      </motion.span>
+      </span>
       <span className="sr-only">{title}</span>
     </span>
   );

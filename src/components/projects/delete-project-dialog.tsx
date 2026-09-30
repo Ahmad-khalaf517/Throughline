@@ -34,8 +34,8 @@ export function DeleteProjectButton({ projectId, projectName }: DeleteProjectBut
         ref={triggerRef}
         type="button"
         onClick={() => setOpen(true)}
-        aria-label="Delete project"
-        className="border-error/40 text-error hover:bg-error-container focus-visible:ring-error flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
+        aria-label={`Delete project ${projectName}`}
+        className="border-surface-dim text-on-surface-variant hover:border-error/40 hover:bg-error-container hover:text-error focus-visible:ring-error flex min-h-9 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
       >
         <Trash2 className="size-4" aria-hidden="true" />
         <span className="hidden sm:inline">Delete project</span>

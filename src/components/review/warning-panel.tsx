@@ -335,7 +335,7 @@ function WarningRow({ warning, note, onAcknowledge }: WarningRowProps) {
             }}
             rows={2}
             placeholder="Add context for this acknowledgement..."
-            className="border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus-visible:ring-primary w-full resize-y rounded-md border px-3 py-2 text-xs focus-visible:ring-2 focus-visible:outline-none"
+            className="border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus-visible:ring-primary min-h-24 w-full resize-none rounded-md border px-3 py-2 text-xs focus-visible:ring-2 focus-visible:outline-none"
           />
           <div className="flex items-center gap-2">
             <button

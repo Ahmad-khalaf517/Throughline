@@ -14,6 +14,7 @@ export interface GenerateStructuredOptions<T> {
   purpose: GenerationPurpose;
   prompt: string;
   schema: ZodSchema<T>;
+  onDelta?: (delta: string) => void;
 }
 
 export interface GenerateStructuredResult<T> {
@@ -57,11 +58,21 @@ export async function generateStructured<T>(
   let outputTokens: number | null = null;
 
   try {
-    const completion = await client.chat.completions.parse({
+    const parameters = {
       model,
-      messages: [{ role: 'user', content: opts.prompt }],
+      messages: [{ role: 'user' as const, content: opts.prompt }],
       response_format: zodResponseFormat(opts.schema, 'structured_output'),
-    });
+    };
+    const completion = opts.onDelta
+      ? await (async () => {
+          const stream = client.chat.completions.stream({
+            ...parameters,
+            stream_options: { include_usage: true },
+          });
+          stream.on('content.delta', ({ delta }) => opts.onDelta?.(delta));
+          return stream.finalChatCompletion();
+        })()
+      : await client.chat.completions.parse(parameters);
     const latencyMs = Date.now() - startedAt;
     inputTokens = completion.usage?.prompt_tokens ?? null;
     outputTokens = completion.usage?.completion_tokens ?? null;

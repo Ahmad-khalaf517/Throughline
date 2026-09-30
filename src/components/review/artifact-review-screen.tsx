@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CircleAlert, CircleCheck, Loader2, SquarePen } from 'lucide-react';
 import type {
@@ -20,6 +20,7 @@ import { ItemEditConfirmationRequired } from './item-edit-model';
 import { BacklogReviewLayout } from './backlog-review-layout';
 import { UiRequirementsReviewLayout } from './ui-requirements-review-layout';
 import { GenerationSkeleton } from './generation-skeleton';
+import { readGenerationResponse } from './read-generation-stream';
 
 interface ArtifactReviewScreenProps {
   /** The project this version belongs to - needed for the manual-revise call (`POST /api/projects/:projectId/artifacts/:type/revise`). */
@@ -186,6 +187,10 @@ export function ArtifactReviewScreen({
   const [aiRevisePending, setAiRevisePending] = useState(false);
   const [aiRevisionOpen, setAiRevisionOpen] = useState(false);
   const [aiRevisionFeedback, setAiRevisionFeedback] = useState('');
+  const [generationPreview, setGenerationPreview] = useState('');
+  const [generationFinalizing, setGenerationFinalizing] = useState(false);
+  const [refreshTimedOut, setRefreshTimedOut] = useState(false);
+  const refreshTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [staleReason, setStaleReason] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -221,6 +226,26 @@ export function ArtifactReviewScreen({
     [upstreamDisplayKeysByItemVersionId, upstreamOverrides],
   );
 
+  // The page keys this component by version id. A successful refresh remounts
+  // it with the saved version; only a delayed refresh needs local recovery.
+  useEffect(
+    () => () => {
+      if (refreshTimeout.current) clearTimeout(refreshTimeout.current);
+    },
+    [],
+  );
+
+  function waitForSavedVersion(releasePending: () => void) {
+    setGenerationFinalizing(true);
+    router.refresh();
+    refreshTimeout.current = setTimeout(() => {
+      setGenerationFinalizing(false);
+      setRefreshTimedOut(true);
+      setErrorMessage('The draft was saved, but this page did not update. Reload to see it.');
+      releasePending();
+    }, 15_000);
+  }
+
   /**
    * `POST /api/projects/:projectId/artifacts/:type/generate` with no body -
    * the first-generation path (SCRUM-86 follow-up: a brand-new project's
@@ -233,35 +258,47 @@ export function ArtifactReviewScreen({
     setPending(true);
     setErrorMessage(null);
     setStaleReason(null);
+    setGenerationPreview('');
+    setRefreshTimedOut(false);
+    let saved = false;
     try {
       const response = await fetch(
         `/api/projects/${projectId}/artifacts/${artifactType}/generate`,
         {
           method: 'POST',
+          headers: { Accept: 'text/event-stream' },
         },
       );
-      const body = await response.json().catch(() => null);
-      if (!response.ok) {
-        // 409 PREREQUISITE_NOT_APPROVED's message is already a complete
-        // sentence ("Approve requirements before generating architecture.") -
-        // surfaced verbatim, same as every other mutation on this screen.
-        setErrorMessage(body?.error?.message ?? 'Something went wrong. Please try again.');
-        return;
-      }
+      const body = await readGenerationResponse(response, (delta) =>
+        setGenerationPreview((current) => current + delta),
+      );
       if (body?.status === 'stale') {
         setStaleReason(body.reason ?? 'base_changed');
         return;
       }
-      router.refresh();
-    } catch {
-      setErrorMessage('Could not reach the server. Check your connection and try again.');
+      waitForSavedVersion(() => setPending(false));
+      saved = true;
+    } catch (error) {
+      setGenerationFinalizing(false);
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : 'Could not reach the server. Check your connection and try again.',
+      );
     } finally {
-      setPending(false);
+      if (!saved) setPending(false);
     }
   }
 
   if (pending || aiRevisePending) {
-    return <GenerationSkeleton artifactTypeName={artifactTypeName} />;
+    return (
+      <GenerationSkeleton
+        artifactType={artifactType}
+        artifactTypeName={artifactTypeName}
+        preview={generationPreview}
+        finalizing={generationFinalizing}
+      />
+    );
   }
 
   // A version-less artifact still needs a first-generation action.
@@ -281,6 +318,15 @@ export function ArtifactReviewScreen({
           >
             <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>{errorMessage}</span>
+            {refreshTimedOut && (
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="ml-1 underline focus-visible:outline-2"
+              >
+                Reload page
+              </button>
+            )}
           </p>
         )}
         {staleReason && (
@@ -468,21 +514,22 @@ export function ArtifactReviewScreen({
     setAiRevisePending(true);
     setErrorMessage(null);
     setStaleReason(null);
+    setGenerationPreview('');
+    setRefreshTimedOut(false);
+    let saved = false;
     try {
       const trimmedFeedback = aiRevisionFeedback.trim();
       const response = await fetch(
         `/api/projects/${projectId}/artifacts/${artifactType}/generate`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
           body: JSON.stringify(trimmedFeedback ? { feedback: trimmedFeedback } : {}),
         },
       );
-      const body = await response.json().catch(() => null);
-      if (!response.ok) {
-        setErrorMessage(body?.error?.message ?? 'Something went wrong. Please try again.');
-        return;
-      }
+      const body = await readGenerationResponse(response, (delta) =>
+        setGenerationPreview((current) => current + delta),
+      );
       if (body?.status === 'stale') {
         setStaleReason(body.reason ?? 'base_changed');
         setAiRevisionOpen(false);
@@ -490,11 +537,17 @@ export function ArtifactReviewScreen({
       }
       setAiRevisionOpen(false);
       setAiRevisionFeedback('');
-      router.refresh();
-    } catch {
-      setErrorMessage('Could not reach the server. Check your connection and try again.');
+      waitForSavedVersion(() => setAiRevisePending(false));
+      saved = true;
+    } catch (error) {
+      setGenerationFinalizing(false);
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : 'Could not reach the server. Check your connection and try again.',
+      );
     } finally {
-      setAiRevisePending(false);
+      if (!saved) setAiRevisePending(false);
     }
   }
 
@@ -515,7 +568,7 @@ export function ArtifactReviewScreen({
       )}
       <header
         className={cn(
-          'border-surface-dim bg-surface-container-lowest rounded-xl border p-6',
+          'app-card p-6 sm:p-8',
           isRequirements && 'px-5 py-4 sm:px-6 lg:col-span-2',
           version.options && 'border-l-primary border-l-4',
         )}
@@ -533,7 +586,7 @@ export function ArtifactReviewScreen({
               </p>
             )}
             <div className="flex flex-wrap items-center gap-2.5">
-              <h1 className="text-on-surface text-display-sm font-semibold">
+              <h1 className="app-display text-on-surface text-[clamp(2rem,4vw,3rem)] leading-tight">
                 {version.artifactType === 'backlog'
                   ? 'Backlog Review'
                   : version.options
@@ -988,6 +1041,15 @@ export function ArtifactReviewScreen({
           >
             <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>{errorMessage}</span>
+            {refreshTimedOut && (
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="ml-1 underline focus-visible:outline-2"
+              >
+                Reload page
+              </button>
+            )}
           </p>
         )}
         <button
@@ -1065,7 +1127,7 @@ export function ArtifactReviewScreen({
               }}
               rows={2}
               placeholder="What should the AI change or focus on? (leave blank to just regenerate)"
-              className="border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus-visible:ring-primary mt-2 w-full resize-y rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+              className="border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus-visible:ring-primary mt-2 min-h-28 w-full resize-none rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
             />
             <div className="mt-2 flex items-center gap-2">
               <button

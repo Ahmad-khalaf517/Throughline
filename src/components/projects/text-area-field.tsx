@@ -34,7 +34,7 @@ export function TextAreaField({
         required={required}
         placeholder={placeholder}
         rows={rows}
-        className="border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus:border-primary focus:bg-surface-container-low focus:ring-primary w-full resize-y rounded-lg border px-3.5 py-3 text-sm transition-colors focus:ring-1 focus:outline-none"
+        className="border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus:border-primary focus:bg-surface-container-low focus:ring-primary min-h-44 w-full resize-none rounded-lg border px-3.5 py-3 text-sm leading-relaxed transition-colors focus:ring-1 focus:outline-none"
       />
     </FieldShell>
   );
