@@ -6,6 +6,7 @@ import { ApiError } from '@/lib/errors';
 import { toConnectionDTO } from '@/lib/serialize';
 import { routeErrorResponse } from '@/app/api/_shared/connection-errors';
 import { readJsonBody } from '@/app/api/_shared/body';
+import { disconnectResponse } from '@/app/api/_shared/disconnect';
 import { stitchConnectSchema } from '../schemas';
 
 /**
@@ -51,4 +52,13 @@ export async function POST(request: Request) {
   } catch (error) {
     return routeErrorResponse(error);
   }
+}
+
+/**
+ * `DELETE /api/connections/stitch`: this static route shadows the dynamic
+ * `[provider]/route.ts` for this path (the App Router prefers the static segment),
+ * so it needs its own DELETE or the request answers 405.
+ */
+export async function DELETE(request: Request) {
+  return disconnectResponse(request, 'stitch');
 }
