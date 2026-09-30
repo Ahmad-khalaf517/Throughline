@@ -367,6 +367,9 @@ async function main() {
   process.env.STITCH_API_KEY = 'spike-e4-s5-fake-key';
   process.env.SUPABASE_STORAGE_BUCKET = 'spike-e4-s5-stitch-assets';
 
+  // Round 14 (SCRUM-98): generate() now needs the owner's own Stitch connection, which this
+  // spike does not create (saving one would overwrite a real user's key in the hosted DB), so
+  // its generate scenarios are stale until they are given a connection. Kept type-correct only.
   const { db, schema } = await import('../src/db');
   const stitch = await import('../src/external/stitch');
   await installFakeStitchSdk();
@@ -496,7 +499,7 @@ async function main() {
       .where(eq(schema.artifactVersion.id, version1.id));
     console.log(`[spike] scenario 1: ui_requirements artifact_version ${version1.id} approved.`);
 
-    const preview = await stitch.previewPrompt(version1.id);
+    const preview = await stitch.previewPrompt(version1.id, { userId: ownerUserId });
     if (!preview.prompt.includes('Backlog review screen') || !preview.prompt.includes('UI-01')) {
       throw new Error(
         `scenario 1 assertion failed: previewPrompt's prompt did not contain expected content: ` +
@@ -509,7 +512,9 @@ async function main() {
     );
 
     const world = createFakeExternalWorld();
-    const output = await withFakeFetch(world.fetch, () => stitch.generate(version1.id));
+    const output = await withFakeFetch(world.fetch, () =>
+      stitch.generate(version1.id, { userId: ownerUserId }),
+    );
 
     if (output.mode !== 'api') {
       throw new Error(`scenario 1 assertion failed: expected mode='api', got ${output.mode}`);
@@ -650,7 +655,7 @@ async function main() {
       `[spike] scenario 2: version 1 (${version1Id}) superseded, version 2 (${version2.id}) approved.`,
     );
 
-    const preview = await stitch.previewPrompt(version2.id);
+    const preview = await stitch.previewPrompt(version2.id, { userId: ownerUserId });
     if (!preview.prompt.includes('Stale dependency warning banner')) {
       throw new Error(
         `scenario 2 assertion failed: previewPrompt's prompt did not contain expected content: ` +
@@ -663,7 +668,9 @@ async function main() {
 
     // FR-054: generate() does NOT throw on a definitive failure - the
     // preserved prompt IS the output, and the planning workflow continues.
-    const output = await withFakeFetch(world.fetch, () => stitch.generate(version2.id));
+    const output = await withFakeFetch(world.fetch, () =>
+      stitch.generate(version2.id, { userId: ownerUserId }),
+    );
 
     if (output.mode !== 'manual_fallback') {
       throw new Error(

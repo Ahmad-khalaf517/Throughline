@@ -307,3 +307,39 @@ export function readExistingRepository(body: unknown): ExistingRepository | null
     name: typeof name === 'string' && name.trim() !== '' ? name : null,
   };
 }
+
+/**
+ * `https://github.com/<owner>/<name>/settings` for a stored repository URL
+ * (Danger Zone: where the user deletes the repository after removing its link
+ * from Throughline). `null` unless the URL is exactly a github.com repository
+ * URL over https - the result is rendered as an `href`, so anything else
+ * (another host, `http:`, credentials, extra path, malformed) gets no link.
+ */
+export function githubRepositorySettingsUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'github.com') return null;
+  if (parsed.username !== '' || parsed.password !== '' || parsed.port !== '') return null;
+  const segments = parsed.pathname.split('/').filter((segment) => segment !== '');
+  if (segments.length !== 2) return null;
+  const [owner, name] = segments as [string, string];
+  const safe = /^[A-Za-z0-9._-]+$/;
+  if (!safe.test(owner) || !safe.test(name)) return null;
+  return `https://github.com/${owner}/${name}/settings`;
+}
+
+/**
+ * Copy for a failed `DELETE /api/projects/:projectId/github` (API Contracts
+ * section 8): `409 UNLINK_BLOCKED` means a GitHub operation is still running.
+ */
+export function describeUnlinkError(code: string | undefined): string {
+  if (code === 'UNLINK_BLOCKED') {
+    return 'A repository is still being created - try again in a minute.';
+  }
+  return 'Could not remove the link. Please try again.';
+}

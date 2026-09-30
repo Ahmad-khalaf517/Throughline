@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
-import { getOperationById } from '@/external/operations';
-import { ApiError, errorResponse } from '@/lib/errors';
+import { getOperationById, getOperationDTOState } from '@/external/operations';
+import { ApiError } from '@/lib/errors';
+import { routeErrorResponse } from '@/app/api/_shared/connection-errors';
 import { toExternalOperationDTO } from '@/lib/serialize';
 
 interface RouteParams {
@@ -26,8 +27,13 @@ export async function GET(request: Request, { params }: RouteParams) {
 
     await requireProjectOwner(user.id, operation.projectId);
 
-    return NextResponse.json(toExternalOperationDTO(operation));
+    // Round 14 (FR-090): `needsReconnect` comes from the connection status
+    // recorded on the operation - status only, so a poll never refreshes a token.
+    const state = await getOperationDTOState(operationId);
+    if (!state) throw new ApiError('NOT_FOUND', 'Operation not found.');
+
+    return NextResponse.json(toExternalOperationDTO(state));
   } catch (error) {
-    return errorResponse(error);
+    return routeErrorResponse(error);
   }
 }

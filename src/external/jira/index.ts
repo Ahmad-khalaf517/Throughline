@@ -32,18 +32,49 @@
 // Module Boundaries 4.6 / eslint.config.mjs's layer5-external-provider
 // rule), never through `lineage/identity` directly - see
 // `backlog.getBacklogVersionMembers`'s own header comment for why.
+//
+// Round 14 (SCRUM-97, ERD 7.4 / 7.6): a NEW operation uses the acting user's own
+// Atlassian 3LO connection (`connections.getCredential(ctx.userId, 'jira')`,
+// resolved BEFORE `runOperation`) against the target the route passes in `ctx`
+// (site cloudId + project key); every call goes to
+// `https://api.atlassian.com/ex/jira/<cloudId>/rest/api/3/...` with a Bearer
+// token. Anything that touches an EXISTING operation (its send, its reconcile,
+// a retry) takes its credential from the connection recorded on that row
+// (`getCredentialForOperation`); only `{ kind: 'legacy' }` (no recorded
+// connection) falls back to the optional JIRA_* environment credential (Basic
+// auth against JIRA_BASE_URL), exactly as before round 14.
 import { createHash } from 'node:crypto';
 import { env } from '@/lib/env';
+import { legacyCredentialAvailable } from '@/lib/legacy-credentials';
+import {
+  getCredential,
+  getCredentialForOperation,
+  listConnections,
+  reportAuthFailure,
+  ConnectionRequiredError,
+  ReconnectRequiredError,
+  type ConnectionStatus,
+  type Credential,
+} from '@/connections';
 import {
   runOperation,
   getRefsForLogicalItem,
   getRefById,
+  getOperationById,
   DefinitiveProviderError,
   type ExternalRef,
+  type RunOperationResult,
 } from '@/external/operations';
 import { getWarnings, getExternalDrift, type ImpactRow } from '@/lineage/impact';
 import { getBacklogVersionMembers, type BacklogVersionMember } from '@/artifact-types/backlog';
 import { buildIssueDescription, buildIssueSummary } from './issue-content';
+import {
+  JIRA_PROJECT_TEMPLATE_KEYS,
+  JIRA_PROJECT_TYPE_KEY,
+  type JiraProjectTemplate,
+} from './project-templates';
+
+export type { JiraProjectTemplate } from './project-templates';
 
 // ---------------------------------------------------------------------------
 // Module Boundaries 4.6 documents `previewExport`'s `skipped: PreviewItem[]`
@@ -106,12 +137,109 @@ export class BacklogVersionNotApprovedError extends Error {
   }
 }
 
+/**
+ * Round 14 (Module Boundaries 4.6, D1): what a layer-6 route passes in - the
+ * verified project owner and the project's chosen Jira site + project key. This
+ * module cannot read `project` or resolve users itself. A missing target (either
+ * half) is the API's `TARGET_REQUIRED`.
+ */
+export type JiraCtx = { userId: string; jiraCloudId?: string; jiraProjectKey?: string };
+
+/**
+ * Round 14 (FR-088): the project has no Jira site + project chosen, so there is
+ * nowhere to create issues. -> API 409 `TARGET_REQUIRED` `{ target: 'jira' }`.
+ * Thrown before any operation row exists.
+ */
+export class JiraTargetRequiredError extends Error {
+  readonly target = 'jira' as const;
+
+  constructor() {
+    super('This project has no Jira site and project chosen yet. Choose where issues go first.');
+    this.name = 'JiraTargetRequiredError';
+  }
+}
+
+/** `listProjects`: the requested `cloudId` is not one of the caller's accessible sites. -> API 422 `TARGET_NOT_ACCESSIBLE`. */
+export class JiraSiteNotAccessibleError extends Error {
+  constructor() {
+    super('That Jira site is not available to your connected Atlassian account.');
+    this.name = 'JiraSiteNotAccessibleError';
+  }
+}
+
+/**
+ * `createProject` (round 17, FR-092): the key already exists in the site or is not
+ * a valid key; nothing was created. -> API 409 `PROJECT_KEY_TAKEN`.
+ */
+export class ProjectKeyTakenError extends Error {
+  constructor() {
+    super('That Jira project key is already used in this site or is not valid.');
+    this.name = 'ProjectKeyTakenError';
+  }
+}
+
+/**
+ * `createProject` (round 17, FR-092): Jira refused with 403 - the connected
+ * account lacks the Administer Jira global permission. -> API 403 `JIRA_ADMIN_REQUIRED`.
+ */
+export class JiraAdminRequiredError extends Error {
+  constructor() {
+    super(
+      "You need the 'Administer Jira' permission on this site to create a project. " +
+        'Ask a Jira admin, or create the project in Jira and refresh the list.',
+    );
+    this.name = 'JiraAdminRequiredError';
+  }
+}
+
+export class JiraOperationFailedError extends Error {
+  constructor(reason: string) {
+    super(`Jira operation failed: ${reason}`);
+    this.name = 'JiraOperationFailedError';
+  }
+}
+
+export class JiraOperationRefusedError extends Error {
+  constructor(reason: string) {
+    super(`Jira operation refused: ${reason}`);
+    this.name = 'JiraOperationRefusedError';
+  }
+}
+
+export class JiraOperationConflictError extends Error {
+  constructor(operationKey: string) {
+    super(
+      `Jira operation ${operationKey} already exists with a different request (R11) - ` +
+        'never a silent resend or reuse',
+    );
+    this.name = 'JiraOperationConflictError';
+  }
+}
+
+/**
+ * Round 14 (API Contracts `PreviewConnectionDTO`, FR-089): whether the caller
+ * can write to Jira right now, carried in the preview so the screen shows the
+ * connect-to-continue prompt instead of the preview failing.
+ */
+export interface PreviewConnection {
+  status: ConnectionStatus['status'];
+  /** `project.jira_cloud_id` and `project.jira_project_key` are both set. */
+  targetReady: boolean;
+  /** The connected account's display name, or null. Never a token. */
+  accountName: string | null;
+}
+
 // ---------------------------------------------------------------------------
-// Jira REST API v3 client - raw fetch, Basic auth (base64
-// `email:api_token`), adapted from scripts/spike-jira-reconciliation.ts's
-// own client shape (that script is spike-local per its own header comment -
-// this is a real re-implementation of the same shape, not an import of it).
+// Jira REST API v3 client - raw fetch. Two credentials (see the header):
+//  - the acting user's Atlassian 3LO token: Bearer, against
+//    https://api.atlassian.com/ex/jira/<cloudId>;
+//  - the legacy environment credential: Basic auth (base64 `email:api_token`)
+//    against JIRA_BASE_URL, adapted from scripts/spike-jira-reconciliation.ts's
+//    own client shape (that script is spike-local per its own header comment -
+//    this is a real re-implementation of the same shape, not an import of it).
 // ---------------------------------------------------------------------------
+
+const ATLASSIAN_API = 'https://api.atlassian.com';
 
 interface JiraConfig {
   baseUrl: string;
@@ -120,17 +248,48 @@ interface JiraConfig {
   projectKey: string;
 }
 
+interface JiraTarget {
+  cloudId: string;
+  projectKey: string;
+}
+
+type JiraAuth =
+  | { kind: 'user'; credential: Credential; target: JiraTarget }
+  | { kind: 'legacy'; config: JiraConfig };
+
+function requireTarget(ctx: JiraCtx): JiraTarget {
+  if (!ctx.jiraCloudId || !ctx.jiraProjectKey) throw new JiraTargetRequiredError();
+  return { cloudId: ctx.jiraCloudId, projectKey: ctx.jiraProjectKey };
+}
+
+/**
+ * `recorded` is the credential a NEW operation just resolved with
+ * `getCredential`, or the one recorded on an existing operation
+ * (`getCredentialForOperation`); only `{ kind: 'legacy' }` reads JIRA_* env.
+ */
+function authFor(recorded: Credential | { kind: 'legacy' }, ctx: JiraCtx): JiraAuth {
+  if ('kind' in recorded) return { kind: 'legacy', config: requireJiraConfig() };
+  return { kind: 'user', credential: recorded, target: requireTarget(ctx) };
+}
+
+function projectKeyOf(auth: JiraAuth): string {
+  return auth.kind === 'user' ? auth.target.projectKey : auth.config.projectKey;
+}
+
 function requireJiraConfig(): JiraConfig {
-  // Combined guard (mirrors the spike's own `!a || !b || !c || !d` shape) so
-  // TypeScript's control-flow narrowing sees all four as defined strings
-  // past this point, with no non-null assertions needed below.
-  if (!env.JIRA_BASE_URL || !env.JIRA_EMAIL || !env.JIRA_API_TOKEN || !env.JIRA_PROJECT_KEY) {
-    const missing: string[] = [];
-    if (!env.JIRA_BASE_URL) missing.push('JIRA_BASE_URL');
-    if (!env.JIRA_EMAIL) missing.push('JIRA_EMAIL');
-    if (!env.JIRA_API_TOKEN) missing.push('JIRA_API_TOKEN');
-    if (!env.JIRA_PROJECT_KEY) missing.push('JIRA_PROJECT_KEY');
-    throw new Error(`Jira is not configured - missing ${missing.join(', ')} (ERD 7.4, real mode).`);
+  // A legacy operation (connection_id NULL) whose JIRA_* environment credential
+  // is gone cannot continue: RECONNECT_REQUIRED with the legacy hint, never a
+  // failed operation (ERD 7.6, Module Boundaries 4.9 rule 6). The error names no
+  // variable and carries no value. `legacyCredentialAvailable` (src/lib) is the
+  // one definition of "configured"; the combined guard below only narrows types.
+  if (
+    !legacyCredentialAvailable('jira') ||
+    !env.JIRA_BASE_URL ||
+    !env.JIRA_EMAIL ||
+    !env.JIRA_API_TOKEN ||
+    !env.JIRA_PROJECT_KEY
+  ) {
+    throw new ReconnectRequiredError('jira', 'legacy_credential_missing', null);
   }
   return {
     baseUrl: env.JIRA_BASE_URL,
@@ -155,25 +314,63 @@ class JiraHttpError extends Error {
   }
 }
 
-async function jiraFetch<T>(config: JiraConfig, path: string, init: RequestInit): Promise<T> {
-  const url = `${config.baseUrl.replace(/\/$/, '')}${path}`;
-  const res = await fetch(url, {
+/**
+ * One request. Atlassian answered 401 to the user's token: it is invalid
+ * (revoked at Atlassian, or expired past what a refresh can repair). Marks the
+ * connection `needs_reauth` (and nothing else) and stops with
+ * `ReconnectRequiredError` - never a `failed` operation (ERD 7.6). The legacy
+ * credential (`credential` null) keeps its old handling: a plain JiraHttpError.
+ */
+async function requestJson<T>(args: {
+  url: string;
+  label: string;
+  authorization: string;
+  init: RequestInit;
+  credential: Credential | null;
+}): Promise<T> {
+  const { init, credential } = args;
+  const res = await fetch(args.url, {
     ...init,
     headers: {
-      Authorization: authHeader(config),
+      Authorization: args.authorization,
       'Content-Type': 'application/json',
       Accept: 'application/json',
       ...init.headers,
     },
   });
   const bodyText = await res.text();
+  if (res.status === 401 && credential) {
+    await reportAuthFailure(credential.connectionId);
+    throw new ReconnectRequiredError('jira', 'needs_reauth', credential.connectionId);
+  }
   if (!res.ok) {
-    throw new JiraHttpError(
-      res.status,
-      `Jira API ${init.method ?? 'GET'} ${path} -> ${res.status}: ${bodyText}`,
-    );
+    // Status + a fixed label only: Atlassian's error body can echo request
+    // content (issue text, JQL) and must never reach a log or a stored message
+    // (NFR-005). Classification reads `status` alone.
+    throw new JiraHttpError(res.status, `Jira API ${args.label} -> ${res.status}`);
   }
   return bodyText ? (JSON.parse(bodyText) as T) : ({} as T);
+}
+
+/** A Jira REST call for an operation target: `/ex/jira/<cloudId>` + Bearer for a user, JIRA_BASE_URL + Basic for legacy. */
+async function jiraFetch<T>(auth: JiraAuth, path: string, init: RequestInit): Promise<T> {
+  const label = `${init.method ?? 'GET'} ${path}`;
+  if (auth.kind === 'user') {
+    return requestJson<T>({
+      url: `${ATLASSIAN_API}/ex/jira/${encodeURIComponent(auth.target.cloudId)}${path}`,
+      label,
+      authorization: `Bearer ${auth.credential.accessToken}`,
+      init,
+      credential: auth.credential,
+    });
+  }
+  return requestJson<T>({
+    url: `${auth.config.baseUrl.replace(/\/$/, '')}${path}`,
+    label,
+    authorization: authHeader(auth.config),
+    init,
+    credential: null,
+  });
 }
 
 interface JiraCreateIssueResponse {
@@ -186,12 +383,8 @@ interface JiraSearchResponse {
   issues: Array<{ id: string; key: string }>;
 }
 
-async function searchJql(
-  config: JiraConfig,
-  jql: string,
-  maxResults = 5,
-): Promise<JiraSearchResponse> {
-  return jiraFetch<JiraSearchResponse>(config, '/rest/api/3/search/jql', {
+async function searchJql(auth: JiraAuth, jql: string, maxResults = 5): Promise<JiraSearchResponse> {
+  return jiraFetch<JiraSearchResponse>(auth, '/rest/api/3/search/jql', {
     method: 'POST',
     body: JSON.stringify({ jql, maxResults, fields: ['key'] }),
   });
@@ -201,8 +394,58 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function issueUrl(config: JiraConfig, key: string): string {
-  return `${config.baseUrl.replace(/\/$/, '')}/browse/${key}`;
+interface AccessibleResource {
+  id: string;
+  url: string;
+  name: string;
+}
+
+/** `GET /oauth/token/accessible-resources` with the user's own token: every Atlassian site it may act on. */
+async function fetchAccessibleResources(credential: Credential): Promise<AccessibleResource[]> {
+  const body = await requestJson<unknown>({
+    url: `${ATLASSIAN_API}/oauth/token/accessible-resources`,
+    label: 'GET /oauth/token/accessible-resources',
+    authorization: `Bearer ${credential.accessToken}`,
+    init: { method: 'GET' },
+    credential,
+  });
+  if (!Array.isArray(body)) return [];
+  const sites: AccessibleResource[] = [];
+  for (const entry of body) {
+    const site = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+    if (typeof site.id === 'string' && site.id !== '') {
+      sites.push({
+        id: site.id,
+        url: typeof site.url === 'string' ? site.url : '',
+        name: typeof site.name === 'string' ? site.name : '',
+      });
+    }
+  }
+  return sites;
+}
+
+/**
+ * The human-facing `.../browse/KEY` link. For a user credential the site URL
+ * comes from the connection's stored default site when it is the target site,
+ * otherwise from accessible-resources; if neither is available the ref simply
+ * has no URL (best effort - it must never fail an issue that already exists).
+ */
+async function issueUrl(auth: JiraAuth, key: string): Promise<string | undefined> {
+  if (auth.kind === 'legacy') return `${auth.config.baseUrl.replace(/\/$/, '')}/browse/${key}`;
+  const { credential, target } = auth;
+  let siteUrl: string | undefined =
+    credential.meta.cloudId === target.cloudId ? credential.meta.siteUrl : undefined;
+  if (!siteUrl) {
+    try {
+      siteUrl = (await fetchAccessibleResources(credential)).find(
+        (site) => site.id === target.cloudId,
+      )?.url;
+    } catch (error) {
+      if (error instanceof ReconnectRequiredError) throw error;
+      siteUrl = undefined;
+    }
+  }
+  return siteUrl ? `${siteUrl.replace(/\/$/, '')}/browse/${key}` : undefined;
 }
 
 function markerFor(itemVersionId: string): string {
@@ -238,12 +481,27 @@ function refJiraProjectKey(ref: ExternalRef): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-async function refsInConfiguredProject(
-  logicalItemId: string,
-  jiraProjectKey: string,
-): Promise<ExternalRef[]> {
+/**
+ * Round 14: which refs count as "already exported here". A user target
+ * (`cloudId` + `projectKey`) is matched on the OPERATION's `target_descriptor`
+ * by `getRefsForLogicalItem` itself (ERD 7.4), so a ref made in another site or
+ * project never counts. A legacy (environment-credential) operation has no
+ * site, so it keeps the pre-round-14 filter on `metadata.jiraProjectKey`.
+ */
+type RefScope = { kind: 'target'; target: JiraTarget } | { kind: 'legacy'; projectKey: string };
+
+function scopeOf(auth: JiraAuth): RefScope {
+  return auth.kind === 'user'
+    ? { kind: 'target', target: auth.target }
+    : { kind: 'legacy', projectKey: auth.config.projectKey };
+}
+
+async function refsInScope(logicalItemId: string, scope: RefScope): Promise<ExternalRef[]> {
+  if (scope.kind === 'target') {
+    return getRefsForLogicalItem(logicalItemId, 'jira', scope.target);
+  }
   const refs = await getRefsForLogicalItem(logicalItemId, 'jira');
-  return refs.filter((ref) => refJiraProjectKey(ref) === jiraProjectKey);
+  return refs.filter((ref) => refJiraProjectKey(ref) === scope.projectKey);
 }
 
 /**
@@ -256,10 +514,10 @@ async function refsInConfiguredProject(
  */
 async function resolveDecisionNeed(
   member: BacklogVersionMember,
-  jiraProjectKey: string,
+  scope: RefScope,
 ): Promise<PreviewItem | null> {
   if (!member.logicalItemId || !member.itemVersionId || !member.displayKey) return null;
-  const scoped = await refsInConfiguredProject(member.logicalItemId, jiraProjectKey);
+  const scoped = await refsInScope(member.logicalItemId, scope);
   if (!scoped.length) return null;
   const currentRef = scoped.find((ref) => ref.sourceItemVersionId === member.itemVersionId);
   if (currentRef) return null;
@@ -277,10 +535,10 @@ async function resolveDecisionNeed(
  */
 async function resolveEpicJiraKey(
   epic: BacklogVersionMember,
-  jiraProjectKey: string,
+  scope: RefScope,
 ): Promise<string | null> {
   if (!epic.logicalItemId) return null;
-  const scoped = await refsInConfiguredProject(epic.logicalItemId, jiraProjectKey);
+  const scoped = await refsInScope(epic.logicalItemId, scope);
   // Step 1 (ERD 7.4): the Epic's CURRENT ItemVersion's own ref, if any -
   // i.e. this same captured version's own Epic membership row already has a
   // Jira ref (either from an earlier call, or one this same export call just
@@ -339,43 +597,65 @@ async function captureBacklogVersion(backlogVersionId: string): Promise<Captured
 // FR-070 - preview.
 // ---------------------------------------------------------------------------
 
+/**
+ * Round 14 (FR-089): built from local state only - it makes no Jira call and
+ * needs no credential, so it never throws `ConnectionRequiredError` /
+ * `ReconnectRequiredError`; `connection` tells the screen whether to show the
+ * connect-to-continue prompt. Until the project has a Jira target (`ctx`), the
+ * FR-074 checks have no site/project to be scoped to, so `skipped` is empty and
+ * `connection.targetReady` is false.
+ */
 export async function previewExport(
   backlogVersionId: string,
-): Promise<{ epics: number; stories: number; skipped: PreviewItem[]; impact: ImpactRow[] }> {
+  ctx: JiraCtx,
+): Promise<{
+  epics: number;
+  stories: number;
+  skipped: PreviewItem[];
+  impact: ImpactRow[];
+  connection: PreviewConnection;
+}> {
   const { projectId, epics, stories, itemVersionIds } =
     await captureBacklogVersion(backlogVersionId);
-  const { projectKey: jiraProjectKey } = requireJiraConfig();
+  const target =
+    ctx.jiraCloudId && ctx.jiraProjectKey
+      ? { cloudId: ctx.jiraCloudId, projectKey: ctx.jiraProjectKey }
+      : null;
 
   const skipped: PreviewItem[] = [];
 
-  // FR-074 for Epics.
-  for (const epic of epics) {
-    const decisionItem = await resolveDecisionNeed(epic, jiraProjectKey);
-    if (decisionItem) skipped.push(decisionItem);
-  }
+  if (target) {
+    const scope: RefScope = { kind: 'target', target };
 
-  // Stories: parent resolvability first (ERD 7.4: "A Story whose Epic has no
-  // Jira ref at all is not exported and is listed in the preview") - a Story
-  // that can't be exported either way this call is listed ONCE, as
-  // `epic_has_no_jira_ref`, not also flagged for its own FR-074 decision
-  // (which would be moot: `exportBacklog` never even reaches that check for
-  // an unresolvable-parent Story, see its own loop below).
-  for (const story of stories) {
-    const epic = findEpicMember(epics, story.parentLogicalItemId);
-    const parentKey = epic ? await resolveEpicJiraKey(epic, jiraProjectKey) : null;
-    if (!parentKey) {
-      if (story.logicalItemId && story.displayKey) {
-        skipped.push({
-          kind: 'skipped',
-          logicalItemId: story.logicalItemId,
-          displayKey: story.displayKey,
-          reason: 'epic_has_no_jira_ref',
-        });
-      }
-      continue;
+    // FR-074 for Epics.
+    for (const epic of epics) {
+      const decisionItem = await resolveDecisionNeed(epic, scope);
+      if (decisionItem) skipped.push(decisionItem);
     }
-    const decisionItem = await resolveDecisionNeed(story, jiraProjectKey);
-    if (decisionItem) skipped.push(decisionItem);
+
+    // Stories: parent resolvability first (ERD 7.4: "A Story whose Epic has no
+    // Jira ref at all is not exported and is listed in the preview") - a Story
+    // that can't be exported either way this call is listed ONCE, as
+    // `epic_has_no_jira_ref`, not also flagged for its own FR-074 decision
+    // (which would be moot: `exportBacklog` never even reaches that check for
+    // an unresolvable-parent Story, see its own loop below).
+    for (const story of stories) {
+      const epic = findEpicMember(epics, story.parentLogicalItemId);
+      const parentKey = epic ? await resolveEpicJiraKey(epic, scope) : null;
+      if (!parentKey) {
+        if (story.logicalItemId && story.displayKey) {
+          skipped.push({
+            kind: 'skipped',
+            logicalItemId: story.logicalItemId,
+            displayKey: story.displayKey,
+            reason: 'epic_has_no_jira_ref',
+          });
+        }
+        continue;
+      }
+      const decisionItem = await resolveDecisionNeed(story, scope);
+      if (decisionItem) skipped.push(decisionItem);
+    }
   }
 
   // TR FR-085: impact for the item_versions this export would create from -
@@ -386,7 +666,15 @@ export async function previewExport(
     (row) => row.subjectKind === 'item_version' && itemVersionIdSet.has(row.subjectId),
   );
 
-  return { epics: epics.length, stories: stories.length, skipped, impact };
+  // Read last, as github.previewInit does, so the status is as current as it can be.
+  const jira = (await listConnections(ctx.userId)).find((c) => c.provider === 'jira');
+  const connection: PreviewConnection = {
+    status: jira?.status ?? 'none',
+    targetReady: target !== null,
+    accountName: jira?.displayName ?? null,
+  };
+
+  return { epics: epics.length, stories: stories.length, skipped, impact, connection };
 }
 
 // ---------------------------------------------------------------------------
@@ -394,7 +682,7 @@ export async function previewExport(
 // ---------------------------------------------------------------------------
 
 async function sendCreateIssue(args: {
-  config: JiraConfig;
+  auth: JiraAuth;
   member: BacklogVersionMember;
   itemType: 'epic' | 'story';
   // `exportOneItem` has already rejected a member with no display key.
@@ -404,10 +692,11 @@ async function sendCreateIssue(args: {
 }): Promise<{
   externalId: string;
   externalKey: string;
-  externalUrl: string;
-  metadata: { jiraProjectKey: string };
+  externalUrl?: string;
+  metadata: IssueRefMetadata;
 }> {
-  const { config, member, itemType, displayKey, marker, parentKey } = args;
+  const { auth, member, itemType, displayKey, marker, parentKey } = args;
+  const projectKey = projectKeyOf(auth);
   // FR-071: no other issue-type naming scheme is named anywhere in the
   // frozen ERD/TR, and this project's own capstone scope has no Jira-schema-
   // discovery step to read the configured project's REAL issue-type names -
@@ -427,7 +716,7 @@ async function sendCreateIssue(args: {
     ],
   });
   const fields: Record<string, unknown> = {
-    project: { key: config.projectKey },
+    project: { key: projectKey },
     issuetype: { name: issueType },
     summary: buildIssueSummary({ itemType, displayKey, payload: member.payload }),
     // Primary marker (ERD 7.4): a label, JQL-queryable without any
@@ -441,7 +730,7 @@ async function sendCreateIssue(args: {
 
   let response: JiraCreateIssueResponse;
   try {
-    response = await jiraFetch<JiraCreateIssueResponse>(config, '/rest/api/3/issue', {
+    response = await jiraFetch<JiraCreateIssueResponse>(auth, '/rest/api/3/issue', {
       method: 'POST',
       body: JSON.stringify({ fields }),
     });
@@ -457,43 +746,59 @@ async function sendCreateIssue(args: {
   return {
     externalId: response.id,
     externalKey: response.key,
-    externalUrl: issueUrl(config, response.key),
-    metadata: { jiraProjectKey: config.projectKey },
+    ...(await urlField(auth, response.key)),
+    metadata: refMetadata(auth),
   };
 }
 
-async function reconcileIssue(args: { config: JiraConfig; marker: string }): Promise<
+/**
+ * `metadata.jiraProjectKey` is what the legacy FR-074 scoping reads (and what
+ * refs made before round 14 carry), so it is kept on every ref; a user ref also
+ * records its site as `cloudId` (informational - the scoping of a user target
+ * reads the operation's `target_descriptor`, ERD 7.4).
+ */
+type IssueRefMetadata = { jiraProjectKey: string; cloudId?: string };
+
+function refMetadata(auth: JiraAuth): IssueRefMetadata {
+  return auth.kind === 'user'
+    ? { jiraProjectKey: auth.target.projectKey, cloudId: auth.target.cloudId }
+    : { jiraProjectKey: auth.config.projectKey };
+}
+
+async function urlField(auth: JiraAuth, key: string): Promise<{ externalUrl?: string }> {
+  const externalUrl = await issueUrl(auth, key);
+  return externalUrl === undefined ? {} : { externalUrl };
+}
+
+async function reconcileIssue(args: { auth: JiraAuth; marker: string }): Promise<
   | {
       found: true;
       externalId: string;
       externalKey: string;
-      externalUrl: string;
-      metadata: { jiraProjectKey: string };
+      externalUrl?: string;
+      metadata: IssueRefMetadata;
     }
   | { found: false }
 > {
-  const { config, marker } = args;
+  const { auth, marker } = args;
+  const projectKey = projectKeyOf(auth);
   // Primary path: bounded re-query by label (TR 30.2 - Jira search can lag
-  // behind a create).
+  // behind a create). Searched within the OPERATION's project (ERD 7.4).
   for (let attempt = 1; attempt <= RECONCILE_MAX_ATTEMPTS; attempt++) {
-    const byLabel = await searchJql(
-      config,
-      `project = "${config.projectKey}" AND labels = "${marker}"`,
-    );
+    const byLabel = await searchJql(auth, `project = "${projectKey}" AND labels = "${marker}"`);
     const foundByLabel = byLabel.issues[0];
     if (foundByLabel) {
       return {
         found: true,
         externalId: foundByLabel.id,
         externalKey: foundByLabel.key,
-        externalUrl: issueUrl(config, foundByLabel.key),
+        ...(await urlField(auth, foundByLabel.key)),
         // Same slot `sendCreateIssue` already sets on a direct success -
         // without it here, a ref adopted via reconciliation would carry no
-        // `jiraProjectKey` at all and `refJiraProjectKey`/
-        // `resolveDecisionNeed`/`resolveEpicJiraKey` (below) could never see
-        // it as "in the configured project" again (see the extended comment
-        // on `ReconcileResult` in external/operations/index.ts).
-        metadata: { jiraProjectKey: config.projectKey },
+        // `jiraProjectKey` at all and `refJiraProjectKey` (the legacy scoping)
+        // could never see it as "in the configured project" again (see the
+        // extended comment on `ReconcileResult` in external/operations/index.ts).
+        metadata: refMetadata(auth),
       };
     }
     if (attempt < RECONCILE_MAX_ATTEMPTS) await sleep(RECONCILE_DELAY_MS);
@@ -501,25 +806,33 @@ async function reconcileIssue(args: { config: JiraConfig; marker: string }): Pro
   // Backup path: independent description-footer text search (TR 30.2 / the
   // spike's own two-path design) - run once, after the label loop above has
   // already given the index at least as much time to catch up.
-  const byText = await searchJql(config, `project = "${config.projectKey}" AND text ~ "${marker}"`);
+  const byText = await searchJql(auth, `project = "${projectKey}" AND text ~ "${marker}"`);
   const foundByText = byText.issues[0];
   if (!foundByText) return { found: false };
   return {
     found: true,
     externalId: foundByText.id,
     externalKey: foundByText.key,
-    externalUrl: issueUrl(config, foundByText.key),
-    metadata: { jiraProjectKey: config.projectKey },
+    ...(await urlField(auth, foundByText.key)),
+    metadata: refMetadata(auth),
   };
 }
 
-async function exportOneItem(args: {
+/**
+ * One Epic/Story = one `runOperation`. `recorded` is the credential the caller
+ * resolved for the request (a NEW export: the user's own, via `getCredential`;
+ * a retry: the one recorded on the operation). The request itself (key, hash,
+ * descriptor) is built from `ctx`; every send/reconcile of THIS row re-resolves
+ * its credential from the row itself (`getCredentialForOperation`), so a retry
+ * never silently switches account.
+ */
+async function runItemOperation(args: {
   member: BacklogVersionMember;
-  config: JiraConfig;
-  decisions: Map<LogicalItemId, 'skip' | 'create_new'>;
+  recorded: Credential | { kind: 'legacy' };
+  ctx: JiraCtx;
   parentKey: string | null;
-}): Promise<ExternalRef | null> {
-  const { member, config, decisions, parentKey } = args;
+}): Promise<RunOperationResult> {
+  const { member, recorded, ctx, parentKey } = args;
   if (!member.logicalItemId || !member.itemVersionId || !member.displayKey || !member.itemType) {
     // A real membership row always has these - `captureBacklogVersion`'s own
     // `first` check already guards the "version has literally no members"
@@ -527,8 +840,72 @@ async function exportOneItem(args: {
     // LEFT JOINs).
     throw new Error(`backlog_version ${member.sourceVersionId} has a malformed membership row`);
   }
+  const requestAuth = authFor(recorded, ctx);
+  const credential = requestAuth.kind === 'user' ? requestAuth.credential : null;
+  const projectKey = projectKeyOf(requestAuth);
 
-  const decisionItem = await resolveDecisionNeed(member, config.projectKey);
+  const itemType = member.itemType === 'epic' ? 'epic' : 'story';
+  const displayKey = member.displayKey; // narrowed by the guard above; a closure would lose it
+  const marker = markerFor(member.itemVersionId);
+  // ERD 7.4's own literal key format.
+  const operationKey = `jira:create_issue:${projectKey}:${member.itemVersionId}`;
+  // A connection-backed request carries its site and project (ERD 7.4/4.14),
+  // under the names `getRefsForLogicalItem` filters on; the legacy shape is
+  // unchanged so a legacy operation's stored hash still matches.
+  const targetDescriptor =
+    requestAuth.kind === 'user'
+      ? {
+          cloudId: requestAuth.target.cloudId,
+          projectKey,
+          itemType,
+          displayKey: member.displayKey,
+          parentKey,
+        }
+      : { jiraProjectKey: projectKey, itemType, displayKey: member.displayKey, parentKey };
+  const requestHash = createHash('sha256').update(JSON.stringify(targetDescriptor)).digest('hex');
+
+  const authForOperation = async (operationId: string): Promise<JiraAuth> =>
+    authFor(await getCredentialForOperation(operationId), ctx);
+
+  return runOperation({
+    projectId: member.projectId,
+    provider: 'jira',
+    operationType: 'create_issue',
+    operationKey,
+    requestHash,
+    targetDescriptor,
+    sourceArtifactVersionId: member.sourceVersionId,
+    sourceItemVersionId: member.itemVersionId,
+    connectionId: credential?.connectionId ?? null,
+    accountId: credential?.accountId ?? null,
+    send: async ({ operationId }) =>
+      sendCreateIssue({
+        auth: await authForOperation(operationId),
+        member,
+        itemType,
+        displayKey,
+        marker,
+        parentKey,
+      }),
+    reconcile: async ({ operationId }) =>
+      reconcileIssue({ auth: await authForOperation(operationId), marker }),
+  });
+}
+
+async function exportOneItem(args: {
+  member: BacklogVersionMember;
+  recorded: Credential;
+  ctx: JiraCtx;
+  scope: RefScope;
+  decisions: Map<LogicalItemId, 'skip' | 'create_new'>;
+  parentKey: string | null;
+}): Promise<ExternalRef | null> {
+  const { member, recorded, ctx, scope, decisions, parentKey } = args;
+  if (!member.logicalItemId || !member.itemVersionId || !member.displayKey || !member.itemType) {
+    throw new Error(`backlog_version ${member.sourceVersionId} has a malformed membership row`);
+  }
+
+  const decisionItem = await resolveDecisionNeed(member, scope);
   if (decisionItem) {
     const decision = decisions.get(member.logicalItemId);
     if (!decision) throw new MissingExportDecisionError(member.logicalItemId, member.displayKey);
@@ -537,34 +914,16 @@ async function exportOneItem(args: {
     // ItemVersion's id is already new, so no special-casing is needed here).
   }
 
-  const itemType = member.itemType === 'epic' ? 'epic' : 'story';
-  const displayKey = member.displayKey; // narrowed by the guard above; a closure would lose it
-  const marker = markerFor(member.itemVersionId);
-  // ERD 7.4's own literal key format.
-  const operationKey = `jira:create_issue:${config.projectKey}:${member.itemVersionId}`;
-  const targetDescriptor = {
-    jiraProjectKey: config.projectKey,
-    itemType,
-    displayKey: member.displayKey,
-    parentKey,
-  };
-  const requestHash = createHash('sha256').update(JSON.stringify(targetDescriptor)).digest('hex');
-
   let result;
   try {
-    result = await runOperation({
-      projectId: member.projectId,
-      provider: 'jira',
-      operationType: 'create_issue',
-      operationKey,
-      requestHash,
-      targetDescriptor,
-      sourceArtifactVersionId: member.sourceVersionId,
-      sourceItemVersionId: member.itemVersionId,
-      send: () => sendCreateIssue({ config, member, itemType, displayKey, marker, parentKey }),
-      reconcile: () => reconcileIssue({ config, marker }),
-    });
-  } catch {
+    result = await runItemOperation({ member, recorded, ctx, parentKey });
+  } catch (error) {
+    // A lapsed credential is not one item's outcome (ERD 7.6): every remaining
+    // item would hit the same wall, so it stops the batch and reaches the route
+    // as 409 RECONNECT_REQUIRED. The row itself was left exactly as it was.
+    if (error instanceof ReconnectRequiredError || error instanceof ConnectionRequiredError) {
+      throw error;
+    }
     // ERD 7.1: "13 Stories = 13 external_operation rows. Partial failure is
     // then representable per object." A thrown, non-`DefinitiveProviderError`
     // exception here is `runOperation`'s own "ambiguous/network/timeout"
@@ -607,9 +966,15 @@ async function exportOneItem(args: {
 export async function exportBacklog(
   backlogVersionId: string,
   decisions: Map<LogicalItemId, 'skip' | 'create_new'>,
+  ctx: JiraCtx,
 ): Promise<ExternalRef[]> {
+  // Round 14 (ERD 7.2 step 0): the caller's own connection, resolved BEFORE any
+  // operation row exists - `ConnectionRequiredError` / `ReconnectRequiredError`
+  // and `JiraTargetRequiredError` therefore leave no `external_operation` behind.
+  const recorded = await getCredential(ctx.userId, 'jira');
+  const target = requireTarget(ctx);
+  const scope: RefScope = { kind: 'target', target };
   const { epics, stories } = await captureBacklogVersion(backlogVersionId);
-  const config = requireJiraConfig();
 
   const created: ExternalRef[] = [];
 
@@ -618,19 +983,318 @@ export async function exportBacklog(
   // `resolveEpicJiraKey` below can see an Epic this SAME export call just
   // created (step 1 of its own two-step resolution).
   for (const epic of epics) {
-    const ref = await exportOneItem({ member: epic, config, decisions, parentKey: null });
+    const ref = await exportOneItem({
+      member: epic,
+      recorded,
+      ctx,
+      scope,
+      decisions,
+      parentKey: null,
+    });
     if (ref) created.push(ref);
   }
 
   for (const story of stories) {
     const epic = findEpicMember(epics, story.parentLogicalItemId);
-    const parentKey = epic ? await resolveEpicJiraKey(epic, config.projectKey) : null;
+    const parentKey = epic ? await resolveEpicJiraKey(epic, scope) : null;
     if (!parentKey) continue; // ERD 7.4: "not exported" - already surfaced by previewExport
-    const ref = await exportOneItem({ member: story, config, decisions, parentKey });
+    const ref = await exportOneItem({ member: story, recorded, ctx, scope, decisions, parentKey });
     if (ref) created.push(ref);
   }
 
   return created;
+}
+
+/**
+ * Round 14: the retry route's entry point for ONE existing Jira operation. The
+ * request is rebuilt from current inputs using `ctx` (so the request-hash check
+ * still catches a changed site or project), but the CREDENTIAL is the one
+ * recorded on the operation (`getCredentialForOperation`), never the user's
+ * current connection. A recorded connection that is not usable, or that now
+ * belongs to a different Atlassian account, throws `ReconnectRequiredError`
+ * before any network call and leaves the operation exactly as it was; an
+ * operation with no recorded connection retries with the optional environment
+ * credential.
+ */
+export async function retryOperation(
+  operationId: string,
+  ctx: JiraCtx,
+): Promise<
+  { status: 'completed'; ref: ExternalRef } | { status: 'reconciliation_required' | 'pending' }
+> {
+  const operation = await getOperationById(operationId);
+  if (!operation || operation.provider !== 'jira') {
+    throw new Error(`external_operation ${operationId} is not a Jira operation`);
+  }
+  if (!operation.sourceItemVersionId) {
+    // external_operation_jira_requires_item_check guarantees this can't happen.
+    throw new Error(`jira external_operation ${operationId} has no source_item_version_id`);
+  }
+  const recorded = await getCredentialForOperation(operationId);
+  const scope = scopeOf(authFor(recorded, ctx));
+
+  const { epics, stories } = await captureBacklogVersion(operation.sourceArtifactVersionId);
+  const member = [...epics, ...stories].find(
+    (candidate) => candidate.itemVersionId === operation.sourceItemVersionId,
+  );
+  if (!member) {
+    throw new Error(`jira external_operation ${operationId} no longer matches a backlog member`);
+  }
+  let parentKey: string | null = null;
+  if (member.itemType === 'story') {
+    const epic = findEpicMember(epics, member.parentLogicalItemId);
+    parentKey = epic ? await resolveEpicJiraKey(epic, scope) : null;
+    if (!parentKey) {
+      throw new Error(`jira external_operation ${operationId} has no resolvable parent Epic`);
+    }
+  }
+
+  const result = await runItemOperation({ member, recorded, ctx, parentKey });
+  switch (result.status) {
+    case 'completed':
+      return { status: 'completed', ref: result.ref };
+    case 'reconciliation_required':
+      return { status: 'reconciliation_required' };
+    case 'in_flight':
+      return { status: 'pending' };
+    case 'failed':
+      throw new JiraOperationFailedError(result.errorMessage);
+    case 'refused':
+      throw new JiraOperationRefusedError(result.reason);
+    case 'conflict':
+      throw new JiraOperationConflictError(operation.operationKey);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Round 14 (FR-088, D2): the site and project pickers and the PATCH
+// .../targets validation. Read-only Atlassian calls with the caller's own
+// connection; no table is touched, no operation exists yet, and only
+// `ctx.userId` is used. `ConnectionRequiredError` / `ReconnectRequiredError`
+// propagate (a 401 also marks the connection `needs_reauth`).
+// ---------------------------------------------------------------------------
+
+export async function listSites(
+  ctx: Pick<JiraCtx, 'userId'>,
+): Promise<{ cloudId: string; url: string; name: string }[]> {
+  const credential = await getCredential(ctx.userId, 'jira');
+  return (await fetchAccessibleResources(credential)).map((site) => ({
+    cloudId: site.id,
+    url: site.url,
+    name: site.name,
+  }));
+}
+
+const PROJECT_PAGE_SIZE = 50;
+// A bound, not a limit anyone should hit: 40 pages is 2000 projects on one site.
+const PROJECT_MAX_PAGES = 40;
+
+interface JiraProjectSearchResponse {
+  values?: Array<{ key?: unknown; name?: unknown }>;
+  isLast?: boolean;
+}
+
+/**
+ * The projects the caller can see on `cloudId`. `JiraSiteNotAccessibleError`
+ * when `cloudId` is not one of the caller's own sites (checked against
+ * accessible-resources first, so a foreign site id is never sent a project
+ * request).
+ */
+export async function listProjects(
+  ctx: Pick<JiraCtx, 'userId'>,
+  cloudId: string,
+): Promise<{ key: string; name: string }[]> {
+  const credential = await getCredential(ctx.userId, 'jira');
+  const sites = await fetchAccessibleResources(credential);
+  if (!sites.some((site) => site.id === cloudId)) throw new JiraSiteNotAccessibleError();
+
+  const auth: JiraAuth = { kind: 'user', credential, target: { cloudId, projectKey: '' } };
+  const projects: { key: string; name: string }[] = [];
+  for (let page = 0; page < PROJECT_MAX_PAGES; page++) {
+    const response = await jiraFetch<JiraProjectSearchResponse>(
+      auth,
+      `/rest/api/3/project/search?startAt=${page * PROJECT_PAGE_SIZE}&maxResults=${PROJECT_PAGE_SIZE}&orderBy=key`,
+      { method: 'GET' },
+    );
+    const values = response.values ?? [];
+    for (const value of values) {
+      if (typeof value.key === 'string' && value.key !== '') {
+        projects.push({ key: value.key, name: typeof value.name === 'string' ? value.name : '' });
+      }
+    }
+    if (response.isLast !== false || values.length === 0) break;
+  }
+  return projects;
+}
+
+/**
+ * Round 14 (D2, FR-088): can the caller's own Jira connection see `projectKey`
+ * on `cloudId`? `false` when the site is not one of theirs, or the project does
+ * not exist or is not visible to them (404/403). `PATCH .../targets` calls this
+ * BEFORE any project lock is taken.
+ */
+export async function checkProjectAccessible(
+  ctx: Pick<JiraCtx, 'userId'>,
+  cloudId: string,
+  projectKey: string,
+): Promise<boolean> {
+  const credential = await getCredential(ctx.userId, 'jira');
+  const sites = await fetchAccessibleResources(credential);
+  if (!sites.some((site) => site.id === cloudId)) return false;
+
+  try {
+    await jiraFetch<unknown>(
+      { kind: 'user', credential, target: { cloudId, projectKey } },
+      `/rest/api/3/project/${encodeURIComponent(projectKey)}`,
+      { method: 'GET' },
+    );
+    return true;
+  } catch (error) {
+    if (error instanceof JiraHttpError && (error.status === 404 || error.status === 403)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Round 17 (UC-S11, FR-092, ERD 7.8): creating a Jira project. A provider SETUP
+// action, not an external write of an artifact output: it goes outside the write
+// protocol (no `runOperation`, no `external_operation`/`external_ref`, no lock,
+// no lineage) and is idempotent by Jira's own key uniqueness. Never called under
+// `withProjectLock`.
+// ---------------------------------------------------------------------------
+
+const MANAGE_PROJECT_SCOPE = 'manage:jira-project';
+
+/** The connection's credential, or `ReconnectRequiredError('missing_scope')` before any Atlassian call. */
+async function projectAdminCredential(ctx: Pick<JiraCtx, 'userId'>): Promise<Credential> {
+  const credential = await getCredential(ctx.userId, 'jira');
+  if (!credential.scopes.includes(MANAGE_PROJECT_SCOPE)) {
+    throw new ReconnectRequiredError('jira', 'missing_scope', credential.connectionId);
+  }
+  return credential;
+}
+
+async function requireAccessibleSite(credential: Credential, cloudId: string): Promise<void> {
+  const sites = await fetchAccessibleResources(credential);
+  if (!sites.some((site) => site.id === cloudId)) throw new JiraSiteNotAccessibleError();
+}
+
+interface JiraKeyValidationResponse {
+  errorMessages?: unknown;
+  errors?: unknown;
+}
+
+/**
+ * `GET /rest/api/3/projectvalidate/validProjectKey?key=` (path from ERD 7.8, not
+ * verified live). Jira answers 200 with an error collection: empty when the key
+ * is free and valid, otherwise a message. The message text is only ever
+ * classified against a small whitelist and never stored or thrown. Any failure
+ * to validate (other than a 401, which reconnects) is "unsure": the create call's
+ * own 400 stays the authority.
+ */
+async function checkKeyWith(
+  credential: Credential,
+  cloudId: string,
+  key: string,
+): Promise<{ valid: boolean; reason?: 'taken' | 'invalid' }> {
+  let response: JiraKeyValidationResponse;
+  try {
+    response = await jiraFetch<JiraKeyValidationResponse>(
+      { kind: 'user', credential, target: { cloudId, projectKey: '' } },
+      `/rest/api/3/projectvalidate/validProjectKey?key=${encodeURIComponent(key)}`,
+      { method: 'GET' },
+    );
+  } catch (error) {
+    if (error instanceof JiraHttpError) return { valid: true };
+    throw error;
+  }
+  const messages: string[] = [];
+  if (Array.isArray(response.errorMessages)) {
+    for (const message of response.errorMessages) {
+      if (typeof message === 'string') messages.push(message);
+    }
+  }
+  if (response.errors && typeof response.errors === 'object') {
+    for (const message of Object.values(response.errors as Record<string, unknown>)) {
+      if (typeof message === 'string') messages.push(message);
+    }
+  }
+  if (messages.length === 0) return { valid: true };
+  const text = messages.join(' ').toLowerCase();
+  const taken = text.includes('uses this project key') || text.includes('already');
+  return { valid: false, reason: taken ? 'taken' : 'invalid' };
+}
+
+/**
+ * Is `key` free and well-formed on `cloudId`? Uses the caller's own connection;
+ * `JiraSiteNotAccessibleError` when the site is not one of theirs.
+ */
+export async function validateProjectKey(
+  ctx: Pick<JiraCtx, 'userId'>,
+  cloudId: string,
+  key: string,
+): Promise<{ valid: boolean; reason?: 'taken' | 'invalid' }> {
+  const credential = await getCredential(ctx.userId, 'jira');
+  await requireAccessibleSite(credential, cloudId);
+  return checkKeyWith(credential, cloudId, key);
+}
+
+interface JiraCreateProjectResponse {
+  id?: unknown;
+  key?: unknown;
+}
+
+/**
+ * Creates a project on `cloudId` with the caller's own credential; the caller
+ * becomes the project lead. Order: connection (`ConnectionRequiredError` /
+ * `ReconnectRequiredError` propagate) -> `manage:jira-project` in the stored
+ * scopes (else `ReconnectRequiredError('missing_scope')`, no Atlassian call) ->
+ * the site is one of the caller's -> the key is free (`ProjectKeyTakenError`) ->
+ * the create call. 400/409 -> `ProjectKeyTakenError`; 403 ->
+ * `JiraAdminRequiredError`; 401 -> connection marked `needs_reauth` +
+ * `ReconnectRequiredError`. Provider response text never enters an error.
+ */
+export async function createProject(
+  ctx: Pick<JiraCtx, 'userId'>,
+  input: { cloudId: string; name: string; key: string; template: JiraProjectTemplate },
+): Promise<{ id: string; key: string; name: string }> {
+  const credential = await projectAdminCredential(ctx);
+  await requireAccessibleSite(credential, input.cloudId);
+  const validation = await checkKeyWith(credential, input.cloudId, input.key);
+  if (!validation.valid) throw new ProjectKeyTakenError();
+
+  let response: JiraCreateProjectResponse;
+  try {
+    response = await jiraFetch<JiraCreateProjectResponse>(
+      { kind: 'user', credential, target: { cloudId: input.cloudId, projectKey: '' } },
+      '/rest/api/3/project',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          key: input.key,
+          name: input.name,
+          projectTypeKey: JIRA_PROJECT_TYPE_KEY,
+          projectTemplateKey: JIRA_PROJECT_TEMPLATE_KEYS[input.template],
+          leadAccountId: credential.accountId,
+          assigneeType: 'PROJECT_LEAD',
+        }),
+      },
+    );
+  } catch (error) {
+    if (error instanceof JiraHttpError) {
+      if (error.status === 400 || error.status === 409) throw new ProjectKeyTakenError();
+      if (error.status === 403) throw new JiraAdminRequiredError();
+    }
+    throw error;
+  }
+
+  const id = typeof response.id === 'number' ? String(response.id) : response.id;
+  if (typeof id !== 'string' || id === '') {
+    throw new Error('Jira project creation returned an unusable response.');
+  }
+  return { id, key: typeof response.key === 'string' ? response.key : input.key, name: input.name };
 }
 
 // ---------------------------------------------------------------------------

@@ -13,4 +13,6 @@ export const githubCheckNameSchema = z.object({
 export const githubInitSchema = z.object({
   repoName: z.string().min(1, 'repoName is required'),
   impactAcknowledged: z.boolean(),
+  // Who can read the new repository. Absent = public, what every earlier client sent.
+  visibility: z.enum(['public', 'private']).default('public'),
 });

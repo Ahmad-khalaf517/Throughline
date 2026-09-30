@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it, onTestFinished, vi } from 'vitest';
 import { sql as drizzleSql } from 'drizzle-orm';
 import type postgres from 'postgres';
 import type { OptionInput } from '@/architecture-materialization';
@@ -57,7 +57,7 @@ vi.mock('@/ai-client', async (importOriginal) => ({
 //
 // Harness: one Testcontainers postgres:15-alpine for the whole `integration`
 // vitest project (tests/integration/support/global-setup.ts), migrated with
-// the frozen drizzle/migrations/0000-0007 in order. Fixture rows use only
+// the frozen drizzle/migrations/0000-0010 in order. Fixture rows use only
 // the support/fixtures.ts helpers so every test exercises the real triggers/
 // CHECKs, not a shortcut around them (Appendix C's own suite ran the
 // canonical flow through the real triggers for the same reason).
@@ -180,6 +180,7 @@ let authModule: typeof import('@/auth');
 let github: typeof import('@/external/github');
 let githubInitRoute: typeof import('@/app/api/projects/[projectId]/github/init/route').POST;
 let githubRefRoute: typeof import('@/app/api/projects/[projectId]/github/ref/route').GET;
+let githubUnlinkRoute: typeof import('@/app/api/projects/[projectId]/github/route').DELETE;
 let jiraExportRoute: typeof import('@/app/api/projects/[projectId]/jira/export/route').POST;
 let jiraPreviewRoute: typeof import('@/app/api/projects/[projectId]/jira/preview/route').GET;
 let externalRefsRoute: typeof import('@/app/api/projects/[projectId]/external-refs/route').GET;
@@ -198,6 +199,11 @@ let reviseRoute: typeof import('@/app/api/projects/[projectId]/artifacts/[type]/
 let approveRoute: typeof import('@/app/api/artifact-versions/[versionId]/approve/route').POST;
 let itemEditPreviewRoute: typeof import('@/app/api/artifact-versions/[versionId]/items/[logicalItemId]/edit/preview/route').POST;
 let commitItemEditRoute: typeof import('@/app/api/artifact-versions/[versionId]/items/[logicalItemId]/route').PUT;
+// SCRUM-96 (UC-S4 part A): external-operations' round-14 behaviour (T49/T50
+// application halves) - `runOperation` recording connection_id, the reconnect-
+// required no-op, the legacy NULL path - and the connections module it consults.
+let ops: typeof import('@/external/operations');
+let connectionsModule: typeof import('@/connections');
 
 // E4-T3 provider config constants - same shape as
 // tests/integration/external/github.test.ts / jira.test.ts's own constants,
@@ -226,6 +232,8 @@ beforeAll(async () => {
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-key';
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-key';
   process.env.NEXT_PUBLIC_SITE_URL = 'https://example.test';
+  // SCRUM-96: `@/connections` needs a 32-byte base64 key at use time.
+  process.env.CONNECTION_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
   // E4-T3: github/jira provider config, same env vars
   // tests/integration/external/github.test.ts and jira.test.ts already set up
   // for the SAME modules, reached here through the route handlers instead of
@@ -247,6 +255,7 @@ beforeAll(async () => {
   github = await import('@/external/github');
   githubInitRoute = (await import('@/app/api/projects/[projectId]/github/init/route')).POST;
   githubRefRoute = (await import('@/app/api/projects/[projectId]/github/ref/route')).GET;
+  githubUnlinkRoute = (await import('@/app/api/projects/[projectId]/github/route')).DELETE;
   jiraExportRoute = (await import('@/app/api/projects/[projectId]/jira/export/route')).POST;
   jiraPreviewRoute = (await import('@/app/api/projects/[projectId]/jira/preview/route')).GET;
   externalRefsRoute = (await import('@/app/api/projects/[projectId]/external-refs/route')).GET;
@@ -260,6 +269,8 @@ beforeAll(async () => {
   commitItemEditRoute = (
     await import('@/app/api/artifact-versions/[versionId]/items/[logicalItemId]/route')
   ).PUT;
+  ops = await import('@/external/operations');
+  connectionsModule = await import('@/connections');
 });
 
 afterAll(async () => {
@@ -460,6 +471,60 @@ function mockAuthAsOwner(userId: string): void {
     email: `${userId}@example.test`,
     displayName: null,
   });
+}
+
+// Round 14 (SCRUM-96/97): a NEW GitHub/Jira operation needs the acting user's own
+// connection and the project's target (the routes answer 409 CONNECTION_REQUIRED /
+// TARGET_REQUIRED otherwise, before any operation row). Same fixtures the
+// module-level tests in tests/integration/external/{github,jira}.test.ts use:
+// a connection saved through the real `connections.saveConnection` and the
+// project's target columns set directly.
+const TEST_GITHUB_TOKEN = 'gho_e4t3_test_user_token';
+const JIRA_CLOUD_ID = 'cloud-e4t3-1';
+const JIRA_SITE_URL = 'https://fake-jira-e4t3.example.test';
+const TEST_JIRA_ACCESS_TOKEN = 'atl_e4t3_test_user_token';
+
+/** The owner's GitHub connection (login = the fake GitHub's owner) + the project's `github_owner`. */
+async function connectGithubForProject(userId: string, projectId: string): Promise<void> {
+  await connectionsModule.saveConnection({
+    userId,
+    provider: 'github',
+    externalAccountId: `gh-${userId}`,
+    displayName: FAKE_GITHUB_OWNER,
+    accessToken: TEST_GITHUB_TOKEN,
+    scopes: ['repo', 'read:org'],
+    providerMeta: { login: FAKE_GITHUB_OWNER },
+  });
+  await sql`UPDATE project SET github_owner = ${FAKE_GITHUB_OWNER} WHERE id = ${projectId}`;
+}
+
+/** Points the project at a (possibly different) Jira project on the connected site. */
+async function setJiraTarget(projectId: string, jiraProjectKey: string): Promise<void> {
+  await sql`
+    UPDATE project SET jira_cloud_id = ${JIRA_CLOUD_ID}, jira_project_key = ${jiraProjectKey}
+    WHERE id = ${projectId}
+  `;
+}
+
+/** The owner's Jira connection (default site = the fake site) + the project's Jira target. */
+async function connectJiraForProject(
+  userId: string,
+  projectId: string,
+  jiraProjectKey: string = DEFAULT_JIRA_PROJECT_KEY,
+): Promise<void> {
+  await connectionsModule.saveConnection({
+    userId,
+    provider: 'jira',
+    externalAccountId: `atl-${userId}`,
+    displayName: 'E4-T3 Test User',
+    accessToken: TEST_JIRA_ACCESS_TOKEN,
+    refreshToken: 'atl_e4t3_test_refresh_token',
+    // Comfortably valid: these tests never reach the refresh path.
+    expiresAt: new Date(Date.now() + 3_600_000),
+    scopes: ['read:jira-work', 'write:jira-work', 'offline_access'],
+    providerMeta: { cloudId: JIRA_CLOUD_ID, siteUrl: JIRA_SITE_URL, siteName: 'Fake' },
+  });
+  await setJiraTarget(projectId, jiraProjectKey);
 }
 
 function jsonRequest(url: string, body: unknown): Request {
@@ -803,8 +868,21 @@ function createFakeJiraProvider() {
     });
 
   async function fetchImpl(url: string | URL, init?: RequestInit): Promise<Response> {
-    const { pathname } = new URL(url);
+    const parsed = new URL(url);
     const method = (init?.method ?? 'GET').toUpperCase();
+    // Round 14: only the Atlassian gateway path, only with the user's Bearer token.
+    if (
+      parsed.host !== 'api.atlassian.com' ||
+      !parsed.pathname.startsWith(`/ex/jira/${JIRA_CLOUD_ID}/`)
+    ) {
+      throw new Error(
+        `fake Jira fetch (E4-T3): unexpected target ${parsed.host}${parsed.pathname}`,
+      );
+    }
+    if (new Headers(init?.headers).get('authorization') !== `Bearer ${TEST_JIRA_ACCESS_TOKEN}`) {
+      return jsonResponse(401, { message: 'Unauthorized' });
+    }
+    const pathname = parsed.pathname.slice(`/ex/jira/${JIRA_CLOUD_ID}`.length);
 
     if (method === 'POST' && pathname === '/rest/api/3/issue') {
       const body = init?.body
@@ -829,7 +907,7 @@ function createFakeJiraProvider() {
         parentKey: body.fields.parent?.key ?? null,
       };
       issuesByKey.set(key, issue);
-      return jsonResponse(201, { id, key, self: `${JIRA_BASE_URL}/rest/api/3/issue/${id}` });
+      return jsonResponse(201, { id, key, self: `${JIRA_SITE_URL}/rest/api/3/issue/${id}` });
     }
 
     if (method === 'POST' && pathname === '/rest/api/3/search/jql') {
@@ -2212,6 +2290,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('a lost create response reconciles via marker match on the next POST - one operation row, marker-verified adoption, never a bare name match', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T11a' });
       mockAuthAsOwner(userId);
+      await connectGithubForProject(userId, projectId);
       const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
       const adr = await fx.createLogicalItemWithVersion(sql, {
         projectId,
@@ -2269,6 +2348,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('a lost response over a pre-existing FOREIGN repo reconciles to failed (409 NAME_TAKEN_BY_OTHER), never adopted', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T11c' });
       mockAuthAsOwner(userId);
+      await connectGithubForProject(userId, projectId);
       const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
       const adr = await fx.createLogicalItemWithVersion(sql, {
         projectId,
@@ -2317,6 +2397,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('a concurrent double-click while the original is still within T is rejected as still in flight (202 pending) - reconcile before any resend', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T11d' });
       mockAuthAsOwner(userId);
+      await connectGithubForProject(userId, projectId);
       const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
       const adr = await fx.createLogicalItemWithVersion(sql, {
         projectId,
@@ -2371,6 +2452,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('GET .../jira/preview surfaces the Skip/Create-New prompt; POST .../jira/export refuses without a decision (400), never a silent update or a silent duplicate', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T12' });
       mockAuthAsOwner(userId);
+      await connectJiraForProject(userId, projectId);
       const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
       const epic = await fx.createLogicalItemWithVersion(sql, {
         projectId,
@@ -2905,6 +2987,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('first attempt ends 409 NAME_TAKEN_BY_OTHER; a different name starts a fresh operation (200); a second concurrent GitHub operation is refused (409)', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T18' });
       mockAuthAsOwner(userId);
+      await connectGithubForProject(userId, projectId);
       const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
       const adr = await fx.createLogicalItemWithVersion(sql, {
         projectId,
@@ -3398,12 +3481,9 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // E4-S3 (SCRUM-52) already proves this at the module level - see
   // tests/integration/external/jira.test.ts's own T26 describe block. E4-T3
   // closes it here for real, through `POST /api/projects/:projectId/jira/
-  // export`, reconfiguring `JIRA_PROJECT_KEY` + `vi.resetModules()` between
-  // calls exactly as jira.test.ts's own T26 already does for its module-level
-  // proof - the route handler (and its own transitive `@/auth`/`@/external/
-  // jira`/`@/lib/env` imports) must be re-imported fresh too, since `@/lib/
-  // env` is a module-level singleton captured once per module instance (this
-  // file's own top-of-file gotcha comment).
+  // export`. Round 14: the Jira project is the PROJECT's own target (`project.
+  // jira_project_key`, read by the route), not an environment variable, so the
+  // test just changes that column between the two exports.
   describe('T26 - export the same Backlog twice with a different configured Jira project in between (through the real API route)', () => {
     it('second export creates new, target-specific operations; no completed operation is reused for the new target', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T26' });
@@ -3417,54 +3497,34 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
         { logicalItemId: epic.logicalItemId, itemVersionId: epic.itemVersionId },
       ]);
 
+      await connectJiraForProject(userId, projectId, 'E4T3ALPHA');
+      mockAuthAsOwner(userId);
+
       const fake = createFakeJiraProvider();
       const exportUrl = `http://localhost/api/projects/${projectId}/jira/export`;
 
-      async function freshExportRoute(jiraProjectKey: string): Promise<typeof jiraExportRoute> {
-        process.env.JIRA_PROJECT_KEY = jiraProjectKey;
-        vi.resetModules();
-        const freshAuth = await import('@/auth');
-        vi.mocked(freshAuth.getVerifiedUser).mockResolvedValue({
-          id: userId,
-          email: `${userId}@example.test`,
-          displayName: null,
-        });
-        return (await import('@/app/api/projects/[projectId]/jira/export/route')).POST;
-      }
+      const alphaResponse = await withFakeFetch(fake.fetch, () =>
+        jiraExportRoute(
+          jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
+          routeParams(projectId),
+        ),
+      );
+      expect(alphaResponse.status).toBe(200);
+      expect((await alphaResponse.json()).created).toHaveLength(1);
 
-      try {
-        const exportAlpha = await freshExportRoute('E4T3ALPHA');
-        const alphaResponse = await withFakeFetch(fake.fetch, () =>
-          exportAlpha(
-            jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
-            routeParams(projectId),
-          ),
-        );
-        expect(alphaResponse.status).toBe(200);
-        expect((await alphaResponse.json()).created).toHaveLength(1);
-
-        // Reconfigure to a DIFFERENT Jira project - switching the configured
-        // project alone must not resurface an unnecessary Skip/Create-New
-        // prompt (FR-074 is scoped to the CONFIGURED project); nothing has
-        // been exported to BETA yet, so this is a plain, undecided-free export.
-        const exportBeta = await freshExportRoute('E4T3BETA');
-        const betaResponse = await withFakeFetch(fake.fetch, () =>
-          exportBeta(
-            jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
-            routeParams(projectId),
-          ),
-        );
-        expect(betaResponse.status).toBe(200);
-        expect((await betaResponse.json()).created).toHaveLength(1);
-      } finally {
-        // Defensive cleanup - every OTHER test in this file uses the outer,
-        // once-imported route handlers (closed over whatever JIRA_PROJECT_KEY
-        // was current before this file's top-level beforeAll ran, frozen in
-        // their own module instance regardless of what this test does to
-        // process.env afterward) - this restore is hygiene, not correctness,
-        // for them.
-        process.env.JIRA_PROJECT_KEY = DEFAULT_JIRA_PROJECT_KEY;
-      }
+      // Reconfigure to a DIFFERENT Jira project - switching the configured
+      // project alone must not resurface an unnecessary Skip/Create-New
+      // prompt (FR-074 is scoped to the CONFIGURED project); nothing has
+      // been exported to BETA yet, so this is a plain, undecided-free export.
+      await setJiraTarget(projectId, 'E4T3BETA');
+      const betaResponse = await withFakeFetch(fake.fetch, () =>
+        jiraExportRoute(
+          jsonRequest(exportUrl, { decisions: [], impactAcknowledged: true }),
+          routeParams(projectId),
+        ),
+      );
+      expect(betaResponse.status).toBe(200);
+      expect((await betaResponse.json()).created).toHaveLength(1);
 
       const operations = await jiraOperationRows(projectId);
       expect(operations).toHaveLength(2); // target-specific keys, never one row reused
@@ -3734,7 +3794,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
   // accidental-grant sub-check is meaningful regardless).
   describe('T34 - Supabase anon is denied read/write/EXECUTE everywhere; RLS still blocks an accidental grant', () => {
     // Every table Appendix A.3 enables RLS on (drizzle/migrations/0001,
-    // 0006) - the complete 16-table ERD model.
+    // 0006) - the complete 17-table ERD model (16 + provider_connection).
     const HARDENED_TABLES = [
       'app_user',
       'project',
@@ -3752,15 +3812,16 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
       'impact_acknowledgement',
       'ai_generation_run',
       'stitch_output',
+      'provider_connection', // #17, round 14 (migration 0010)
     ] as const;
 
-    it('T34a: anon SELECT is denied on every one of the 16 hardened tables', async () => {
+    it('T34a: anon SELECT is denied on every one of the 17 hardened tables', async () => {
       for (const table of HARDENED_TABLES) {
         await expectDeniedAsAnon(sql, (tx) => tx.unsafe(`SELECT 1 FROM "${table}" LIMIT 1`));
       }
     });
 
-    it('T34b: anon INSERT is denied on every one of the 16 hardened tables', async () => {
+    it('T34b: anon INSERT is denied on every one of the 17 hardened tables', async () => {
       // DEFAULT VALUES needs no knowledge of a table's columns and, because
       // Postgres checks table-level privileges before row constraints, a
       // denied INSERT never gets far enough to also trip a NOT NULL
@@ -3771,7 +3832,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
       }
     });
 
-    it('T34c: anon DELETE is denied on every one of the 16 hardened tables', async () => {
+    it('T34c: anon DELETE is denied on every one of the 17 hardened tables', async () => {
       // WHERE false needs no knowledge of a table's columns either, and
       // privilege checks don't depend on how many rows would actually
       // match.
@@ -4018,6 +4079,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('GET .../jira/preview shows the Skip/Create-New prompt for the Epic; POST .../jira/export with skip creates no second Jira Epic; the Story is parented to the existing Jira Epic of E-01', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T41' });
       mockAuthAsOwner(userId);
+      await connectJiraForProject(userId, projectId);
       const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
       const epic = await fx.createLogicalItemWithVersion(sql, {
         projectId,
@@ -4119,6 +4181,7 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     it('GET .../jira/preview lists the impact row; POST .../jira/export requires impactAcknowledged (409 otherwise, 200 once acknowledged); the resulting ref is flagged immediately', async () => {
       const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'E4-T3 T42' });
       mockAuthAsOwner(userId);
+      await connectJiraForProject(userId, projectId);
       const requirementsArtifactId = await fx.createArtifact(sql, projectId, 'requirements');
       const backlogArtifactId = await fx.createArtifact(sql, projectId, 'backlog');
 
@@ -4329,4 +4392,1111 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     `;
     expect(Number(backlogVersionsAfterAttempt[0]!.count)).toBe(0);
   });
+
+  // ---------------------------------------------------------------------
+  // Round 14 (per-user provider connections, SCRUM-95 / UC-S3): T45-T50 SQL
+  // halves (ERD Appendix C.2); T51/T52 are application tests. NOT EXECUTED
+  // when written - Docker/Testcontainers was unavailable on the authoring
+  // machine; the assertions mirror the C.2 SQL statement for statement.
+  // ---------------------------------------------------------------------
+  const CIPHERTEXT = 'v1:AAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBB:Y2lwaGVydGV4dA';
+
+  async function insertConnection(
+    userId: string,
+    provider: 'github' | 'jira' | 'stitch',
+    overrides: {
+      accessTokenEnc?: string;
+      refreshTokenEnc?: string | null;
+      status?: string;
+      keyVersion?: number;
+      providerMeta?: Record<string, string>;
+    } = {},
+  ): Promise<string> {
+    const rows = await sql<{ id: string }[]>`
+      INSERT INTO provider_connection
+        (user_id, provider, external_account_id, display_name, access_token_enc,
+         refresh_token_enc, status, key_version, provider_meta)
+      VALUES (
+        ${userId}, ${provider}, ${`acct-${randomUUID()}`}, ${`name-${provider}`},
+        ${overrides.accessTokenEnc ?? CIPHERTEXT},
+        ${overrides.refreshTokenEnc ?? null},
+        ${overrides.status ?? 'active'},
+        ${overrides.keyVersion ?? 1},
+        ${sql.json(overrides.providerMeta ?? {})}
+      )
+      RETURNING id
+    `;
+    return rows[0]!.id;
+  }
+
+  async function draftArtifactVersion(
+    projectId: string,
+    type: fx.ArtifactType = 'architecture',
+  ): Promise<{ artifactId: string; versionId: string }> {
+    const artifactId = await fx.createArtifact(sql, projectId, type);
+    const versionId = await fx.createDraftArtifactVersion(sql, artifactId);
+    return { artifactId, versionId };
+  }
+
+  // T45 (SQL half) - a code path that forgot to encrypt fails at INSERT.
+  it('T45: plaintext tokens, a mismatched key version, token-named meta keys and a non-tombstone revoked row are all refused; no plaintext marker lands in any column', async () => {
+    const userId = await fx.createAppUser(sql);
+    const otherUserId = await fx.createAppUser(sql);
+    await insertConnection(userId, 'github', { providerMeta: { login: 'octo-a' } });
+
+    await expect(
+      insertConnection(otherUserId, 'github', { accessTokenEnc: 'ghp_PLAINTEXTTOKEN0123456789' }),
+    ).rejects.toThrow(/violates check constraint/);
+    await expect(
+      insertConnection(otherUserId, 'jira', {
+        accessTokenEnc: 'v1:AAAA:BBBB:CCCC',
+        refreshTokenEnc: 'PLAINTEXTREFRESH0123',
+      }),
+    ).rejects.toThrow(/violates check constraint/);
+    await expect(
+      insertConnection(otherUserId, 'stitch', { accessTokenEnc: 'v2:AAAA:BBBB:CCCC' }),
+    ).rejects.toThrow(/violates check constraint/);
+    await expect(
+      insertConnection(otherUserId, 'stitch', {
+        accessTokenEnc: 'v1:AAAA:BBBB:CCCC',
+        providerMeta: { access_token: 'PLAINTEXTTOKEN' },
+      }),
+    ).rejects.toThrow(/violates check constraint/);
+    await expect(
+      insertConnection(otherUserId, 'stitch', {
+        accessTokenEnc: 'v1:AAAA:BBBB:CCCC',
+        status: 'revoked',
+      }),
+    ).rejects.toThrow(/violates check constraint/);
+
+    // Scan every text / jsonb / array column of every public base table.
+    const columns = await sql<{ table_name: string; column_name: string }[]>`
+      SELECT c.table_name, c.column_name
+        FROM information_schema.columns c
+        JOIN information_schema.tables t
+          ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+       WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+         AND c.data_type IN ('text', 'jsonb', 'json', 'character varying', 'ARRAY')
+    `;
+    let hits = 0;
+    for (const { table_name, column_name } of columns) {
+      const rows = await sql.unsafe<{ n: string }[]>(
+        `SELECT count(*)::text AS n FROM public."${table_name}" WHERE "${column_name}"::text LIKE '%PLAINTEXT%'`,
+      );
+      hits += Number(rows[0]!.n);
+    }
+    expect(hits).toBe(0);
+  });
+
+  // T45's storage / listing / error scan is in tests/integration/connections.test.ts.
+  // UC-S8 (extends T34's secret-free scan): a planted-sentinel scan over ALL
+  // columns (cast to text, whatever their type) of ALL tables after a full
+  // connect + operation flow for the three providers - success, definitive
+  // failure, ambiguous failure and reconnect-required - plus every response body
+  // and every console line the flows produced. NOT EXECUTED when written (Docker
+  // was unavailable on the authoring machine).
+  it('T45/T34 (UC-S8): after connect + operation flows for github, jira and stitch, no sentinel token appears in any column of any table, any API body or any log line', async () => {
+    const SENTINEL = 'SENTINEL-UCS8';
+    const { inspect } = await import('node:util');
+    const { routeErrorResponse } = await import('@/app/api/_shared/connection-errors');
+    const { toExternalOperationDTO } = await import('@/lib/serialize');
+
+    const logged: string[] = [];
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((method) =>
+      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+        logged.push(
+          args.map((a) => (typeof a === 'string' ? a : inspect(a, { depth: 8 }))).join(' '),
+        );
+      }),
+    );
+    const responses: string[] = [];
+    try {
+      for (const provider of ['github', 'jira', 'stitch'] as const) {
+        const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+          name: `appendix-c: UC-S8 scan ${provider}`,
+        });
+        const artifactType = provider === 'jira' ? 'backlog' : 'architecture';
+        const { artifactId, versionId } = await draftArtifactVersion(projectId, artifactType);
+        let sourceItemVersionId: string | undefined;
+        if (provider === 'jira') {
+          const item = await fx.createLogicalItemWithVersion(sql, {
+            projectId,
+            artifactId,
+            itemType: 'epic',
+          });
+          await fx.createMembership(sql, {
+            artifactVersionId: versionId,
+            artifactId,
+            logicalItemId: item.logicalItemId,
+            itemVersionId: item.itemVersionId,
+          });
+          sourceItemVersionId = item.itemVersionId;
+        }
+
+        // Connect: sentinels as the access token, the refresh token and the
+        // display-only fields the flows never treat as secrets.
+        await connectionsModule.saveConnection({
+          userId,
+          provider,
+          externalAccountId: `acct-${provider}-${randomUUID()}`,
+          displayName: `name-${provider}`,
+          accessToken: `${SENTINEL}-ACCESS-${provider}-0123456789abcdef`,
+          refreshToken: `${SENTINEL}-REFRESH-${provider}-0123456789abcdef`,
+          expiresAt: new Date(Date.now() + 3_600_000),
+          scopes: ['repo'],
+          providerMeta:
+            provider === 'jira'
+              ? { cloudId: 'cloud-1', siteUrl: 'https://acme.atlassian.net', siteName: 'Acme' }
+              : provider === 'github'
+                ? { login: 'octo' }
+                : {},
+        });
+        const credential = await connectionsModule.getCredential(userId, provider);
+        const base = {
+          projectId,
+          provider,
+          operationType: 'scan',
+          targetDescriptor: { scan: provider },
+          sourceArtifactVersionId: versionId,
+          ...(sourceItemVersionId ? { sourceItemVersionId } : {}),
+          connectionId: credential.connectionId,
+          accountId: credential.accountId,
+        };
+
+        // Definitive failure: the operation records only the provider module's fixed text.
+        const failedKey = `${provider}:scan:failed:${randomUUID()}`;
+        const failed = await ops.runOperation({
+          ...base,
+          operationKey: failedKey,
+          requestHash: 'h-scan-failed',
+          send: async ({ operationId }) => {
+            const used = await connectionsModule.getCredentialForOperation(operationId);
+            expect('kind' in used).toBe(false); // the token was available to the closure...
+            throw new ops.DefinitiveProviderError(`${provider}_scan_rejected:422`); // ...and stays there
+          },
+          reconcile: async () => ({ found: false }),
+        });
+        expect(failed.status).toBe('failed');
+
+        // Ambiguous failure: propagates, the row stays pending. A pending GitHub
+        // operation would make `runOperation` refuse the next GitHub operation of
+        // the SAME project (ERD 4.15: one repository per project), so the GitHub
+        // flow runs this step against a second project.
+        let ambiguousBase = base;
+        if (provider === 'github') {
+          const other = await fx.createProjectWithOwner(sql, {
+            name: 'appendix-c: UC-S8 scan github ambiguous',
+          });
+          const otherDraft = await draftArtifactVersion(other.projectId, 'architecture');
+          ambiguousBase = {
+            ...base,
+            projectId: other.projectId,
+            sourceArtifactVersionId: otherDraft.versionId,
+          };
+        }
+        await expect(
+          ops.runOperation({
+            ...ambiguousBase,
+            operationKey: `${provider}:scan:ambiguous:${randomUUID()}`,
+            requestHash: 'h-scan-ambiguous',
+            send: async () => {
+              throw new Error('socket hang up');
+            },
+            reconcile: async () => ({ found: false }),
+          }),
+        ).rejects.toThrow('socket hang up');
+
+        // Reconnect required: the recorded connection needs re-authorization.
+        await sql`UPDATE provider_connection SET status = 'needs_reauth' WHERE id = ${credential.connectionId}`;
+        const failure = await ops
+          .runOperation({
+            ...base,
+            operationKey: failedKey,
+            requestHash: 'h-scan-failed',
+            send: async () => ({ externalId: 'never' }),
+            reconcile: async () => ({ found: false }),
+          })
+          .catch((e: unknown) => e);
+        expect(failure).toMatchObject({
+          name: 'ReconnectRequiredError',
+          provider,
+          reason: 'needs_reauth',
+        });
+        const response = routeErrorResponse(failure);
+        expect(response.status).toBe(409);
+        responses.push(JSON.stringify(await response.json()));
+
+        // Success. Runs AFTER the reconnect step on purpose: once a GitHub operation
+        // of the project is `completed`, `runOperation` refuses (ERD 4.15, "one
+        // repository per project") a re-run of the earlier FAILED key before it ever
+        // reaches the recorded-connection check. A NEW operation never consults the
+        // connection's status (its caller resolved the credential first), and this
+        // send closure uses no credential, so the flow's outcome is unchanged.
+        const done = await ops.runOperation({
+          ...base,
+          operationKey: `${provider}:scan:ok:${randomUUID()}`,
+          requestHash: 'h-scan-ok',
+          send: async () => ({ externalId: `${provider}-ext-${randomUUID()}` }),
+          reconcile: async () => ({ found: false }),
+        });
+        expect(done.status).toBe('completed');
+
+        const opRows = await sql<{ id: string }[]>`
+          SELECT id FROM external_operation WHERE project_id = ${projectId}
+        `;
+        for (const { id } of opRows) {
+          const state = await ops.getOperationDTOState(id);
+          responses.push(JSON.stringify(toExternalOperationDTO(state!)));
+        }
+        responses.push(JSON.stringify(await connectionsModule.listConnections(userId)));
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+
+    for (const body of responses) expect(body).not.toContain(SENTINEL);
+    for (const line of logged) expect(line).not.toContain(SENTINEL);
+
+    // ALL columns of ALL public base tables, cast to text whatever their type.
+    const columns = await sql<{ table_name: string; column_name: string }[]>`
+      SELECT c.table_name, c.column_name
+        FROM information_schema.columns c
+        JOIN information_schema.tables t
+          ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+       WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+    `;
+    expect(columns.length).toBeGreaterThan(0);
+    const hits: string[] = [];
+    for (const { table_name, column_name } of columns) {
+      const rows = await sql.unsafe<{ n: string }[]>(
+        `SELECT count(*)::text AS n FROM public."${table_name}" WHERE "${column_name}"::text LIKE '%${SENTINEL}%'`,
+      );
+      if (Number(rows[0]!.n) > 0) hits.push(`${table_name}.${column_name}`);
+    }
+    expect(hits).toEqual([]);
+  });
+
+  // UC-S8: a legacy operation (connection_id NULL) whose environment credential
+  // is gone is RECONNECT_REQUIRED (`legacy_credential_missing`) - never failed,
+  // never stale, no warning, the row byte-identical (same guarantee as T49).
+  it('UC-S8: a legacy Jira operation with no JIRA_* credential throws ReconnectRequiredError legacy_credential_missing from retryOperation; the operation, refs and impact() are byte-identical and the DTO reports the reason', async () => {
+    const { env } = await import('@/lib/env');
+    const jiraModule = await import('@/external/jira');
+    const { routeErrorResponse } = await import('@/app/api/_shared/connection-errors');
+    const { toExternalOperationDTO } = await import('@/lib/serialize');
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+      name: 'appendix-c: UC-S8 legacy missing',
+    });
+    const { artifactId, versionId } = await draftArtifactVersion(projectId, 'backlog');
+    const item = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId,
+      itemType: 'epic',
+    });
+    await fx.createMembership(sql, {
+      artifactVersionId: versionId,
+      artifactId,
+      logicalItemId: item.logicalItemId,
+      itemVersionId: item.itemVersionId,
+    });
+    const operationKey = `jira:create_issue:LEG:${item.itemVersionId}`;
+    const opId = await fx.createExternalOperation(sql, {
+      projectId,
+      provider: 'jira',
+      operationType: 'create_issue',
+      operationKey,
+      status: 'reconciliation_required',
+      requestHash: 'h-legacy-missing',
+      sourceArtifactVersionId: versionId,
+      sourceItemVersionId: item.itemVersionId,
+      targetDescriptor: { jiraProjectKey: 'LEG', itemType: 'epic' },
+    });
+    const before = await operationSnapshot(projectId);
+    const saved = env.JIRA_API_TOKEN;
+    delete env.JIRA_API_TOKEN;
+    try {
+      const failure = await jiraModule.retryOperation(opId, { userId }).catch((e: unknown) => e);
+      expect(failure).toMatchObject({
+        name: 'ReconnectRequiredError',
+        provider: 'jira',
+        reason: 'legacy_credential_missing',
+        connectionId: null,
+      });
+      const response = routeErrorResponse(failure);
+      expect(response.status).toBe(409);
+      expect((await response.json()).error).toMatchObject({
+        code: 'RECONNECT_REQUIRED',
+        details: { provider: 'jira', reason: 'legacy_credential_missing' },
+      });
+
+      expect(await operationSnapshot(projectId)).toBe(before);
+      const state = await ops.getOperationDTOState(opId);
+      expect(state?.connection).toBe('legacy_credential_missing');
+      const dto = toExternalOperationDTO(state!);
+      expect(dto.needsReconnect).toEqual({ provider: 'jira', reason: 'legacy_credential_missing' });
+      expect(dto.status).toBe('reconciliation_required');
+    } finally {
+      if (saved !== undefined) env.JIRA_API_TOKEN = saved;
+    }
+    // With the credential back, the DTO reads as an ordinary legacy operation.
+    expect(
+      toExternalOperationDTO((await ops.getOperationDTOState(opId))!).needsReconnect,
+    ).toBeNull();
+  });
+
+  it('UC-S8: a NEW operation never falls back to environment credentials - no connection plus a configured JIRA_* credential -> ConnectionRequiredError and no row', async () => {
+    const { env } = await import('@/lib/env');
+    expect(env.JIRA_API_TOKEN).toBeTruthy(); // configured for this file
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+      name: 'appendix-c: UC-S8 no fallback',
+    });
+    await expect(connectionsModule.getCredential(userId, 'jira')).rejects.toBeInstanceOf(
+      connectionsModule.ConnectionRequiredError,
+    );
+    const rows = await sql`SELECT 1 FROM external_operation WHERE project_id = ${projectId}`;
+    expect(rows).toHaveLength(0);
+  });
+
+  // T46
+  it('T46: one connection per (user, provider); unknown provider/status/user refused; another user or all three providers are fine', async () => {
+    const userId = await fx.createAppUser(sql);
+    const otherUserId = await fx.createAppUser(sql);
+    await insertConnection(userId, 'github');
+
+    await expect(insertConnection(userId, 'github')).rejects.toThrow(/unique constraint/);
+    await expect(
+      sql`INSERT INTO provider_connection (user_id, provider, external_account_id, display_name, access_token_enc)
+          VALUES (${otherUserId}, 'gitlab', '9', 'x', 'v1:AAAA:BBBB:CCCC')`,
+    ).rejects.toThrow(/violates check constraint/);
+    await expect(insertConnection(otherUserId, 'github', { status: 'expired' })).rejects.toThrow(
+      /violates check constraint/,
+    );
+    await expect(
+      sql`INSERT INTO provider_connection (user_id, provider, external_account_id, display_name, access_token_enc)
+          VALUES (${randomUUID()}, 'github', '9', 'x', 'v1:AAAA:BBBB:CCCC')`,
+    ).rejects.toThrow(/foreign key constraint/);
+
+    await insertConnection(otherUserId, 'github');
+    await insertConnection(userId, 'stitch');
+    await insertConnection(userId, 'jira', {
+      refreshTokenEnc: 'v1:DDDD:EEEE:FFFF',
+      providerMeta: { cloudId: 'cloud-1', siteUrl: 'https://x.atlassian.net', siteName: 'x' },
+    });
+    const providers = await sql<{ n: number }[]>`
+      SELECT count(DISTINCT provider)::int AS n FROM provider_connection WHERE user_id = ${userId}
+    `;
+    expect(providers[0]!.n).toBe(3);
+  });
+
+  // T47
+  it('T47: composite (connection_id, provider) FK, legacy NULL, RESTRICT on delete, delete_project() leaves connections alone', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T47' });
+    const other = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T47 other' });
+    const a = await draftArtifactVersion(projectId);
+    const b = await draftArtifactVersion(other.projectId);
+    const githubConn = await insertConnection(userId, 'github');
+    const stitchConn = await insertConnection(userId, 'stitch');
+
+    const withConn = await sql<{ id: string }[]>`
+      INSERT INTO external_operation
+        (project_id, provider, operation_type, operation_key, status, request_hash,
+         source_artifact_version_id, connection_id)
+      VALUES (${projectId}, 'github', 'create_repo', ${`op-${randomUUID()}`}, 'pending', 'h1',
+              ${a.versionId}, ${githubConn})
+      RETURNING id
+    `;
+    const legacy = await fx.createExternalOperation(sql, {
+      projectId: other.projectId,
+      provider: 'github',
+      status: 'pending',
+      sourceArtifactVersionId: b.versionId,
+    });
+
+    // a github connection cannot back a stitch operation
+    await expect(
+      sql`INSERT INTO external_operation
+            (project_id, provider, operation_type, operation_key, status, request_hash,
+             source_artifact_version_id, connection_id)
+          VALUES (${projectId}, 'stitch', 'generate_ui', ${`op-${randomUUID()}`}, 'pending', 'h3',
+                  ${a.versionId}, ${githubConn})`,
+    ).rejects.toThrow(/foreign key constraint/);
+    // a referenced connection cannot be deleted
+    await expect(sql`DELETE FROM provider_connection WHERE id = ${githubConn}`).rejects.toThrow(
+      /foreign key constraint/,
+    );
+
+    const deleted = await sql<
+      { deleted: boolean }[]
+    >`SELECT delete_project(${projectId}::uuid) AS deleted`;
+    expect(deleted[0]!.deleted).toBe(true);
+    const conns = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM provider_connection WHERE id IN (${githubConn}, ${stitchConn})
+    `;
+    expect(conns[0]!.n).toBe(2);
+    const gone = await sql`SELECT 1 FROM external_operation WHERE id = ${withConn[0]!.id}`;
+    expect(gone).toHaveLength(0);
+    const kept = await sql<{ connection_id: string | null }[]>`
+      SELECT connection_id FROM external_operation WHERE id = ${legacy}
+    `;
+    expect(kept).toHaveLength(1);
+    expect(kept[0]!.connection_id).toBeNull();
+
+    // now unreferenced: allowed
+    await sql`DELETE FROM provider_connection WHERE id = ${githubConn}`;
+  });
+
+  // T48
+  it('T48: project targets - Jira pair together, no blank target, targets stay editable after Requirements exist', async () => {
+    const { projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T48' });
+
+    await sql`UPDATE project SET github_owner = 'octo-org' WHERE id = ${projectId}`;
+    await sql`UPDATE project SET jira_cloud_id = 'cloud-1', jira_project_key = 'SCRUM' WHERE id = ${projectId}`;
+    await sql`UPDATE project SET jira_cloud_id = NULL, jira_project_key = NULL WHERE id = ${projectId}`;
+    await expect(
+      sql`UPDATE project SET jira_cloud_id = 'cloud-1' WHERE id = ${projectId}`,
+    ).rejects.toThrow(/project_jira_target_pair/);
+    await expect(
+      sql`UPDATE project SET jira_project_key = 'SCRUM' WHERE id = ${projectId}`,
+    ).rejects.toThrow(/project_jira_target_pair/);
+    await expect(
+      sql`UPDATE project SET github_owner = '   ' WHERE id = ${projectId}`,
+    ).rejects.toThrow(/project_target_not_blank/);
+
+    // brief is frozen once a Requirements version exists; targets are not.
+    await draftArtifactVersion(projectId, 'requirements');
+    await sql`UPDATE project SET github_owner = 'octo-org-2' WHERE id = ${projectId}`;
+    await expect(
+      sql`UPDATE project SET brief = 'edited' WHERE id = ${projectId}`,
+    ).rejects.toThrow();
+  });
+
+  // T49 (SQL half)
+  it('T49: needs_reauth and the revoked tombstone leave operations, refs and impact() byte-identical; the only trigger is provider_connection_touch', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T49' });
+    const { artifactId, versionId } = await draftArtifactVersion(projectId, 'backlog');
+    const story = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId,
+      itemType: 'story',
+    });
+    await fx.createMembership(sql, {
+      artifactVersionId: versionId,
+      artifactId,
+      logicalItemId: story.logicalItemId,
+      itemVersionId: story.itemVersionId,
+    });
+    const jiraConn = await insertConnection(userId, 'jira', {
+      refreshTokenEnc: 'v1:DDDD:EEEE:FFFF',
+    });
+    const stitchConn = await insertConnection(userId, 'stitch');
+
+    const jiraOp = await sql<{ id: string }[]>`
+      INSERT INTO external_operation
+        (project_id, provider, operation_type, operation_key, status, external_id, request_hash,
+         source_artifact_version_id, source_item_version_id, connection_id)
+      VALUES (${projectId}, 'jira', 'create_issue', ${`op-${randomUUID()}`}, 'completed', 'SCRUM-1', 'h5',
+              ${versionId}, ${story.itemVersionId}, ${jiraConn})
+      RETURNING id
+    `;
+    await fx.createExternalRef(sql, {
+      projectId,
+      provider: 'jira',
+      externalOperationId: jiraOp[0]!.id,
+      sourceArtifactVersionId: versionId,
+      sourceItemVersionId: story.itemVersionId,
+      externalId: 'SCRUM-1',
+      externalKey: 'SCRUM-1',
+    });
+    for (const [status, externalId] of [
+      ['completed', 'stitch-2'],
+      ['pending', null],
+    ] as const) {
+      await sql`
+        INSERT INTO external_operation
+          (project_id, provider, operation_type, operation_key, status, external_id, request_hash,
+           source_artifact_version_id, connection_id)
+        VALUES (${projectId}, 'stitch', 'generate_ui', ${`op-${randomUUID()}`}, ${status}, ${externalId},
+                ${`h-${randomUUID()}`}, ${versionId}, ${stitchConn})
+      `;
+    }
+
+    const snapshot = async (): Promise<string> => {
+      const rows = await sql<{ h: string }[]>`
+        SELECT md5(
+          coalesce((SELECT string_agg(row_to_json(o)::text, '|' ORDER BY o.id)
+                      FROM external_operation o WHERE o.project_id = ${projectId}), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(r)::text, '|' ORDER BY r.id)
+                      FROM external_ref r WHERE r.project_id = ${projectId}), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(i)::text, '|' ORDER BY i.subject_id, i.root_item_version_id)
+                      FROM impact(${projectId}::uuid) i), '')
+        ) AS h
+      `;
+      return rows[0]!.h;
+    };
+
+    const before = await snapshot();
+    await sql`UPDATE provider_connection SET status = 'needs_reauth' WHERE id IN (${jiraConn}, ${stitchConn})`;
+    expect(await snapshot()).toBe(before);
+    await sql`
+      UPDATE provider_connection
+         SET status = 'revoked', access_token_enc = 'revoked', refresh_token_enc = NULL, expires_at = NULL
+       WHERE id IN (${jiraConn}, ${stitchConn})
+    `;
+    expect(await snapshot()).toBe(before);
+
+    const impactSource = await sql`
+      SELECT 1 FROM pg_proc WHERE proname = 'impact' AND prosrc ILIKE '%provider_connection%'
+    `;
+    expect(impactSource).toHaveLength(0);
+    const triggers = await sql<{ tgname: string }[]>`
+      SELECT tgname FROM pg_trigger
+       WHERE tgrelid = 'provider_connection'::regclass AND NOT tgisinternal
+       ORDER BY tgname
+    `;
+    expect(triggers.map((t) => t.tgname)).toEqual(['provider_connection_touch']);
+  });
+
+  // SCRUM-96 helper: the provider account id `insertConnection` generated.
+  async function accountIdOf(connectionId: string): Promise<string> {
+    const rows = await sql<{ external_account_id: string }[]>`
+      SELECT external_account_id FROM provider_connection WHERE id = ${connectionId}
+    `;
+    return rows[0]!.external_account_id;
+  }
+
+  // Everything T49 says must not move: the operation rows, the refs, and impact().
+  async function operationSnapshot(projectId: string): Promise<string> {
+    const rows = await sql<{ h: string }[]>`
+      SELECT md5(
+        coalesce((SELECT string_agg(row_to_json(o)::text, '|' ORDER BY o.id)
+                    FROM external_operation o WHERE o.project_id = ${projectId}), '') || '#' ||
+        coalesce((SELECT string_agg(row_to_json(r)::text, '|' ORDER BY r.id)
+                    FROM external_ref r WHERE r.project_id = ${projectId}), '') || '#' ||
+        coalesce((SELECT string_agg(row_to_json(i)::text, '|' ORDER BY i.subject_id, i.root_item_version_id)
+                    FROM impact(${projectId}::uuid) i), '')
+      ) AS h
+    `;
+    return rows[0]!.h;
+  }
+
+  // SCRUM-96 / UC-S4 part A: runOperation records the acting user's connection
+  // and the account snapshot in the SAME insert-first row (ERD 7.2 step 0, 4.14).
+  it('SCRUM-96: runOperation writes connection_id and target_descriptor.account_id in the insert-first row, before send, and never rewrites them', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+      name: 'appendix-c: SCRUM-96 record',
+    });
+    const { versionId } = await draftArtifactVersion(projectId);
+    const connectionId = await insertConnection(userId, 'stitch');
+    const accountId = await accountIdOf(connectionId);
+    const operationKey = `stitch:generate:${randomUUID()}`;
+
+    type SeenRow = {
+      id: string;
+      status: string;
+      connection_id: string | null;
+      target_descriptor: Record<string, unknown>;
+    };
+    let seenDuringSend: SeenRow | null = null;
+    let sendOperationId: string | null = null;
+
+    const first = await ops.runOperation({
+      projectId,
+      provider: 'stitch',
+      operationType: 'generate',
+      operationKey,
+      requestHash: 'h-record',
+      targetDescriptor: { uiRequirementsVersionId: versionId },
+      sourceArtifactVersionId: versionId,
+      connectionId,
+      accountId,
+      send: async (ctx) => {
+        sendOperationId = ctx.operationId;
+        const rows = await sql<SeenRow[]>`
+          SELECT id, status, connection_id, target_descriptor FROM external_operation
+           WHERE operation_key = ${operationKey}
+        `;
+        seenDuringSend = rows[0] ?? null;
+        return { externalId: `stitch-${randomUUID()}` };
+      },
+      reconcile: async () => ({ found: false }),
+    });
+
+    expect(first.status).toBe('completed');
+    // Committed BEFORE send ran (insert-first), with the connection already on it.
+    expect(seenDuringSend).toMatchObject({
+      status: 'pending',
+      connection_id: connectionId,
+      target_descriptor: { uiRequirementsVersionId: versionId, account_id: accountId },
+    });
+    expect(sendOperationId).toBe((seenDuringSend as SeenRow | null)?.id);
+
+    // A second call under the same key from a legacy caller does not rewrite it.
+    const second = await ops.runOperation({
+      projectId,
+      provider: 'stitch',
+      operationType: 'generate',
+      operationKey,
+      requestHash: 'h-record',
+      targetDescriptor: { uiRequirementsVersionId: versionId },
+      sourceArtifactVersionId: versionId,
+      connectionId: null,
+      send: async () => {
+        throw new Error('must not resend a completed operation');
+      },
+      reconcile: async () => ({ found: false }),
+    });
+    expect(second.status).toBe('completed');
+    const rows = await sql<{ connection_id: string | null }[]>`
+      SELECT connection_id FROM external_operation WHERE operation_key = ${operationKey}
+    `;
+    expect(rows).toEqual([{ connection_id: connectionId }]);
+  });
+
+  // T49 (application half)
+  it.each([
+    ['reconciliation_required', 'needs_reauth'],
+    ['failed', 'needs_reauth'],
+    ['pending', 'needs_reauth'],
+    ['reconciliation_required', 'revoked'],
+  ] as const)(
+    'T49: a %s operation on a %s connection - runOperation throws ReconnectRequiredError and the operation, its refs and impact() are byte-identical; no send/reconcile call',
+    async (operationStatus, connectionStatus) => {
+      const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+        name: `appendix-c: T49 app ${operationStatus}/${connectionStatus}`,
+      });
+      const { versionId } = await draftArtifactVersion(projectId);
+      const connectionId = await insertConnection(userId, 'stitch');
+      const accountId = await accountIdOf(connectionId);
+      const operationKey = `stitch:generate:${randomUUID()}`;
+      // A `pending` row is old enough that runOperation would normally move it
+      // to reconciliation_required (older than T = 90s).
+      await sql`
+        INSERT INTO external_operation
+          (project_id, provider, operation_type, operation_key, status, request_hash,
+           source_artifact_version_id, connection_id, target_descriptor, error_message,
+           created_at, updated_at)
+        VALUES (${projectId}, 'stitch', 'generate', ${operationKey}, ${operationStatus}, 'h-t49',
+                ${versionId}, ${connectionId}, ${sql.json({ account_id: accountId })},
+                ${operationStatus === 'failed' ? 'an earlier definitive failure' : null},
+                now() - interval '1 hour', now() - interval '1 hour')
+      `;
+      if (connectionStatus === 'needs_reauth') {
+        await sql`UPDATE provider_connection SET status = 'needs_reauth' WHERE id = ${connectionId}`;
+      } else {
+        await sql`
+          UPDATE provider_connection
+             SET status = 'revoked', access_token_enc = 'revoked', refresh_token_enc = NULL, expires_at = NULL
+           WHERE id = ${connectionId}
+        `;
+      }
+      const before = await operationSnapshot(projectId);
+      let called = 0;
+
+      await expect(
+        ops.runOperation({
+          projectId,
+          provider: 'stitch',
+          operationType: 'generate',
+          operationKey,
+          requestHash: 'h-t49',
+          targetDescriptor: {},
+          sourceArtifactVersionId: versionId,
+          connectionId,
+          accountId,
+          send: async () => {
+            called += 1;
+            return { externalId: 'never' };
+          },
+          reconcile: async () => {
+            called += 1;
+            return { found: false };
+          },
+        }),
+      ).rejects.toBeInstanceOf(connectionsModule.ReconnectRequiredError);
+
+      expect(called).toBe(0);
+      expect(await operationSnapshot(projectId)).toBe(before);
+
+      // The status read (never a decrypt/refresh) drives ExternalOperationDTO.needsReconnect.
+      const opRows = await sql<{ id: string }[]>`
+        SELECT id FROM external_operation WHERE operation_key = ${operationKey}
+      `;
+      const state = await ops.getOperationDTOState(opRows[0]!.id);
+      expect(state?.connection).toBe(connectionStatus);
+      const { toExternalOperationDTO } = await import('@/lib/serialize');
+      const dto = toExternalOperationDTO(state!);
+      expect(dto.needsReconnect).toEqual({ provider: 'stitch', reason: connectionStatus });
+      expect(dto.status).toBe(operationStatus);
+    },
+  );
+
+  it('T49: a closure that itself raises ReconnectRequiredError (refresh rejected) leaves the operation as it was and creates no ref', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+      name: 'appendix-c: T49 app closure',
+    });
+    const { versionId } = await draftArtifactVersion(projectId);
+    const connectionId = await insertConnection(userId, 'stitch');
+    const accountId = await accountIdOf(connectionId);
+    const operationKey = `stitch:generate:${randomUUID()}`;
+    await sql`
+      INSERT INTO external_operation
+        (project_id, provider, operation_type, operation_key, status, request_hash,
+         source_artifact_version_id, connection_id, target_descriptor, error_message)
+      VALUES (${projectId}, 'stitch', 'generate', ${operationKey}, 'failed', 'h-t49c',
+              ${versionId}, ${connectionId}, ${sql.json({ account_id: accountId })}, 'earlier failure')
+    `;
+
+    await expect(
+      ops.runOperation({
+        projectId,
+        provider: 'stitch',
+        operationType: 'generate',
+        operationKey,
+        requestHash: 'h-t49c',
+        targetDescriptor: {},
+        sourceArtifactVersionId: versionId,
+        connectionId,
+        accountId,
+        send: async () => {
+          throw new connectionsModule.ReconnectRequiredError(
+            'stitch',
+            'refresh_rejected',
+            connectionId,
+          );
+        },
+        reconcile: async () => ({ found: false }),
+      }),
+    ).rejects.toBeInstanceOf(connectionsModule.ReconnectRequiredError);
+
+    const rows = await sql<{ status: string; error_message: string | null }[]>`
+      SELECT status, error_message FROM external_operation WHERE operation_key = ${operationKey}
+    `;
+    expect(rows).toEqual([{ status: 'failed', error_message: 'earlier failure' }]);
+    const refs = await sql`SELECT 1 FROM external_ref WHERE project_id = ${projectId}`;
+    expect(refs).toHaveLength(0);
+  });
+
+  // T50 (SQL half)
+  it('T50: a legacy operation (connection_id NULL) keeps its state machine', async () => {
+    const { projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T50' });
+    const { versionId } = await draftArtifactVersion(projectId);
+    const opId = await fx.createExternalOperation(sql, {
+      projectId,
+      provider: 'stitch',
+      status: 'pending',
+      sourceArtifactVersionId: versionId,
+    });
+    await sql`UPDATE external_operation SET status = 'reconciliation_required' WHERE id = ${opId}`;
+    await sql`UPDATE external_operation SET status = 'completed', external_id = 'stitch-1' WHERE id = ${opId}`;
+    const rows = await sql<{ connection_id: string | null; status: string }[]>`
+      SELECT connection_id, status FROM external_operation WHERE id = ${opId}
+    `;
+    expect(rows[0]).toEqual({ connection_id: null, status: 'completed' });
+  });
+
+  // T50 (application half)
+  it('T50: a legacy operation (connection_id NULL) still reconciles through runOperation with no connection lookup, and stays NULL', async () => {
+    // UC-S8: a legacy operation reads as "needs reconnect" only when its optional
+    // environment credential is gone; this test is about the case where it is there.
+    // `env` is parsed once at import and read at call time by
+    // `legacyCredentialAvailable`, so the test mutates that object (the same
+    // instance `ops` uses - no test in this file resets the module registry).
+    const { env } = await import('@/lib/env');
+    const savedStitchKey = env.STITCH_API_KEY;
+    onTestFinished(() => {
+      if (savedStitchKey === undefined) delete env.STITCH_API_KEY;
+      else env.STITCH_API_KEY = savedStitchKey;
+    });
+    delete env.STITCH_API_KEY;
+    const { projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T50 legacy' });
+    const { versionId } = await draftArtifactVersion(projectId);
+    const operationKey = `stitch:generate:${randomUUID()}`;
+    const opId = await fx.createExternalOperation(sql, {
+      projectId,
+      provider: 'stitch',
+      operationKey,
+      requestHash: 'h-t50',
+      status: 'reconciliation_required',
+      sourceArtifactVersionId: versionId,
+    });
+    // Credential gone -> the legacy operation reads as needing a reconnect...
+    expect((await ops.getOperationDTOState(opId))?.connection).toBe('legacy_credential_missing');
+    // ...and with the optional environment credential configured it is plain legacy.
+    env.STITCH_API_KEY = 'legacy-stitch-key-for-t50';
+    expect((await ops.getOperationDTOState(opId))?.connection).toBe('legacy');
+
+    const seen: string[] = [];
+    const result = await ops.runOperation({
+      projectId,
+      provider: 'stitch',
+      operationType: 'generate',
+      operationKey,
+      requestHash: 'h-t50',
+      targetDescriptor: {},
+      sourceArtifactVersionId: versionId,
+      connectionId: null,
+      send: async () => {
+        throw new Error('a reconciliation_required row is reconciled, not resent');
+      },
+      reconcile: async (ctx) => {
+        seen.push(ctx.operationId);
+        return { found: true, externalId: 'stitch-legacy-1' };
+      },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(seen).toEqual([opId]);
+    const rows = await sql<{ connection_id: string | null; status: string }[]>`
+      SELECT connection_id, status FROM external_operation WHERE id = ${opId}
+    `;
+    expect(rows).toEqual([{ connection_id: null, status: 'completed' }]);
+    const { toExternalOperationDTO } = await import('@/lib/serialize');
+    const state = await ops.getOperationDTOState(opId);
+    expect(toExternalOperationDTO(state!).needsReconnect).toBeNull();
+  });
+
+  it('T50: a NEW operation whose caller has no user connection is refused with ConnectionRequiredError before runOperation - no external_operation row is written', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, {
+      name: 'appendix-c: T50 no credential',
+    });
+    const { versionId } = await draftArtifactVersion(projectId);
+
+    // The caller's contract (Module Boundaries 4.5/4.6, ERD 7.2 step 0): resolve
+    // the credential FIRST, then call runOperation. The provider modules adopt
+    // exactly this order in UC-S4 part B / UC-S5 / UC-S6; until then this pins
+    // that the connections half of the contract leaves no row behind.
+    const newOperationAs = async (asUser: string) => {
+      const credential = await connectionsModule.getCredential(asUser, 'stitch');
+      return ops.runOperation({
+        projectId,
+        provider: 'stitch',
+        operationType: 'generate',
+        operationKey: `stitch:generate:${randomUUID()}`,
+        requestHash: 'h-t50-new',
+        targetDescriptor: {},
+        sourceArtifactVersionId: versionId,
+        connectionId: credential.connectionId,
+        accountId: credential.accountId,
+        send: async () => ({ externalId: 'never' }),
+        reconcile: async () => ({ found: false }),
+      });
+    };
+
+    await expect(newOperationAs(userId)).rejects.toBeInstanceOf(
+      connectionsModule.ConnectionRequiredError,
+    );
+    const rows = await sql`SELECT 1 FROM external_operation WHERE project_id = ${projectId}`;
+    expect(rows).toHaveLength(0);
+  });
+
+  // T53 (application test, UC-S10, TR FR-091, ERD 7.7): removing a project's GitHub
+  // repository RECORD. Through the real DELETE route and init route, real Postgres,
+  // the in-memory fake GitHub with a call spy.
+  it('T53: unlinkGithubRepository deletes only the GitHub ref and its completed operation, is refused while an operation is pending, makes zero GitHub calls, and a fresh init (same name included) works afterwards', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T53' });
+    const other = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T53 other' });
+    mockAuthAsOwner(userId);
+    await connectGithubForProject(userId, projectId);
+
+    const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+    const adr = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: architectureArtifactId,
+      itemType: 'architecture_decision',
+    });
+    const v1 = await approveItemsVersion(
+      architectureArtifactId,
+      [{ logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId }],
+      { architecture: true },
+    );
+
+    // Project B: its own GitHub op + ref, which nothing below may touch.
+    const otherDraft = await draftArtifactVersion(other.projectId);
+    const otherOp = await fx.createExternalOperation(sql, {
+      projectId: other.projectId,
+      provider: 'github',
+      sourceArtifactVersionId: otherDraft.versionId,
+    });
+    await fx.createExternalRef(sql, {
+      projectId: other.projectId,
+      provider: 'github',
+      externalOperationId: otherOp,
+      sourceArtifactVersionId: otherDraft.versionId,
+    });
+    const otherBefore = await operationSnapshot(other.projectId);
+
+    const fake = createFakeGithubProvider(FAKE_GITHUB_OWNER);
+    const githubCalls: string[] = [];
+    const spyFetch = (url: string | URL, init?: RequestInit): Promise<Response> => {
+      githubCalls.push(`${(init?.method ?? 'GET').toUpperCase()} ${new URL(url).pathname}`);
+      return fake.fetch(url, init);
+    };
+    const initUrl = `http://localhost/api/projects/${projectId}/github/init`;
+    const unlinkUrl = `http://localhost/api/projects/${projectId}/github`;
+    const initAs = (repoName: string) =>
+      githubInitRoute(
+        jsonRequest(initUrl, { repoName, impactAcknowledged: true }),
+        routeParams(projectId),
+      );
+    const unlinkViaRoute = () =>
+      githubUnlinkRoute(new Request(unlinkUrl, { method: 'DELETE' }), routeParams(projectId));
+
+    // What an unlink must leave alone: A's failed / Jira / Stitch rows, B's rows, every lineage table.
+    const untouchedSnapshot = async (): Promise<string> => {
+      const rows = await sql<{ h: string }[]>`
+        SELECT md5(
+          coalesce((SELECT string_agg(row_to_json(o)::text, '|' ORDER BY o.id) FROM external_operation o
+                     WHERE (o.project_id = ${projectId} AND (o.provider <> 'github' OR o.status = 'failed'))
+                        OR o.project_id = ${other.projectId}), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(r)::text, '|' ORDER BY r.id) FROM external_ref r
+                     WHERE (r.project_id = ${projectId} AND r.provider <> 'github')
+                        OR r.project_id = ${other.projectId}), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.id) FROM item_version x
+                     WHERE x.project_id IN (${projectId}, ${other.projectId})), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.id) FROM logical_item x
+                     WHERE x.project_id IN (${projectId}, ${other.projectId})), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.downstream_item_version_id, x.upstream_item_version_id) FROM semantic_dependency x
+                     WHERE x.project_id IN (${projectId}, ${other.projectId})), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.id) FROM artifact x
+                     WHERE x.project_id IN (${projectId}, ${other.projectId})), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.id) FROM impact_acknowledgement x
+                     WHERE x.project_id IN (${projectId}, ${other.projectId})), '')
+        ) AS h
+      `;
+      return rows[0]!.h;
+    };
+
+    const repoName = `t53-${randomUUID().slice(0, 8)}`;
+    await withFakeFetch(spyFetch, async () => {
+      // A completed GitHub operation + ref through the real init route.
+      const created = await initAs(repoName);
+      expect(created.status).toBe(200);
+      const [githubRef] = await sql<{ id: string }[]>`
+        SELECT id FROM external_ref WHERE project_id = ${projectId} AND provider = 'github'
+      `;
+
+      // A failed GitHub operation (history), plus a Jira and a Stitch ref.
+      await sql`
+        INSERT INTO external_operation
+          (project_id, provider, operation_type, operation_key, status, request_hash,
+           source_artifact_version_id, target_descriptor, error_message)
+        VALUES (${projectId}, 'github', 'create_repo', ${`github:create_repo:${projectId}:earlier-failure`},
+                'failed', 'h-t53-failed', ${v1}, ${sql.json({})}, 'name_taken_by_other')
+      `;
+      const jiraOp = await fx.createExternalOperation(sql, {
+        projectId,
+        provider: 'jira',
+        sourceArtifactVersionId: v1,
+        sourceItemVersionId: adr.itemVersionId,
+      });
+      await fx.createExternalRef(sql, {
+        projectId,
+        provider: 'jira',
+        externalOperationId: jiraOp,
+        sourceArtifactVersionId: v1,
+        sourceItemVersionId: adr.itemVersionId,
+      });
+      const stitchOp = await fx.createExternalOperation(sql, {
+        projectId,
+        provider: 'stitch',
+        sourceArtifactVersionId: v1,
+      });
+      await fx.createExternalRef(sql, {
+        projectId,
+        provider: 'stitch',
+        externalOperationId: stitchOp,
+        sourceArtifactVersionId: v1,
+      });
+
+      // Flag the repository (its ADR moves), so impact() has a row for the GitHub ref.
+      const adrV2 = await fx.createItemVersion(sql, {
+        projectId,
+        logicalItemId: adr.logicalItemId,
+        revisionNumber: 2,
+      });
+      await approveItemsVersion(
+        architectureArtifactId,
+        [{ logicalItemId: adr.logicalItemId, itemVersionId: adrV2 }],
+        { architecture: true },
+      );
+      const impactRowsFor = (refId: string) =>
+        sql`SELECT 1 FROM impact(${projectId}::uuid) WHERE subject_id = ${refId}`;
+      expect(await impactRowsFor(githubRef!.id)).not.toHaveLength(0);
+
+      const untouchedBefore = await untouchedSnapshot();
+      const callsBefore = githubCalls.length;
+
+      // 1. Refused while a GitHub operation is pending: nothing is deleted.
+      const pendingOp = await fx.createExternalOperation(sql, {
+        projectId,
+        provider: 'github',
+        status: 'pending',
+        operationKey: `github:create_repo:${projectId}:still-pending`,
+        sourceArtifactVersionId: v1,
+      });
+      await expect(ops.unlinkGithubRepository(projectId)).rejects.toBeInstanceOf(
+        ops.UnlinkBlockedError,
+      );
+      const blocked = await unlinkViaRoute();
+      expect(blocked.status).toBe(409);
+      expect((await blocked.json()).error.code).toBe('UNLINK_BLOCKED');
+      expect(await githubRefRows(projectId)).toHaveLength(1);
+      expect((await githubOperationRows(projectId)).map((r) => r.status).sort()).toEqual([
+        'completed',
+        'failed',
+        'pending',
+      ]);
+      await sql`DELETE FROM external_operation WHERE id = ${pendingOp}`;
+
+      // 2. The unlink: deletes the GitHub ref and its completed operation, returns { name, url }.
+      const removed = await ops.unlinkGithubRepository(projectId);
+      expect(removed).toEqual({
+        name: `${FAKE_GITHUB_OWNER}/${repoName}`,
+        url: `https://github.com/${FAKE_GITHUB_OWNER}/${repoName}`,
+      });
+      expect(await githubRefRows(projectId)).toHaveLength(0);
+      expect(await githubOperationRows(projectId)).toEqual([
+        expect.objectContaining({ status: 'failed', error_message: 'name_taken_by_other' }),
+      ]);
+      expect(await untouchedSnapshot()).toBe(untouchedBefore);
+      expect(await impactRowsFor(githubRef!.id)).toHaveLength(0);
+      expect(await operationSnapshot(other.projectId)).toBe(otherBefore);
+
+      // 3. Again: nothing linked -> null / 404.
+      expect(await ops.unlinkGithubRepository(projectId)).toBeNull();
+      const gone = await unlinkViaRoute();
+      expect(gone.status).toBe(404);
+      expect((await gone.json()).error.code).toBe('NOT_FOUND');
+
+      // Zero GitHub calls from any of the above.
+      expect(githubCalls.length).toBe(callsBefore);
+
+      // 4. Same name while the old repository still exists on GitHub: the marker is the same,
+      // but the create call itself is refused (422 -> NAME_TAKEN_BY_OTHER); no adoption.
+      const clash = await initAs(repoName);
+      expect(clash.status).toBe(409);
+      expect((await clash.json()).error.code).toBe('NAME_TAKEN_BY_OTHER');
+      expect(await githubRefRows(projectId)).toHaveLength(0);
+
+      // 5. The user deletes the old repository on GitHub; the same name then works.
+      fake.repos.delete(`${FAKE_GITHUB_OWNER}/${repoName}`);
+      const fresh = await initAs(repoName);
+      expect(fresh.status).toBe(200);
+      expect(await githubRefRows(projectId)).toHaveLength(1);
+
+      // 6. Unlink again; a different name works while the old repository still exists.
+      await ops.unlinkGithubRepository(projectId);
+      const differentName = `t53-other-${randomUUID().slice(0, 8)}`;
+      const different = await initAs(differentName);
+      expect(different.status).toBe(200);
+      expect(fake.repos.has(`${FAKE_GITHUB_OWNER}/${repoName}`)).toBe(true); // never touched
+    });
+
+    // Project B was never affected.
+    expect(await operationSnapshot(other.projectId)).toBe(otherBefore);
+  });
+
+  // T51 / T52 are application tests of the connections module.
+  // Implemented in tests/integration/connections.test.ts (T51: account
+  // mismatch; T52: concurrent Jira refresh with rotation).
 });

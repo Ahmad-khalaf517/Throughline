@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { FormMessage } from '@/components/auth/form-message';
 import { FlaggedGlyph } from '@/components/status/status-badge';
@@ -12,12 +12,24 @@ import {
   missingJiraDecisions,
   readImpactFromError,
 } from '@/lib/external-preview';
+import {
+  connectionAfterWriteError,
+  describeConnectionSteps,
+  isWriteWithheld,
+  type PreviewConnection,
+} from '@/lib/connections-ui';
 import { PreviewShell, type PreviewState } from './preview-shell';
+import { ConnectionSteps } from './connection-steps';
+import { JiraTargetPicker, type ProjectTargets } from './target-pickers';
 import { ImpactGate } from './impact-gate';
 import { OperationStatus } from './operation-status';
 
 interface JiraExportPanelProps {
   projectId: string;
+  /** The project's saved Jira site + project (FR-088), `null` until picked. */
+  jiraTarget: { cloudId: string; projectKey: string } | null;
+  /** The Throughline project's name, prefilled into "Create a new Jira project". */
+  projectName: string;
 }
 
 type JiraDecision = 'skip' | 'create_new';
@@ -40,6 +52,8 @@ interface JiraPreviewData {
   skipped: JiraSkippedItem[];
   needsDecision: JiraNeedsDecisionItem[];
   impact: ImpactRowDTO[];
+  /** FR-089: connection status + whether the site/project target is set. */
+  connection?: PreviewConnection;
 }
 
 interface JiraExportResult {
@@ -60,7 +74,7 @@ const SUBMIT_CLASSNAME =
  * (API Contracts section 9; E5-S9). Same client-`fetch` mutation pattern as
  * `github-init-panel.tsx`/`new-project-form.tsx`.
  */
-export function JiraExportPanel({ projectId }: JiraExportPanelProps) {
+export function JiraExportPanel({ projectId, jiraTarget, projectName }: JiraExportPanelProps) {
   const router = useRouter();
   const [state, setState] = useState<PreviewState>({ status: 'loading' });
   const [preview, setPreview] = useState<JiraPreviewData | null>(null);
@@ -69,6 +83,13 @@ export function JiraExportPanel({ projectId }: JiraExportPanelProps) {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [result, setResult] = useState<JiraExportResult | null>(null);
+  const [connection, setConnection] = useState<PreviewConnection | null>(null);
+
+  // Re-load the preview (after a connect / disconnect made from the steps)
+  // without flipping the screen back to "loading": the effect below simply runs
+  // again, and the steps stay mounted.
+  const [reloadKey, setReloadKey] = useState(0);
+  const reloadPreview = useCallback(() => setReloadKey((key) => key + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,14 +127,13 @@ export function JiraExportPanel({ projectId }: JiraExportPanelProps) {
         }
 
         setPreview(body as JiraPreviewData);
+        setConnection((body as JiraPreviewData).connection ?? null);
         setState({ status: 'ready' });
       } catch {
-        if (!cancelled) {
-          setState({
-            status: 'error',
-            message: 'Could not reach the server. Check your connection and try again.',
-          });
-        }
+        setState({
+          status: 'error',
+          message: 'Could not reach the server. Check your connection and try again.',
+        });
       }
     }
 
@@ -121,7 +141,7 @@ export function JiraExportPanel({ projectId }: JiraExportPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [projectId, router]);
+  }, [projectId, router, reloadKey]);
 
   const displayKeyByLogicalItemId = useMemo(() => {
     const map = new Map<string, string>();
@@ -194,6 +214,14 @@ export function JiraExportPanel({ projectId }: JiraExportPanelProps) {
           // re-enabling submit.
         }
 
+        // FR-089: a 409 CONNECTION_REQUIRED / RECONNECT_REQUIRED / TARGET_REQUIRED
+        // is answered by the steps at the top, not a dead-end error.
+        const nextConnection = connectionAfterWriteError(errorBody.error?.code, connection);
+        if (nextConnection) {
+          setConnection(nextConnection);
+          return;
+        }
+
         setSubmitError(
           describeExternalError(
             errorBody.error?.code,
@@ -211,84 +239,122 @@ export function JiraExportPanel({ projectId }: JiraExportPanelProps) {
     }
   }
 
+  function handleTargetSaved(targets: ProjectTargets) {
+    setConnection((current) =>
+      current ? { ...current, targetReady: targets.jira !== null } : current,
+    );
+  }
+
+  // Until Jira is connected the preview stays readable but locked; a missing
+  // target only holds back the export button (step 3 says why).
+  const locked = connection !== null && connection.status !== 'active';
+  const writeStep = describeConnectionSteps('jira', connection)[2]!;
+
   return (
-    <PreviewShell state={state}>
-      {preview &&
-        (result ? (
-          <JiraResultView result={result} displayKeyByLogicalItemId={displayKeyByLogicalItemId} />
-        ) : (
-          <form onSubmit={handleSubmit} className="flex flex-col gap-6">
-            <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
-              <p className="text-on-surface text-sm font-medium">
-                {preview.epics} Epic{preview.epics === 1 ? '' : 's'} · {preview.stories} Stor
-                {preview.stories === 1 ? 'y' : 'ies'}
-              </p>
-            </div>
-
-            {preview.skipped.length > 0 && (
-              <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-4">
-                <h3 className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase">
-                  Not exportable ({preview.skipped.length})
-                </h3>
-                <ul className="mt-2 flex flex-col gap-1">
-                  {preview.skipped.map((item) => (
-                    <li key={item.logicalItemId} className="text-on-surface-variant text-sm">
-                      <span className="font-mono-code text-on-surface font-semibold">
-                        {item.displayKey}
-                      </span>
-                      : {describeSkipReason(item.reason)}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {preview.needsDecision.length > 0 && (
-              <div className="flex flex-col gap-3">
-                <h3 className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase">
-                  Needs a decision ({preview.needsDecision.length})
-                </h3>
-                {preview.needsDecision.map((item) => (
-                  <JiraDecisionItem
-                    key={item.logicalItemId}
-                    item={item}
-                    decision={decisions[item.logicalItemId]}
-                    onChange={handleDecisionChange}
-                  />
-                ))}
-              </div>
-            )}
-
-            <ImpactGate
-              impact={preview.impact}
-              acknowledged={acknowledged}
-              onAcknowledgedChange={setAcknowledged}
-              idPrefix="jira-export"
+    <div className="flex flex-col gap-6">
+      {connection && (
+        <ConnectionSteps
+          provider="jira"
+          connection={connection}
+          returnTo={`/projects/${projectId}/outputs/jira`}
+          onChanged={reloadPreview}
+          configure={
+            <JiraTargetPicker
+              projectId={projectId}
+              current={jiraTarget}
+              connection={connection}
+              projectName={projectName}
+              onSaved={handleTargetSaved}
             />
-
-            {missing.length > 0 && (
-              <p className="text-on-surface-variant text-xs">
-                Still needs a decision:{' '}
-                {missing.map((id) => displayKeyByLogicalItemId.get(id) ?? id).join(', ')}
-              </p>
-            )}
-
-            {submitError && <FormMessage variant="error">{submitError}</FormMessage>}
-
-            <button
-              type="submit"
-              disabled={
-                submitting ||
-                missing.length > 0 ||
-                isExternalWriteBlocked(preview.impact, acknowledged)
-              }
-              className={SUBMIT_CLASSNAME}
+          }
+        />
+      )}
+      <PreviewShell state={state}>
+        {preview &&
+          (result ? (
+            <JiraResultView result={result} displayKeyByLogicalItemId={displayKeyByLogicalItemId} />
+          ) : (
+            <form
+              onSubmit={handleSubmit}
+              inert={locked}
+              className={`flex flex-col gap-6 transition-opacity ${locked ? 'opacity-60' : ''}`}
             >
-              {submitting ? 'Exporting…' : 'Export to Jira'}
-            </button>
-          </form>
-        ))}
-    </PreviewShell>
+              <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
+                <p className="text-on-surface text-sm font-medium">
+                  {preview.epics} Epic{preview.epics === 1 ? '' : 's'} · {preview.stories} Stor
+                  {preview.stories === 1 ? 'y' : 'ies'}
+                </p>
+              </div>
+
+              {preview.skipped.length > 0 && (
+                <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-4">
+                  <h3 className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase">
+                    Not exportable ({preview.skipped.length})
+                  </h3>
+                  <ul className="mt-2 flex flex-col gap-1">
+                    {preview.skipped.map((item) => (
+                      <li key={item.logicalItemId} className="text-on-surface-variant text-sm">
+                        <span className="font-mono-code text-on-surface font-semibold">
+                          {item.displayKey}
+                        </span>
+                        : {describeSkipReason(item.reason)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {preview.needsDecision.length > 0 && (
+                <div className="flex flex-col gap-3">
+                  <h3 className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase">
+                    Needs a decision ({preview.needsDecision.length})
+                  </h3>
+                  {preview.needsDecision.map((item) => (
+                    <JiraDecisionItem
+                      key={item.logicalItemId}
+                      item={item}
+                      decision={decisions[item.logicalItemId]}
+                      onChange={handleDecisionChange}
+                    />
+                  ))}
+                </div>
+              )}
+
+              <ImpactGate
+                impact={preview.impact}
+                acknowledged={acknowledged}
+                onAcknowledgedChange={setAcknowledged}
+                idPrefix="jira-export"
+              />
+
+              {missing.length > 0 && (
+                <p className="text-on-surface-variant text-xs">
+                  Still needs a decision:{' '}
+                  {missing.map((id) => displayKeyByLogicalItemId.get(id) ?? id).join(', ')}
+                </p>
+              )}
+
+              {submitError && <FormMessage variant="error">{submitError}</FormMessage>}
+
+              <button
+                type="submit"
+                disabled={
+                  submitting ||
+                  isWriteWithheld(connection) ||
+                  missing.length > 0 ||
+                  isExternalWriteBlocked(preview.impact, acknowledged)
+                }
+                className={SUBMIT_CLASSNAME}
+              >
+                {submitting ? 'Exporting…' : 'Export to Jira'}
+              </button>
+              {!locked && writeStep.status === 'locked' && writeStep.lockedReason && (
+                <p className="text-on-surface-variant -mt-3 text-xs">{writeStep.lockedReason}.</p>
+              )}
+            </form>
+          ))}
+      </PreviewShell>
+    </div>
   );
 }
 

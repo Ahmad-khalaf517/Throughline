@@ -16,3 +16,16 @@ export const updateProjectSchema = z.object({
   brief: z.string().min(1, 'brief must not be empty').optional(),
   inputContext: z.unknown().optional(),
 });
+
+// API Contracts 10A, `PATCH /api/projects/:projectId/targets`. Absent field =
+// unchanged, `null` = clear; the Jira pair is set together or cleared together,
+// so half a pair (or a blank value) fails validation.
+const nonBlank = (label: string) => z.string().trim().min(1, `${label} must not be blank`);
+
+export const updateProjectTargetsSchema = z.object({
+  githubOwner: nonBlank('githubOwner').nullable().optional(),
+  jira: z
+    .object({ cloudId: nonBlank('cloudId'), projectKey: nonBlank('projectKey') })
+    .nullable()
+    .optional(),
+});

@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 import { getProjectById } from '@/artifact-lifecycle';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
 import { ApiError } from '@/lib/errors';
+import { toProjectDTO } from '@/lib/serialize';
 import { JiraExportPanel } from '@/components/external/jira-export-panel';
 
 interface ProjectJiraOutputPageProps {
@@ -49,7 +50,11 @@ export default async function ProjectJiraOutputPage({ params }: ProjectJiraOutpu
         </p>
       </header>
 
-      <JiraExportPanel projectId={projectId} />
+      <JiraExportPanel
+        projectId={projectId}
+        jiraTarget={toProjectDTO(project).targets.jira}
+        projectName={project.name}
+      />
     </main>
   );
 }

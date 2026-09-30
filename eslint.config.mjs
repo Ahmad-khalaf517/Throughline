@@ -19,6 +19,7 @@ const elementTypes = [
   'layer2-artifact-lifecycle',
   'layer2-architecture-materialization',
   'layer3-artifact-types',
+  'layer3b-connections',
   'layer4-external-operations',
   'layer5-external-provider',
   'layer6-api',
@@ -26,6 +27,16 @@ const elementTypes = [
   'lib',
   'components',
 ];
+
+// `withProjectLock` is re-exported from src/db/index.ts, so importing it from
+// '@/db' would slip past the `**/db/lock` pattern below. Blocked by name here;
+// only src/artifact-lifecycle (whose override omits this entry) may import it.
+const withProjectLockPaths = ['@/db', '@/db/index'].map((name) => ({
+  name,
+  importNames: ['withProjectLock'],
+  message:
+    'withProjectLock is imported from src/artifact-lifecycle only (Module Boundaries principle 3).',
+}));
 
 const eslintConfig = defineConfig([
   ...nextVitals,
@@ -46,6 +57,10 @@ const eslintConfig = defineConfig([
           pattern: 'src/architecture-materialization/**',
         },
         { type: 'layer3-artifact-types', pattern: 'src/artifact-types/*/**', capture: ['name'] },
+        // Layer 3b (Module Boundaries 4.9): imports layer 0 only; importable by
+        // layers 4-6 only, never by layers 1-3 (nothing in the lineage core may
+        // hold a credential).
+        { type: 'layer3b-connections', pattern: 'src/connections/**' },
         { type: 'layer4-external-operations', pattern: 'src/external/operations/**' },
         {
           type: 'layer5-external-provider',
@@ -121,10 +136,13 @@ const eslintConfig = defineConfig([
                 'lib',
               ],
             },
-            // Layer 4: shared external-write protocol - layer 0-1 only (db, impact).
+            // Layer 3b: per-user provider credentials - layer 0 (db) only.
+            { from: ['layer3b-connections'], allow: ['layer0-db', 'lib'] },
+            // Layer 4: shared external-write protocol - layer 0-1 only (db, impact),
+            // plus connections (error types only, Module Boundaries 4.5 / 4.9).
             {
               from: ['layer4-external-operations'],
-              allow: ['layer0-db', 'layer1-impact', 'lib'],
+              allow: ['layer0-db', 'layer1-impact', 'layer3b-connections', 'lib'],
             },
             // Layer 5: provider integrations - layer 0-4, and read-only into their
             // paired layer-3 module (github->architecture, jira->backlog, stitch->ui-requirements).
@@ -136,6 +154,7 @@ const eslintConfig = defineConfig([
                 'layer0-ai-client',
                 'layer1-impact',
                 'layer3-artifact-types',
+                'layer3b-connections',
                 'layer4-external-operations',
                 'lib',
               ],
@@ -149,6 +168,7 @@ const eslintConfig = defineConfig([
                 'layer0-auth',
                 'layer2-artifact-lifecycle',
                 'layer3-artifact-types',
+                'layer3b-connections',
                 'layer4-external-operations',
                 'layer5-external-provider',
                 'lib',
@@ -171,6 +191,7 @@ const eslintConfig = defineConfig([
               name: 'openai',
               message: 'Only src/ai-client may import the openai SDK (Module Boundaries 4.1).',
             },
+            ...withProjectLockPaths,
           ],
           patterns: [
             {
@@ -202,6 +223,7 @@ const eslintConfig = defineConfig([
       'no-restricted-imports': [
         'error',
         {
+          paths: withProjectLockPaths,
           patterns: [
             {
               group: ['**/db/lock', '**/db/lock.ts'],
@@ -219,11 +241,37 @@ const eslintConfig = defineConfig([
     },
   },
   {
+    // The unit under test is `withProjectLock` itself (src/db/lock.ts), imported
+    // through the db barrel. Everything else in the base rule still applies.
+    files: ['tests/unit/db/lock.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'openai',
+              message: 'Only src/ai-client may import the openai SDK (Module Boundaries 4.1).',
+            },
+          ],
+          patterns: [
+            {
+              group: ['@supabase/*'],
+              message:
+                'Only src/auth may import @supabase/* auth/SSR clients (Module Boundaries 4.1).',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['src/ai-client/**'],
     rules: {
       'no-restricted-imports': [
         'error',
         {
+          paths: withProjectLockPaths,
           patterns: [
             {
               group: ['**/db/lock', '**/db/lock.ts'],
@@ -262,6 +310,7 @@ const eslintConfig = defineConfig([
               name: 'openai',
               message: 'Only src/ai-client may import the openai SDK (Module Boundaries 4.1).',
             },
+            ...withProjectLockPaths,
           ],
           patterns: [
             {

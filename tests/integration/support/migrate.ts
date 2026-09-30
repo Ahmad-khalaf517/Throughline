@@ -2,9 +2,9 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { QueryExecutor } from './types';
 
-// The complete, frozen Appendix A schema (16 tables), Appendix A.2 triggers,
+// The complete, frozen Appendix A schema (17 tables), Appendix A.2 triggers,
 // impact() (ERD section 6.3) and Appendix A.3 hardening - drizzle/migrations/
-// 0000_app_user.sql through 0008_project_deletion.sql. Applied here
+// 0000_app_user.sql through 0010_provider_connection_hardening.sql. Applied here
 // in the same numeric order Project Setup section 10 step 8 applies them in
 // everywhere else (Supabase project, container). Never edit these files from
 // a test - they are frozen (E1-S4).

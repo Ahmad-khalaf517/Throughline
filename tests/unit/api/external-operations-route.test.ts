@@ -10,16 +10,24 @@ vi.mock('@/auth', () => ({
 
 vi.mock('@/external/operations', () => ({
   getOperationById: vi.fn(),
+  getOperationDTOState: vi.fn(),
+}));
+
+// The route's error translation imports `@/connections` (built on `@/db`/env).
+vi.mock('@/connections', () => ({
+  ConnectionRequiredError: class extends Error {},
+  ReconnectRequiredError: class extends Error {},
 }));
 
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
-import { getOperationById } from '@/external/operations';
+import { getOperationById, getOperationDTOState } from '@/external/operations';
 import { GET } from '@/app/api/external-operations/[operationId]/route';
 import { ApiError } from '@/lib/errors';
 
 const mockedGetVerifiedUser = vi.mocked(getVerifiedUser);
 const mockedRequireProjectOwner = vi.mocked(requireProjectOwner);
 const mockedGetOperationById = vi.mocked(getOperationById);
+const mockedGetOperationDTOState = vi.mocked(getOperationDTOState);
 
 const user = { id: 'user-1', email: 'a@b.com', displayName: null };
 const now = new Date('2024-01-01T00:00:00.000Z');
@@ -35,6 +43,7 @@ function makeOperation(overrides: Partial<Record<string, unknown>> = {}) {
     requestHash: 'hash',
     sourceArtifactVersionId: 'arch-v1',
     sourceItemVersionId: null,
+    connectionId: null,
     targetDescriptor: { repoName: 'repo' },
     externalId: null,
     errorMessage: null,
@@ -53,6 +62,7 @@ describe('GET /api/external-operations/:operationId', () => {
     mockedGetVerifiedUser.mockReset();
     mockedRequireProjectOwner.mockReset();
     mockedGetOperationById.mockReset();
+    mockedGetOperationDTOState.mockReset();
   });
 
   it('returns 401 UNAUTHENTICATED when there is no verified user', async () => {
@@ -101,6 +111,10 @@ describe('GET /api/external-operations/:operationId', () => {
   it('returns 200 with an ExternalOperationDTO on success', async () => {
     mockedGetVerifiedUser.mockResolvedValue(user);
     mockedGetOperationById.mockResolvedValue(makeOperation({ status: 'reconciliation_required' }));
+    mockedGetOperationDTOState.mockResolvedValue({
+      ...makeOperation({ status: 'reconciliation_required' }),
+      connection: 'active',
+    });
     mockedRequireProjectOwner.mockResolvedValue(undefined);
 
     const response = await GET(
@@ -116,6 +130,48 @@ describe('GET /api/external-operations/:operationId', () => {
       status: 'reconciliation_required',
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
+      needsReconnect: null,
     });
+  });
+
+  it.each([
+    ['needs_reauth', 'needs_reauth'],
+    ['revoked', 'revoked'],
+    ['account_mismatch', 'different_account'],
+    ['legacy_credential_missing', 'legacy_credential_missing'],
+  ] as const)(
+    'reports needsReconnect reason %s -> %s and leaves the operation fields as stored (FR-090)',
+    async (connection, reason) => {
+      const stored = makeOperation({ status: 'reconciliation_required', connectionId: 'conn-1' });
+      mockedGetVerifiedUser.mockResolvedValue(user);
+      mockedGetOperationById.mockResolvedValue(stored);
+      mockedGetOperationDTOState.mockResolvedValue({ ...stored, connection });
+      mockedRequireProjectOwner.mockResolvedValue(undefined);
+
+      const response = await GET(
+        new Request('http://localhost/api/external-operations/op-1'),
+        paramsFor('op-1'),
+      );
+
+      const body = await response.json();
+      expect(body.status).toBe('reconciliation_required');
+      expect(body.needsReconnect).toEqual({ provider: 'github', reason });
+      expect(JSON.stringify(body)).not.toContain('conn-1');
+    },
+  );
+
+  it('reads a legacy operation (connection_id NULL) as needing no reconnect', async () => {
+    const stored = makeOperation();
+    mockedGetVerifiedUser.mockResolvedValue(user);
+    mockedGetOperationById.mockResolvedValue(stored);
+    mockedGetOperationDTOState.mockResolvedValue({ ...stored, connection: 'legacy' });
+    mockedRequireProjectOwner.mockResolvedValue(undefined);
+
+    const response = await GET(
+      new Request('http://localhost/api/external-operations/op-1'),
+      paramsFor('op-1'),
+    );
+
+    expect((await response.json()).needsReconnect).toBeNull();
   });
 });

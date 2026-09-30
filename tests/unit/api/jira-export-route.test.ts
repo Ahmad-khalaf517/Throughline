@@ -2,10 +2,40 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Route-handler wiring test for POST /api/projects/:projectId/jira/export
 // (API Contracts section 9).
-const { FakeBacklogVersionNotApprovedError } = vi.hoisted(() => {
+const {
+  FakeBacklogVersionNotApprovedError,
+  FakeJiraTargetRequiredError,
+  FakeJiraSiteError,
+  FakeConnectionRequiredError,
+  FakeReconnectRequiredError,
+} = vi.hoisted(() => {
   class FakeBacklogVersionNotApprovedError extends Error {}
-  return { FakeBacklogVersionNotApprovedError };
+  class FakeJiraTargetRequiredError extends Error {
+    readonly target = 'jira' as const;
+  }
+  class FakeJiraSiteError extends Error {}
+  class FakeConnectionRequiredError extends Error {
+    readonly provider = 'jira';
+  }
+  class FakeReconnectRequiredError extends Error {
+    readonly provider = 'jira';
+    readonly reason = 'needs_reauth';
+  }
+  return {
+    FakeBacklogVersionNotApprovedError,
+    FakeJiraTargetRequiredError,
+    FakeJiraSiteError,
+    FakeConnectionRequiredError,
+    FakeReconnectRequiredError,
+  };
 });
+
+// The route's error translation imports `@/connections` (layer 3b), which is
+// built on `@/db`/`@/lib/env`; stand-in error classes are enough for `instanceof`.
+vi.mock('@/connections', () => ({
+  ConnectionRequiredError: FakeConnectionRequiredError,
+  ReconnectRequiredError: FakeReconnectRequiredError,
+}));
 
 vi.mock('@/auth', () => ({
   getVerifiedUser: vi.fn(),
@@ -31,6 +61,10 @@ vi.mock('@/external/jira', () => ({
   exportBacklog: vi.fn(),
   checkDrift: vi.fn(),
   BacklogVersionNotApprovedError: FakeBacklogVersionNotApprovedError,
+  JiraTargetRequiredError: FakeJiraTargetRequiredError,
+  JiraSiteNotAccessibleError: FakeJiraSiteError,
+  ProjectKeyTakenError: class ProjectKeyTakenError extends Error {},
+  JiraAdminRequiredError: class JiraAdminRequiredError extends Error {},
 }));
 vi.mock('@/external/github', () => ({ checkDrift: vi.fn() }));
 vi.mock('@/external/stitch', () => ({ checkDrift: vi.fn() }));
@@ -66,6 +100,9 @@ function baseProject(backlogApproved: string | null = 'backlog-v1') {
     name: 'x',
     brief: 'y',
     inputContext: null,
+    githubOwner: null,
+    jiraCloudId: null,
+    jiraProjectKey: null,
     createdAt: now,
     updatedAt: now,
     artifacts,
@@ -134,6 +171,7 @@ describe('POST /api/projects/:projectId/jira/export', () => {
       stories: 3,
       skipped: [skippedPreviewItem, needsDecisionPreviewItem],
       impact: [],
+      connection: { status: 'active', targetReady: true, accountName: null },
     });
   });
 
@@ -222,6 +260,7 @@ describe('POST /api/projects/:projectId/jira/export', () => {
           acknowledged: false,
         },
       ],
+      connection: { status: 'active', targetReady: true, accountName: null },
     });
     mockedGetDisplayKeys.mockResolvedValue(
       new Map([
@@ -303,6 +342,7 @@ describe('POST /api/projects/:projectId/jira/export', () => {
     expect(mockedExportBacklog).toHaveBeenCalledWith(
       'backlog-v1',
       new Map([['li-decide', 'create_new']]),
+      { userId: 'user-1' },
     );
     expect(body.created).toHaveLength(2);
     expect(body.created.map((r: { id: string }) => r.id).sort()).toEqual([
@@ -313,5 +353,53 @@ describe('POST /api/projects/:projectId/jira/export', () => {
     expect(body.failures).toEqual([
       { logicalItemId: 'li-fail', operationId: 'op-fail', status: 'failed' },
     ]);
+  });
+
+  it('passes the project Jira target in the ctx to previewExport and exportBacklog', async () => {
+    mockedGetProjectById.mockResolvedValue({
+      ...baseProject(),
+      jiraCloudId: 'cloud-1',
+      jiraProjectKey: 'PROJ',
+    });
+
+    const response = await POST(postRequest(validBody()), paramsFor('project-1'));
+
+    expect(response.status).toBe(200);
+    const ctx = { userId: 'user-1', jiraCloudId: 'cloud-1', jiraProjectKey: 'PROJ' };
+    expect(mockedPreviewExport).toHaveBeenCalledWith('backlog-v1', ctx);
+    expect(mockedExportBacklog).toHaveBeenCalledWith('backlog-v1', expect.any(Map), ctx);
+  });
+
+  it('returns 409 TARGET_REQUIRED with details.target when the project has no Jira target', async () => {
+    mockedExportBacklog.mockRejectedValue(new FakeJiraTargetRequiredError('no target'));
+
+    const response = await POST(postRequest(validBody()), paramsFor('project-1'));
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error.code).toBe('TARGET_REQUIRED');
+    expect(body.error.details).toEqual({ target: 'jira' });
+  });
+
+  it('returns 409 CONNECTION_REQUIRED when the caller has no Jira connection', async () => {
+    mockedExportBacklog.mockRejectedValue(new FakeConnectionRequiredError('none'));
+
+    const response = await POST(postRequest(validBody()), paramsFor('project-1'));
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error.code).toBe('CONNECTION_REQUIRED');
+    expect(body.error.details).toEqual({ provider: 'jira' });
+  });
+
+  it('returns 409 RECONNECT_REQUIRED with the reason when the connection has lapsed', async () => {
+    mockedExportBacklog.mockRejectedValue(new FakeReconnectRequiredError('lapsed'));
+
+    const response = await POST(postRequest(validBody()), paramsFor('project-1'));
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error.code).toBe('RECONNECT_REQUIRED');
+    expect(body.error.details).toEqual({ provider: 'jira', reason: 'needs_reauth' });
   });
 });

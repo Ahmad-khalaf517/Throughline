@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from 'vitest';
 import type postgres from 'postgres';
 import { connect } from '../support/connection';
@@ -16,6 +16,13 @@ import * as fx from '../support/fixtures';
 // GITHUB_TOKEN is configured anywhere in this environment, matching the
 // spike's own "mock mode".
 //
+// Round 14 (SCRUM-96): every call below runs as a project owner who has a
+// GitHub connection (saved through the real `connections.saveConnection`, so
+// the token is encrypted at rest and decrypted by the real `getCredential`);
+// the repository goes under the ctx's `githubOwner`. The fake GitHub still
+// ignores auth headers except where a test asserts on them. The legacy
+// (env GITHUB_TOKEN) path has its own cases at the end.
+//
 // `checkDrift` never calls the network at all (a pure DB read through
 // `external-operations.getRefById` + `impact.getExternalDrift`) - T13/T17
 // below build their `external_ref` rows directly via `fx.*` fixtures (the
@@ -30,6 +37,7 @@ import * as fx from '../support/fixtures';
 
 let sql: postgres.Sql;
 let github: typeof import('@/external/github');
+let connections: typeof import('@/connections');
 
 const FAKE_OWNER = 'thrln-test-owner';
 // A fixed, non-random test secret (unlike the spike's own ephemeral
@@ -53,12 +61,74 @@ beforeAll(async () => {
   // is a valid unauthenticated client, and the fake GitHub below never
   // checks auth headers, matching the spike's own mock mode.
 
+  // 32 bytes, base64 - read by the connections module at call time.
+  process.env.CONNECTION_ENCRYPTION_KEY = randomBytes(32).toString('base64');
+
   github = await import('@/external/github');
+  connections = await import('@/connections');
 });
 
 afterAll(async () => {
   await sql.end({ timeout: 5 });
 });
+
+// ---------------------------------------------------------------------------
+// Round 14: the acting user's own connection + ctx.
+// ---------------------------------------------------------------------------
+
+const TEST_TOKEN = 'gho_thrln_test_user_token';
+
+/** The user's GitHub connection: account id `gh-<userId>`, login = the fake GitHub's owner. */
+async function ensureConnection(userId: string, externalAccountId = `gh-${userId}`) {
+  await connections.saveConnection({
+    userId,
+    provider: 'github',
+    externalAccountId,
+    displayName: FAKE_OWNER,
+    accessToken: TEST_TOKEN,
+    scopes: ['repo', 'read:org'],
+    providerMeta: { login: FAKE_OWNER },
+  });
+}
+
+/** ctx for the owner of the project an architecture version belongs to (a connection is ensured). */
+async function ctxForVersion(architectureVersionId: string) {
+  const [row] = await sql<{ owner_user_id: string }[]>`
+    SELECT p.owner_user_id
+    FROM artifact_version av
+    JOIN artifact a ON a.id = av.artifact_id
+    JOIN project p ON p.id = a.project_id
+    WHERE av.id = ${architectureVersionId}
+  `;
+  await ensureConnection(row!.owner_user_id);
+  return { userId: row!.owner_user_id, githubOwner: FAKE_OWNER };
+}
+
+const initRepo = async (
+  architectureVersionId: string,
+  repoName: string,
+  visibility?: 'public' | 'private',
+) =>
+  github.initRepo(
+    architectureVersionId,
+    repoName,
+    await ctxForVersion(architectureVersionId),
+    visibility,
+  );
+
+const previewInit = async (architectureVersionId: string, projectName?: string) =>
+  github.previewInit(
+    architectureVersionId,
+    projectName,
+    await ctxForVersion(architectureVersionId),
+  );
+
+/** A throwaway user with a connection - `checkRepoName` needs a ctx but no project. */
+const checkRepoName = async (repoName: string) => {
+  const { userId } = await fx.createProjectWithOwner(sql, { name: 'github name lookup' });
+  await ensureConnection(userId);
+  return github.checkRepoName(repoName, { userId, githubOwner: FAKE_OWNER });
+};
 
 // ---------------------------------------------------------------------------
 // Fixture composition shared by every scenario below.
@@ -378,14 +448,14 @@ describe('github (E4-S2 / SCRUM-51)', () => {
 
       await withFakeFetch(dropper.fetch, async () => {
         dropper.simulateLostResponseFor(normalizedRepoName);
-        await expect(github.initRepo(architectureVersionId, repoName)).rejects.toThrow();
+        await expect(initRepo(architectureVersionId, repoName)).rejects.toThrow();
 
         const afterLoss = await githubOperationRows(projectId);
         expect(afterLoss).toHaveLength(1);
         expect(afterLoss[0]!.status).toBe('pending'); // R6/R9: left exactly as-is, never failed
 
         const ref = await withClockAdvancedPastThreshold(() =>
-          github.initRepo(architectureVersionId, repoName),
+          initRepo(architectureVersionId, repoName),
         );
 
         expect(ref.provider).toBe('github');
@@ -424,7 +494,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       fake.seedForeignRepo(normalizedRepoName, 'thrln-marker:0000000000000000');
 
       await withFakeFetch(fake.fetch, async () => {
-        await expect(github.initRepo(architectureVersionId, repoName)).rejects.toThrow(
+        await expect(initRepo(architectureVersionId, repoName)).rejects.toThrow(
           /name_taken_by_other/,
         );
       });
@@ -460,7 +530,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
 
       await withFakeFetch(dropper.fetch, async () => {
         dropper.simulateLostResponseFor(normalizedRepoName);
-        await expect(github.initRepo(architectureVersionId, repoName)).rejects.toThrow();
+        await expect(initRepo(architectureVersionId, repoName)).rejects.toThrow();
 
         const afterLoss = await githubOperationRows(projectId);
         expect(afterLoss).toHaveLength(1);
@@ -472,7 +542,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
         // match ours - a definitive outcome, mapped to `failed`, not left
         // at `reconciliation_required` forever.
         await expect(
-          withClockAdvancedPastThreshold(() => github.initRepo(architectureVersionId, repoName)),
+          withClockAdvancedPastThreshold(() => initRepo(architectureVersionId, repoName)),
         ).rejects.toThrow(/name_taken_by_other/);
 
         const afterReconcile = await githubOperationRows(projectId);
@@ -504,13 +574,11 @@ describe('github (E4-S2 / SCRUM-51)', () => {
 
       await withFakeFetch(dropper.fetch, async () => {
         dropper.simulateLostResponseFor(normalizedRepoName);
-        await expect(github.initRepo(architectureVersionId, repoName)).rejects.toThrow();
+        await expect(initRepo(architectureVersionId, repoName)).rejects.toThrow();
 
         // Still within T (no clock advance) - a double-click must be
         // rejected as in-flight, never resent (R5).
-        await expect(github.initRepo(architectureVersionId, repoName)).rejects.toThrow(
-          /in flight/i,
-        );
+        await expect(initRepo(architectureVersionId, repoName)).rejects.toThrow(/in flight/i);
 
         const rows = await githubOperationRows(projectId);
         expect(rows).toHaveLength(1); // still exactly one row
@@ -714,12 +782,12 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       fake.seedForeignRepo(normalizedTaken, 'thrln-marker:someoneelse00000');
 
       await withFakeFetch(fake.fetch, async () => {
-        await expect(github.initRepo(architectureVersionId, takenName)).rejects.toThrow(
+        await expect(initRepo(architectureVersionId, takenName)).rejects.toThrow(
           /name_taken_by_other/,
         );
 
         const differentName = `t18-fresh-${randomUUID().slice(0, 8)}`;
-        const ref = await github.initRepo(architectureVersionId, differentName);
+        const ref = await initRepo(architectureVersionId, differentName);
         expect(ref.provider).toBe('github');
 
         const rows = await githubOperationRows(projectId);
@@ -732,9 +800,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
         // refused (ERD 4.15 line ~515) - the just-completed one still counts
         // as active.
         const yetAnotherName = `t18-third-${randomUUID().slice(0, 8)}`;
-        await expect(github.initRepo(architectureVersionId, yetAnotherName)).rejects.toThrow(
-          /refused/i,
-        );
+        await expect(initRepo(architectureVersionId, yetAnotherName)).rejects.toThrow(/refused/i);
 
         const rowsAfterRefusal = await githubOperationRows(projectId);
         expect(rowsAfterRefusal).toHaveLength(2); // the refused attempt never inserted a row
@@ -781,7 +847,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       );
 
       await withFakeFetch(fetchImpl, async () => {
-        await expect(github.initRepo(architectureVersionId, repoName)).rejects.toThrow(
+        await expect(initRepo(architectureVersionId, repoName)).rejects.toThrow(
           /Resource not accessible by personal access token/,
         );
 
@@ -796,7 +862,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
         // 7.2 step 3.b "failed -> user may retry; set pending, resend") -
         // no second operation row, no name_taken_by_other.
         tokenCanCreateRepos = true;
-        const ref = await github.initRepo(architectureVersionId, repoName);
+        const ref = await initRepo(architectureVersionId, repoName);
         expect(ref.provider).toBe('github');
 
         const afterRetry = await githubOperationRows(projectId);
@@ -818,7 +884,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       }));
 
       await withFakeFetch(fetchImpl, async () => {
-        await expect(github.initRepo(architectureVersionId, repoName)).rejects.toThrow();
+        await expect(initRepo(architectureVersionId, repoName)).rejects.toThrow();
 
         const rows = await githubOperationRows(projectId);
         expect(rows).toHaveLength(1);
@@ -836,7 +902,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       const fake = createFakeGitHub(FAKE_OWNER);
 
       await withFakeFetch(fake.fetch, async () => {
-        await expect(github.checkRepoName('My New Repo!')).resolves.toEqual({
+        await expect(checkRepoName('My New Repo!')).resolves.toEqual({
           repoName: 'my-new-repo',
           status: 'available',
         });
@@ -850,7 +916,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       fake.seedForeignRepo('already-here', 'some unrelated description');
 
       await withFakeFetch(fake.fetch, async () => {
-        await expect(github.checkRepoName('Already Here')).resolves.toEqual({
+        await expect(checkRepoName('Already Here')).resolves.toEqual({
           repoName: 'already-here',
           status: 'taken',
         });
@@ -863,7 +929,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       });
 
       await withFakeFetch(neverCalled, async () => {
-        await expect(github.checkRepoName('!!! ???')).resolves.toEqual({
+        await expect(checkRepoName('!!! ???')).resolves.toEqual({
           repoName: '',
           status: 'invalid',
         });
@@ -878,7 +944,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       });
 
       await withFakeFetch(fetchImpl, async () => {
-        const failure = await github.checkRepoName('some-name').catch((error: unknown) => error);
+        const failure = await checkRepoName('some-name').catch((error: unknown) => error);
         expect(failure).toBeInstanceOf(github.GithubLookupRejectedError);
         expect((failure as Error).message).toMatch(/403: Resource not accessible/);
       });
@@ -890,7 +956,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       });
 
       await withFakeFetch(fetchImpl, async () => {
-        const failure = await github.checkRepoName('some-name').catch((error: unknown) => error);
+        const failure = await checkRepoName('some-name').catch((error: unknown) => error);
         expect(failure).toBeInstanceOf(Error);
         expect(failure).not.toBeInstanceOf(github.GithubLookupRejectedError);
       });
@@ -909,7 +975,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       const fake = createFakeGitHub(FAKE_OWNER);
 
       await withFakeFetch(fake.fetch, async () => {
-        const preview = await github.previewInit(architectureVersionId, 'ShiftSwap Verify');
+        const preview = await previewInit(architectureVersionId, 'ShiftSwap Verify');
         expect(preview.repoName).toBe('shiftswap-verify');
         expect(preview.mode).toBe('docs-only');
       });
@@ -922,12 +988,12 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       fake.seedForeignRepo('shiftswap-verify', 'unrelated');
 
       await withFakeFetch(fake.fetch, async () => {
-        expect((await github.previewInit(architectureVersionId, 'ShiftSwap Verify')).repoName).toBe(
+        expect((await previewInit(architectureVersionId, 'ShiftSwap Verify')).repoName).toBe(
           'shiftswap-verify-2',
         );
 
         fake.seedForeignRepo('shiftswap-verify-2', 'unrelated');
-        expect((await github.previewInit(architectureVersionId, 'ShiftSwap Verify')).repoName).toBe(
+        expect((await previewInit(architectureVersionId, 'ShiftSwap Verify')).repoName).toBe(
           'shiftswap-verify-3',
         );
       });
@@ -940,7 +1006,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       for (let n = 2; n <= 10; n++) fake.seedForeignRepo(`busy-${n}`, 'unrelated');
 
       await withFakeFetch(fake.fetch, async () => {
-        const preview = await github.previewInit(architectureVersionId, 'busy');
+        const preview = await previewInit(architectureVersionId, 'busy');
         expect(preview.repoName).toBe(projectIdName(projectId));
       });
     });
@@ -953,10 +1019,8 @@ describe('github (E4-S2 / SCRUM-51)', () => {
 
       await withFakeFetch(neverCalled, async () => {
         // No name at all (what `github/init` passes), and a name that normalizes to nothing.
-        expect((await github.previewInit(architectureVersionId)).repoName).toBe(
-          projectIdName(projectId),
-        );
-        expect((await github.previewInit(architectureVersionId, '!!! ???')).repoName).toBe(
+        expect((await previewInit(architectureVersionId)).repoName).toBe(projectIdName(projectId));
+        expect((await previewInit(architectureVersionId, '!!! ???')).repoName).toBe(
           projectIdName(projectId),
         );
       });
@@ -971,7 +1035,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       });
 
       await withFakeFetch(fetchImpl, async () => {
-        const preview = await github.previewInit(architectureVersionId, 'ShiftSwap Verify');
+        const preview = await previewInit(architectureVersionId, 'ShiftSwap Verify');
         expect(preview.repoName).toBe('shiftswap-verify');
       });
     });
@@ -981,13 +1045,13 @@ describe('github (E4-S2 / SCRUM-51)', () => {
   // selected option and each ADR's item-version payload (see repo-docs.ts,
   // whose builders are unit-tested on their own) - not just ids.
   describe('initRepo - repository visibility', () => {
-    it('always asks GitHub for a public repository, never a private one', async () => {
+    it('asks GitHub for a public repository by default', async () => {
       const { architectureVersionId } = await approvedArchitecture('github visibility');
       const repoName = `public-repo-${randomUUID().slice(0, 8)}`;
       const fake = createFakeGitHub(FAKE_OWNER);
 
       await withFakeFetch(fake.fetch, async () => {
-        await github.initRepo(architectureVersionId, repoName);
+        await initRepo(architectureVersionId, repoName);
       });
 
       expect(fake.createRequests).toHaveLength(1);
@@ -995,6 +1059,59 @@ describe('github (E4-S2 / SCRUM-51)', () => {
         name: github.normalizeRepoName(repoName),
         private: false,
       });
+    });
+
+    it('asks GitHub for a private repository when the user chose private, and records it on the operation', async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('github private');
+      const repoName = `private-repo-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        await initRepo(architectureVersionId, repoName, 'private');
+      });
+
+      expect(fake.createRequests).toHaveLength(1);
+      expect(fake.createRequests[0]).toMatchObject({
+        name: github.normalizeRepoName(repoName),
+        private: true,
+      });
+      const [op] = await sql<{ visibility: string | null; request_hash: string }[]>`
+        SELECT target_descriptor->>'visibility' AS visibility, request_hash
+        FROM external_operation WHERE project_id = ${projectId} AND provider = 'github'
+      `;
+      expect(op!.visibility).toBe('private');
+      // private joins the hash, so it differs from the public request's hash
+      const normalized = github.normalizeRepoName(repoName);
+      const publicHash = createHash('sha256')
+        .update(JSON.stringify({ repoName: normalized, mode: 'docs-only', owner: FAKE_OWNER }))
+        .digest('hex');
+      expect(op!.request_hash).not.toBe(publicHash);
+    });
+
+    it('keeps the public request hash unchanged (no visibility in it) and records public', async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('github public hash');
+      const repoName = `public-hash-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        await initRepo(architectureVersionId, repoName);
+      });
+
+      const [op] = await sql<{ visibility: string | null; request_hash: string }[]>`
+        SELECT target_descriptor->>'visibility' AS visibility, request_hash
+        FROM external_operation WHERE project_id = ${projectId} AND provider = 'github'
+      `;
+      expect(op!.visibility).toBe('public');
+      const expected = createHash('sha256')
+        .update(
+          JSON.stringify({
+            repoName: github.normalizeRepoName(repoName),
+            mode: 'docs-only',
+            owner: FAKE_OWNER,
+          }),
+        )
+        .digest('hex');
+      expect(op!.request_hash).toBe(expected);
     });
   });
 
@@ -1033,7 +1150,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       const repoName = `docs-content-${randomUUID().slice(0, 8)}`;
       const fake = createFakeGitHub(FAKE_OWNER);
       await withFakeFetch(fake.fetch, async () => {
-        await github.initRepo(architectureVersionId, repoName);
+        await initRepo(architectureVersionId, repoName);
       });
 
       const repo = github.normalizeRepoName(repoName);
@@ -1087,7 +1204,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       const fake = createFakeGitHub(FAKE_OWNER);
 
       await withFakeFetch(fake.fetch, async () => {
-        const preview = await github.previewInit(architectureVersionId, 'ShiftSwap Verify');
+        const preview = await previewInit(architectureVersionId, 'ShiftSwap Verify');
 
         expect(preview.mode).toBe('scaffold');
         expect(preview.starter).toMatchObject({ id: 'django', label: 'Django' });
@@ -1103,7 +1220,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       const fake = createFakeGitHub(FAKE_OWNER);
 
       await withFakeFetch(fake.fetch, async () => {
-        const preview = await github.previewInit(architectureVersionId, 'Rails Thing');
+        const preview = await previewInit(architectureVersionId, 'Rails Thing');
 
         expect(preview.mode).toBe('docs-only');
         expect(preview.starter).toBeNull();
@@ -1117,8 +1234,8 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       let previewed: string[] = [];
 
       const ref = await withFakeFetch(fake.fetch, async () => {
-        previewed = (await github.previewInit(architectureVersionId, repoName)).starter!.files;
-        return github.initRepo(architectureVersionId, repoName);
+        previewed = (await previewInit(architectureVersionId, repoName)).starter!.files;
+        return initRepo(architectureVersionId, repoName);
       });
 
       const repo = github.normalizeRepoName(repoName);
@@ -1144,7 +1261,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       const fake = createFakeGitHub(FAKE_OWNER);
 
       await withFakeFetch(fake.fetch, async () => {
-        await github.initRepo(architectureVersionId, repoName);
+        await initRepo(architectureVersionId, repoName);
       });
 
       const repo = github.normalizeRepoName(repoName);
@@ -1172,7 +1289,7 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       const fake = createFakeGitHub(FAKE_OWNER);
 
       const ref = await withFakeFetch(fake.fetch, async () =>
-        github.initRepo(architectureVersionId, repoName),
+        initRepo(architectureVersionId, repoName),
       );
 
       const repo = github.normalizeRepoName(repoName);
@@ -1186,6 +1303,152 @@ describe('github (E4-S2 / SCRUM-51)', () => {
       expect(lineage.mode).toBe('docs-only');
       expect(lineage.starter).toBeNull();
       expect(fake.files.get(`${repo}/README.md`)).not.toContain('## Getting started');
+    });
+  });
+  // -------------------------------------------------------------------------
+  // Round 14 (SCRUM-96, UC-S4): the per-user credential. ERD 7.2 step 0, 7.6, T49, T51.
+  // -------------------------------------------------------------------------
+  describe('per-user GitHub credential (round 14)', () => {
+    async function operationColumns(projectId: string) {
+      return sql<
+        {
+          status: string;
+          connection_id: string | null;
+          account_id: string | null;
+          owner: string | null;
+        }[]
+      >`
+        SELECT status, connection_id,
+               target_descriptor->>'account_id' AS account_id,
+               target_descriptor->>'owner' AS owner
+        FROM external_operation WHERE project_id = ${projectId} AND provider = 'github'
+      `;
+    }
+
+    it('creates the repository with the connection token, records connection_id + account_id + owner, and never sends the env token', async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('github r14 happy');
+      const fake = createFakeGitHub(FAKE_OWNER);
+      const auth: string[] = [];
+      const fetchImpl = async (url: string | URL, init?: RequestInit) => {
+        auth.push(String(new Headers(init?.headers).get('authorization')));
+        return fake.fetch(url, init);
+      };
+
+      await withFakeFetch(fetchImpl, async () => {
+        const ref = await initRepo(architectureVersionId, `r14-${randomUUID().slice(0, 8)}`);
+        expect(ref.provider).toBe('github');
+      });
+
+      expect(auth.length).toBeGreaterThan(0);
+      expect(auth.every((h) => h.includes(TEST_TOKEN))).toBe(true);
+      const [op] = await operationColumns(projectId);
+      expect(op!.status).toBe('completed');
+      expect(op!.connection_id).not.toBeNull();
+      expect(op!.account_id).toMatch(/^gh-/);
+      expect(op!.owner).toBe(FAKE_OWNER);
+    });
+
+    it('no connection -> ConnectionRequiredError before any operation row exists', async () => {
+      const { projectId, userId } = await fx.createProjectWithOwner(sql, {
+        name: 'github r14 none',
+      });
+      const artifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const adr = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId,
+        itemType: 'architecture_decision',
+      });
+      const versionId = await approveArchitectureVersion(artifactId, 1, [
+        { logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId },
+      ]);
+      const spy = vi.fn();
+
+      await withFakeFetch(spy as never, async () => {
+        await expect(
+          github.initRepo(versionId, 'no-connection', { userId, githubOwner: FAKE_OWNER }),
+        ).rejects.toBeInstanceOf(connections.ConnectionRequiredError);
+      });
+
+      expect(await githubOperationRows(projectId)).toHaveLength(0);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("no github_owner on the project -> the repository is created under the connection's own login", async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('github r14 target');
+      const ctx = await ctxForVersion(architectureVersionId);
+      const fake = createFakeGitHub(FAKE_OWNER);
+
+      await withFakeFetch(fake.fetch, async () => {
+        const ref = await github.initRepo(architectureVersionId, 'no-owner', {
+          userId: ctx.userId,
+          githubOwner: null,
+        });
+        expect(ref.externalKey).toBe(`${FAKE_OWNER}/no-owner`);
+      });
+
+      const [op] = await operationColumns(projectId);
+      expect(op!.status).toBe('completed');
+      expect(op!.owner).toBe(FAKE_OWNER);
+      expect(fake.createRequests).toHaveLength(1);
+    });
+
+    it('a 401 on create -> connection needs_reauth + ReconnectRequiredError, the operation is NOT failed (T49)', async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('github r14 401');
+      const ctx = await ctxForVersion(architectureVersionId);
+      const fetchImpl = async () =>
+        new Response(JSON.stringify({ message: 'Bad credentials' }), {
+          status: 401,
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+        });
+
+      await withFakeFetch(fetchImpl, async () => {
+        await expect(
+          github.initRepo(architectureVersionId, 'bad-creds', ctx),
+        ).rejects.toBeInstanceOf(connections.ReconnectRequiredError);
+      });
+
+      const [op] = await operationColumns(projectId);
+      expect(op!.status).toBe('pending'); // never `failed`
+      const status = (await connections.listConnections(ctx.userId)).find(
+        (c) => c.provider === 'github',
+      );
+      expect(status!.status).toBe('needs_reauth');
+    });
+
+    it('T51: reconnecting as a DIFFERENT GitHub account blocks a retry before any network call; the original account resumes it', async () => {
+      const { projectId, architectureVersionId } = await approvedArchitecture('github r14 t51');
+      const ctx = await ctxForVersion(architectureVersionId);
+      const repoName = `t51-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+      const dropper = createResponseDropper(fake.fetch);
+
+      // A lost response leaves a pending operation created under account A.
+      await withFakeFetch(dropper.fetch, async () => {
+        dropper.simulateLostResponseFor(github.normalizeRepoName(repoName));
+        await expect(github.initRepo(architectureVersionId, repoName, ctx)).rejects.toThrow();
+      });
+      const [before] = await operationColumns(projectId);
+      const operationRows = await sql<{ id: string }[]>`
+        SELECT id FROM external_operation WHERE project_id = ${projectId}
+      `;
+      const operationId = operationRows[0]!.id;
+
+      await ensureConnection(ctx.userId, 'gh-a-different-account');
+      const spy = vi.fn();
+      await withFakeFetch(spy as never, async () => {
+        await expect(github.retryOperation(operationId, ctx)).rejects.toBeInstanceOf(
+          connections.ReconnectRequiredError,
+        );
+      });
+      expect(spy).not.toHaveBeenCalled();
+      expect(await operationColumns(projectId)).toEqual([before]);
+
+      // The original account resumes the operation.
+      await ensureConnection(ctx.userId, before!.account_id!);
+      const resumed = await withFakeFetch(fake.fetch, () =>
+        withClockAdvancedPastThreshold(() => github.retryOperation(operationId, ctx)),
+      );
+      expect(resumed.status).toBe('completed');
     });
   });
 });

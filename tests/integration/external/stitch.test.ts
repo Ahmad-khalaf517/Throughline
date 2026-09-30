@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it, vi } from 'vitest';
 import type postgres from 'postgres';
 import { connect } from '../support/connection';
@@ -18,6 +18,14 @@ import type { JsonValue } from '../support/types';
 // code" technique tests/integration/external/jira.test.ts/github.test.ts
 // already established) - no real Stitch/Supabase credentials exist anywhere
 // in this sandbox.
+//
+// Round 14 (SCRUM-98): generate/previewPrompt/retryOperation take the acting
+// user's `ctx`, and a new generate uses that user's own Stitch API key, saved
+// through the real `connections.saveConnection`. The scenarios below written
+// before round 14 run through the local `generate`/`previewPrompt` wrappers,
+// which ensure the project owner has a connection; the last describe covers the
+// per-user behavior itself and the stitch halves of T45, T49 and T51. NOT
+// EXECUTED when written - Docker/Testcontainers was unavailable.
 //
 // This story's own Jira Plan row cites no ERD T## test id - these scenarios
 // are this story's own coverage of FR-050..054 and ERD 4.16/7.5, not a T##
@@ -39,7 +47,8 @@ type GenerateBehavior =
   | 'ok'
   | 'validation_error' // definitive: StitchError VALIDATION_ERROR, nothing created
   | 'network_error' // ambiguous: NETWORK_ERROR, nothing created (no screen)
-  | 'timeout_after_create'; // ambiguous: screen IS created, but the call throws UNKNOWN_ERROR
+  | 'timeout_after_create' // ambiguous: screen IS created, but the call throws UNKNOWN_ERROR
+  | 'auth_failed'; // the key is rejected: StitchError AUTH_FAILED (SCRUM-98)
 
 const sdkWorld = vi.hoisted(() => ({
   projects: [] as {
@@ -97,6 +106,9 @@ vi.mock('@google/stitch-sdk', () => {
         if (behavior === 'validation_error') {
           throw new StitchError({ code: 'VALIDATION_ERROR', message: 'invalid prompt' });
         }
+        if (behavior === 'auth_failed') {
+          throw new StitchError({ code: 'AUTH_FAILED', message: 'key rejected' });
+        }
         if (behavior === 'network_error') {
           throw new StitchError({ code: 'NETWORK_ERROR', message: 'connection reset' });
         }
@@ -130,6 +142,7 @@ vi.mock('@google/stitch-sdk', () => {
 
 let sql: postgres.Sql;
 let stitch: typeof import('@/external/stitch');
+let connections: typeof import('@/connections');
 
 const SUPABASE_URL = 'https://example.test';
 const STORAGE_BUCKET = 'stitch-assets';
@@ -151,14 +164,59 @@ beforeAll(async () => {
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
   process.env.NEXT_PUBLIC_SITE_URL = 'http://localhost:3000';
   process.env.STITCH_API_KEY = 'fake-stitch-key';
+  // 32 bytes, base64 - read by the connections module at call time.
+  process.env.CONNECTION_ENCRYPTION_KEY = randomBytes(32).toString('base64');
   process.env.SUPABASE_STORAGE_BUCKET = STORAGE_BUCKET;
 
   stitch = await import('@/external/stitch');
+  connections = await import('@/connections');
 });
 
 afterAll(async () => {
   await sql.end({ timeout: 5 });
 });
+
+// ---------------------------------------------------------------------------
+// Round 14: the acting user's own connection + ctx.
+// ---------------------------------------------------------------------------
+
+const SENTINEL_KEY = 'SENTINEL-STITCH-KEY-0123456789abcdef';
+
+async function ownerOfVersion(versionId: string): Promise<string> {
+  const [row] = await sql<{ owner_user_id: string }[]>`
+    SELECT p.owner_user_id
+    FROM artifact_version av
+    JOIN artifact a ON a.id = av.artifact_id
+    JOIN project p ON p.id = a.project_id
+    WHERE av.id = ${versionId}
+  `;
+  return row!.owner_user_id;
+}
+
+/** The user's Stitch connection (account id `key:<userId>`, an upsert). */
+async function ensureConnection(userId: string, accessToken = SENTINEL_KEY) {
+  await connections.saveConnection({
+    userId,
+    provider: 'stitch',
+    externalAccountId: `key:${userId}`,
+    displayName: 'Stitch API key',
+    accessToken,
+    scopes: [],
+    providerMeta: {},
+  });
+}
+
+/** ctx for the owner of the project a UI Requirements version belongs to (a connection is ensured). */
+async function ctxForVersion(versionId: string): Promise<{ userId: string }> {
+  const userId = await ownerOfVersion(versionId);
+  await ensureConnection(userId);
+  return { userId };
+}
+
+const generate = async (versionId: string) =>
+  stitch.generate(versionId, await ctxForVersion(versionId));
+const previewPrompt = async (versionId: string) =>
+  stitch.previewPrompt(versionId, await ctxForVersion(versionId));
 
 // ---------------------------------------------------------------------------
 // Fixture composition - an approved UI Requirements artifact_version with
@@ -349,7 +407,7 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
       ],
     );
 
-    const result = await stitch.previewPrompt(versionId);
+    const result = await previewPrompt(versionId);
     expect(result.prompt).toContain(items[0]!.displayKey);
     expect(result.prompt).toContain('Login screen');
     expect(result.prompt).toContain('User submits email and password');
@@ -364,12 +422,10 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
     const artifactId = await fx.createArtifact(sql, projectId, 'ui_requirements');
     const versionId = await fx.createDraftArtifactVersion(sql, artifactId, { versionNumber: 1 });
 
-    await expect(stitch.previewPrompt(versionId)).rejects.toThrow(
+    await expect(previewPrompt(versionId)).rejects.toThrow(
       stitch.UiRequirementsVersionNotApprovedError,
     );
-    await expect(stitch.generate(versionId)).rejects.toThrow(
-      stitch.UiRequirementsVersionNotApprovedError,
-    );
+    await expect(generate(versionId)).rejects.toThrow(stitch.UiRequirementsVersionNotApprovedError);
   });
 
   it("generate: mode='api' success path - Stitch 2xx, assets uploaded, external_ref + stitch_output correct", async () => {
@@ -385,7 +441,7 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
     ]);
 
     const world = createFakeExternalWorld();
-    const output = await withFakeFetch(world.fetch, () => stitch.generate(versionId));
+    const output = await withFakeFetch(world.fetch, () => generate(versionId));
 
     // One project per generation, titled with the deterministic operation-key marker.
     expect(sdkWorld.createProjectCalls).toBe(1);
@@ -439,9 +495,9 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
     ]);
 
     const world = createFakeExternalWorld();
-    await withFakeFetch(world.fetch, () => stitch.generate(versionId));
+    await withFakeFetch(world.fetch, () => generate(versionId));
 
-    await expect(stitch.generate(versionId)).rejects.toThrow(stitch.AlreadyGeneratedError);
+    await expect(generate(versionId)).rejects.toThrow(stitch.AlreadyGeneratedError);
 
     const rows = await stitchOutputRows(versionId);
     expect(rows).toHaveLength(1);
@@ -459,7 +515,7 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
 
     // FR-054: does NOT throw - the preserved prompt is the output, and the
     // planning workflow continues.
-    const output = await withFakeFetch(world.fetch, () => stitch.generate(versionId));
+    const output = await withFakeFetch(world.fetch, () => generate(versionId));
 
     expect(output.mode).toBe('manual_fallback');
     expect(output.externalRefId).toBeNull();
@@ -489,12 +545,12 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
 
     const world = createFakeExternalWorld();
     sdkWorld.nextGenerate = 'validation_error';
-    const firstAttempt = await withFakeFetch(world.fetch, () => stitch.generate(versionId));
+    const firstAttempt = await withFakeFetch(world.fetch, () => generate(versionId));
     expect(firstAttempt.mode).toBe('manual_fallback');
     const fallbackRowId = firstAttempt.id;
 
     // Retry, this time the fake Stitch API succeeds.
-    const secondAttempt = await withFakeFetch(world.fetch, () => stitch.generate(versionId));
+    const secondAttempt = await withFakeFetch(world.fetch, () => generate(versionId));
     expect(secondAttempt.mode).toBe('api');
     expect(secondAttempt.id).toBe(fallbackRowId); // same row, updated in place - never a second insert
     expect(secondAttempt.externalRefId).not.toBeNull();
@@ -526,9 +582,9 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
     // NOT a DefinitiveProviderError: the StitchError propagates uncaught (ERD
     // 7.2 R6/R9) and the operation row is left `pending`, not `failed`.
     sdkWorld.nextGenerate = 'network_error';
-    await expect(
-      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
-    ).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+    await expect(withFakeFetch(world.fetch, () => generate(versionId))).rejects.toMatchObject({
+      code: 'NETWORK_ERROR',
+    });
 
     let ops = await stitchOperationRows(projectId);
     expect(ops).toHaveLength(1);
@@ -539,7 +595,7 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
     // screens, so reconcile() regenerates exactly once, reusing the
     // marker-titled project (no second createProject).
     const output = await withClockAdvancedPastThreshold(() =>
-      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+      withFakeFetch(world.fetch, () => generate(versionId)),
     );
 
     expect(output.mode).toBe('api');
@@ -564,13 +620,13 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
 
     const world = createFakeExternalWorld();
     sdkWorld.nextGenerate = 'network_error';
-    await expect(
-      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
-    ).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+    await expect(withFakeFetch(world.fetch, () => generate(versionId))).rejects.toMatchObject({
+      code: 'NETWORK_ERROR',
+    });
 
     sdkWorld.nextGenerate = 'validation_error';
     const output = await withClockAdvancedPastThreshold(() =>
-      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+      withFakeFetch(world.fetch, () => generate(versionId)),
     );
 
     expect(output.mode).toBe('manual_fallback');
@@ -594,16 +650,14 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
 
     const world = createFakeExternalWorld();
     sdkWorld.nextGenerate = 'network_error';
-    await expect(
-      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
-    ).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+    await expect(withFakeFetch(world.fetch, () => generate(versionId))).rejects.toMatchObject({
+      code: 'NETWORK_ERROR',
+    });
 
     // The reconcile-time regenerate is ALSO ambiguous.
     sdkWorld.nextGenerate = 'network_error';
     await expect(
-      withClockAdvancedPastThreshold(() =>
-        withFakeFetch(world.fetch, () => stitch.generate(versionId)),
-      ),
+      withClockAdvancedPastThreshold(() => withFakeFetch(world.fetch, () => generate(versionId))),
     ).rejects.toThrow(stitch.StitchReconciliationRequiredError);
 
     expect(sdkWorld.generateCalls).toBe(2);
@@ -614,7 +668,7 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
 
     // Retryable: a further user-initiated retry reconciles again and succeeds.
     const output = await withClockAdvancedPastThreshold(() =>
-      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+      withFakeFetch(world.fetch, () => generate(versionId)),
     );
     expect(output.mode).toBe('api');
     expect(sdkWorld.generateCalls).toBe(3);
@@ -632,12 +686,12 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
 
     const world = createFakeExternalWorld();
     sdkWorld.nextGenerate = 'timeout_after_create';
-    await expect(
-      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
-    ).rejects.toMatchObject({ code: 'UNKNOWN_ERROR' });
+    await expect(withFakeFetch(world.fetch, () => generate(versionId))).rejects.toMatchObject({
+      code: 'UNKNOWN_ERROR',
+    });
 
     const output = await withClockAdvancedPastThreshold(() =>
-      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+      withFakeFetch(world.fetch, () => generate(versionId)),
     );
 
     expect(output.mode).toBe('api');
@@ -660,15 +714,15 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
     // out (UNKNOWN_ERROR - what the SDK wraps timeouts into): ambiguous.
     sdkWorld.screensListable = true; // hypothetical: the API starts listing screens
     sdkWorld.nextGenerate = 'timeout_after_create';
-    await expect(
-      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
-    ).rejects.toMatchObject({ code: 'UNKNOWN_ERROR' });
+    await expect(withFakeFetch(world.fetch, () => generate(versionId))).rejects.toMatchObject({
+      code: 'UNKNOWN_ERROR',
+    });
     expect((await stitchOperationRows(projectId))[0]!.status).toBe('pending');
     expect(await stitchOutputRows(versionId)).toHaveLength(0);
     expect(world.storedObjects.size).toBe(0); // the timed-out send() never got to upload
 
     const output = await withClockAdvancedPastThreshold(() =>
-      withFakeFetch(world.fetch, () => stitch.generate(versionId)),
+      withFakeFetch(world.fetch, () => generate(versionId)),
     );
 
     expect(sdkWorld.generateCalls).toBe(1); // reconcile adopted the screen; never re-sent
@@ -714,7 +768,7 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
     it("generated: mode='api' output -> { state: 'generated', output }", async () => {
       const { versionId } = await setup('stitch getOutput generated', 'Home');
       const world = createFakeExternalWorld();
-      const generated = await withFakeFetch(world.fetch, () => stitch.generate(versionId));
+      const generated = await withFakeFetch(world.fetch, () => generate(versionId));
 
       const result = await stitch.getOutput(versionId);
 
@@ -728,7 +782,7 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
       const { versionId } = await setup('stitch getOutput fallback', 'Cart');
       const world = createFakeExternalWorld();
       sdkWorld.nextGenerate = 'validation_error';
-      await withFakeFetch(world.fetch, () => stitch.generate(versionId));
+      await withFakeFetch(world.fetch, () => generate(versionId));
 
       const result = await stitch.getOutput(versionId);
 
@@ -741,9 +795,9 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
       const { versionId } = await setup('stitch getOutput pending', 'Search');
       const world = createFakeExternalWorld();
       sdkWorld.nextGenerate = 'network_error';
-      await expect(
-        withFakeFetch(world.fetch, () => stitch.generate(versionId)),
-      ).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+      await expect(withFakeFetch(world.fetch, () => generate(versionId))).rejects.toMatchObject({
+        code: 'NETWORK_ERROR',
+      });
 
       const result = await stitch.getOutput(versionId);
 
@@ -754,14 +808,12 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
       const { versionId } = await setup('stitch getOutput reconciliation', 'Profile');
       const world = createFakeExternalWorld();
       sdkWorld.nextGenerate = 'network_error';
-      await expect(
-        withFakeFetch(world.fetch, () => stitch.generate(versionId)),
-      ).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+      await expect(withFakeFetch(world.fetch, () => generate(versionId))).rejects.toMatchObject({
+        code: 'NETWORK_ERROR',
+      });
       sdkWorld.nextGenerate = 'network_error';
       await expect(
-        withClockAdvancedPastThreshold(() =>
-          withFakeFetch(world.fetch, () => stitch.generate(versionId)),
-        ),
+        withClockAdvancedPastThreshold(() => withFakeFetch(world.fetch, () => generate(versionId))),
       ).rejects.toThrow(stitch.StitchReconciliationRequiredError);
 
       const result = await stitch.getOutput(versionId);
@@ -773,14 +825,14 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
       const { versionId } = await setup('stitch getOutput retry beats fallback', 'Inbox');
       const world = createFakeExternalWorld();
       sdkWorld.nextGenerate = 'validation_error';
-      await withFakeFetch(world.fetch, () => stitch.generate(versionId));
+      await withFakeFetch(world.fetch, () => generate(versionId));
       expect((await stitch.getOutput(versionId)).state).toBe('manual_fallback');
 
       // Retry in place: the operation goes back to pending, the fallback row stays.
       sdkWorld.nextGenerate = 'network_error';
-      await expect(
-        withFakeFetch(world.fetch, () => stitch.generate(versionId)),
-      ).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+      await expect(withFakeFetch(world.fetch, () => generate(versionId))).rejects.toMatchObject({
+        code: 'NETWORK_ERROR',
+      });
 
       expect((await stitchOutputRows(versionId))[0]!.mode).toBe('manual_fallback');
       expect(await stitch.getOutput(versionId)).toMatchObject({
@@ -788,5 +840,156 @@ describe('stitch (E4-S4 / SCRUM-53, SDK rework SCRUM-90)', () => {
         status: 'pending',
       });
     });
+  });
+});
+
+describe('stitch per-user connection (SCRUM-98; ERD 7.5/7.6, T45/T49/T51 stitch halves)', () => {
+  beforeEach(() => {
+    sdkWorld.reset();
+  });
+
+  async function setup(name: string) {
+    const { projectId, userId } = await fx.createProjectWithOwner(sql, { name });
+    const artifactId = await fx.createArtifact(sql, projectId, 'ui_requirements');
+    const { versionId } = await createApprovedUiRequirementsVersion(sql, projectId, artifactId, 1, [
+      { screenOrFlow: name, interactionRequirement: 'Do the thing' },
+    ]);
+    return { projectId, userId, versionId };
+  }
+
+  async function connectionRow(userId: string) {
+    const [row] = await sql<
+      { id: string; status: string; access_token_enc: string; external_account_id: string }[]
+    >`SELECT id, status, access_token_enc, external_account_id FROM provider_connection
+      WHERE user_id = ${userId} AND provider = 'stitch'`;
+    return row;
+  }
+
+  it('records the user connection and its account id on the operation', async () => {
+    const { projectId, userId, versionId } = await setup('stitch per-user records');
+    await ensureConnection(userId);
+    const world = createFakeExternalWorld();
+
+    const output = await withFakeFetch(world.fetch, () => stitch.generate(versionId, { userId }));
+
+    expect(output.mode).toBe('api');
+    const conn = await connectionRow(userId);
+    const [op] = await sql<
+      { connection_id: string | null; target_descriptor: { account_id?: string } }[]
+    >`
+      SELECT connection_id, target_descriptor FROM external_operation
+      WHERE project_id = ${projectId} AND provider = 'stitch'
+    `;
+    expect(op!.connection_id).toBe(conn!.id);
+    expect(op!.target_descriptor.account_id).toBe(`key:${userId}`);
+  });
+
+  it('T45 (stitch half): the saved key is ciphertext at rest and appears in no column', async () => {
+    const { userId } = await setup('stitch per-user ciphertext');
+    await ensureConnection(userId);
+
+    const conn = await connectionRow(userId);
+    expect(conn!.access_token_enc).not.toContain(SENTINEL_KEY);
+    const [dump] = await sql<{ doc: string }[]>`
+      SELECT row_to_json(pc)::text AS doc FROM provider_connection pc WHERE pc.user_id = ${userId}
+    `;
+    expect(dump!.doc).not.toContain(SENTINEL_KEY);
+    const [opDump] = await sql<{ doc: string }[]>`
+      SELECT COALESCE(string_agg(row_to_json(eo)::text, ''), '') AS doc FROM external_operation eo
+    `;
+    expect(opDump!.doc).not.toContain(SENTINEL_KEY);
+  });
+
+  it('no connection -> ConnectionRequiredError, and no external_operation / stitch_output row', async () => {
+    const { projectId, userId, versionId } = await setup('stitch per-user none');
+    const world = createFakeExternalWorld();
+
+    await expect(
+      withFakeFetch(world.fetch, () => stitch.generate(versionId, { userId })),
+    ).rejects.toBeInstanceOf(connections.ConnectionRequiredError);
+
+    expect(await stitchOperationRows(projectId)).toHaveLength(0);
+    expect(await stitchOutputRows(versionId)).toHaveLength(0);
+    expect(sdkWorld.createProjectCalls).toBe(0);
+    // The preview needs no connection.
+    const preview = await stitch.previewPrompt(versionId, { userId });
+    expect(preview.connection).toEqual({ status: 'none', targetReady: true, accountName: null });
+  });
+
+  it('T49 (stitch half): AUTH_FAILED -> connection needs_reauth, operation untouched (not failed), no fallback row; retry stops before any SDK call', async () => {
+    const { projectId, userId, versionId } = await setup('stitch per-user auth failed');
+    await ensureConnection(userId);
+    sdkWorld.nextGenerate = 'auth_failed';
+    const world = createFakeExternalWorld();
+
+    await expect(
+      withFakeFetch(world.fetch, () => stitch.generate(versionId, { userId })),
+    ).rejects.toBeInstanceOf(connections.ReconnectRequiredError);
+
+    expect((await connectionRow(userId))!.status).toBe('needs_reauth');
+    const ops = await stitchOperationRows(projectId);
+    expect(ops).toHaveLength(1);
+    expect(ops[0]!.status).toBe('pending');
+    expect(ops[0]!.error_message).toBeNull();
+    expect(await stitchOutputRows(versionId)).toHaveLength(0);
+
+    const generateCallsBefore = sdkWorld.generateCalls;
+    const [op] = await sql<{ id: string }[]>`
+      SELECT id FROM external_operation WHERE project_id = ${projectId} AND provider = 'stitch'
+    `;
+    await expect(stitch.retryOperation(op!.id, { userId })).rejects.toBeInstanceOf(
+      connections.ReconnectRequiredError,
+    );
+    expect(sdkWorld.generateCalls).toBe(generateCallsBefore);
+  });
+
+  it('T51 (stitch half): after disconnect the tombstoned connection makes a retry reconnect-required, and the operation is unchanged', async () => {
+    const { projectId, userId, versionId } = await setup('stitch per-user disconnect');
+    await ensureConnection(userId);
+    const world = createFakeExternalWorld();
+    await withFakeFetch(world.fetch, () => stitch.generate(versionId, { userId }));
+    const [op] = await sql<{ id: string }[]>`
+      SELECT id FROM external_operation WHERE project_id = ${projectId} AND provider = 'stitch'
+    `;
+
+    expect(await connections.disconnect(userId, 'stitch')).toEqual({ providerRevoked: null });
+
+    expect((await connectionRow(userId))!.status).toBe('revoked');
+    await expect(stitch.retryOperation(op!.id, { userId })).rejects.toBeInstanceOf(
+      connections.ReconnectRequiredError,
+    );
+    const ops = await stitchOperationRows(projectId);
+    expect(ops).toHaveLength(1);
+    expect(ops[0]!.status).toBe('completed');
+  });
+
+  it('a different key (account) than the one recorded on the operation -> reconnect-required on retry', async () => {
+    const { projectId, userId, versionId } = await setup('stitch per-user mismatch');
+    await ensureConnection(userId);
+    sdkWorld.nextGenerate = 'network_error'; // leaves a pending operation to retry
+    const world = createFakeExternalWorld();
+    await expect(
+      withFakeFetch(world.fetch, () => stitch.generate(versionId, { userId })),
+    ).rejects.toThrow();
+    const [op] = await sql<{ id: string }[]>`
+      SELECT id FROM external_operation WHERE project_id = ${projectId} AND provider = 'stitch'
+    `;
+
+    // The user pastes a different key: same connection row, a different account id.
+    await connections.saveConnection({
+      userId,
+      provider: 'stitch',
+      externalAccountId: `key:${randomUUID().slice(0, 16)}`,
+      displayName: 'Stitch API key',
+      accessToken: 'another-key',
+      scopes: [],
+      providerMeta: {},
+    });
+
+    const callsBefore = sdkWorld.generateCalls;
+    await expect(stitch.retryOperation(op!.id, { userId })).rejects.toBeInstanceOf(
+      connections.ReconnectRequiredError,
+    );
+    expect(sdkWorld.generateCalls).toBe(callsBefore);
   });
 });

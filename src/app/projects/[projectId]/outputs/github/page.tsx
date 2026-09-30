@@ -50,7 +50,7 @@ export default async function ProjectGithubOutputPage({ params }: ProjectGithubO
         </p>
       </header>
 
-      <GithubInitPanel projectId={projectId} />
+      <GithubInitPanel projectId={projectId} githubOwner={project.githubOwner ?? null} />
     </main>
   );
 }
