@@ -4,6 +4,7 @@
 // testable surface for tests/unit/lib/connections-ui.test.ts. Nothing here ever
 // sees, formats or stores a token or key: only status and identity.
 
+import { JIRA_CREATE_PROJECT_SCOPE } from './jira-scopes';
 import type { ConnectionDTO, ExternalOperationDTO } from './serialize';
 
 export type ConnectionProvider = ConnectionDTO['provider'];
@@ -344,12 +345,9 @@ export function ownerOptionLabel(owner: { login: string; kind: 'user' | 'org' })
 // Jira site display and project creation (round 17, UC-S11, FR-092)
 // ---------------------------------------------------------------------------
 
-/** The Atlassian scope that lets the app create a Jira project (ERD 7.8). */
-export const JIRA_PROJECT_SCOPE = 'manage:jira-project';
-
 /** A connection made before the scope was requested lacks it and must reconnect once. */
 export function canCreateJiraProjects(scopes: readonly string[] | null | undefined): boolean {
-  return (scopes ?? []).includes(JIRA_PROJECT_SCOPE);
+  return (scopes ?? []).includes(JIRA_CREATE_PROJECT_SCOPE);
 }
 
 /** The Integrations card's hint for a usable Jira connection. */
@@ -429,6 +427,60 @@ export function validateProjectKeyInput(
   if (existingKeys.includes(key))
     return 'That key is already used in this Jira site - choose another';
   return null;
+}
+
+/** The live line above the submit button: exactly what will be sent, so a wrong name is visible before it is created. */
+export function describeCreateSummary(
+  name: string,
+  key: string,
+  siteName: string | null | undefined,
+): string {
+  const site = siteName && siteName.trim() !== '' ? ` on ${siteName.trim()}` : '';
+  return `This will create the Jira project “${name.trim()}” with key ${key}${site}.`;
+}
+
+/**
+ * The persistent notice shown in the picker card after a project was created (the
+ * form itself collapses). `targetError` is the message from the automatic
+ * "save as target" step, or null when it worked.
+ */
+export function describeCreatedNotice(
+  project: { name: string; key: string },
+  targetError: string | null,
+): { tone: 'success' | 'warning'; text: string } {
+  const label = `“${project.name}” (${project.key})`;
+  return targetError
+    ? {
+        tone: 'warning',
+        text: `Created ${label}, but it could not be saved as this project's Jira target yet: ${targetError} It is selected - use Save target.`,
+      }
+    : {
+        tone: 'success',
+        text: `Created ${label} and selected it as this project's Jira target.`,
+      };
+}
+
+/** The expander's label and style: a secondary "another" action once one has been created. */
+export function describeCreateToggle(hasCreated: boolean): {
+  label: string;
+  variant: 'link' | 'secondary';
+} {
+  return hasCreated
+    ? { label: 'Create another Jira project', variant: 'secondary' }
+    : { label: 'Create a new Jira project', variant: 'link' };
+}
+
+/** Whether Create may be pressed: the site must be known, the name and key valid, and no request in flight. */
+export function canSubmitCreate(state: {
+  cloudId: string;
+  name: string;
+  formatError: string | null;
+  pending: boolean;
+}): boolean {
+  const name = state.name.trim();
+  return (
+    state.cloudId !== '' && !state.pending && !state.formatError && name !== '' && name.length <= 80
+  );
 }
 
 export type CreateProjectErrorKind = 'key_taken' | 'admin_required' | 'reconnect' | 'other';

@@ -2,12 +2,15 @@
 
 import { useId, useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { CircleAlert, CircleCheck, Plus } from 'lucide-react';
+import { CircleAlert, Plus } from 'lucide-react';
 import { FieldShell } from '@/components/auth/field-shell';
 import {
   connectStartHref,
+  canSubmitCreate,
   deriveProjectKey,
   describeCreateProjectError,
+  describeCreateSummary,
+  describeCreateToggle,
   jiraProjectsListHref,
   validateProjectKeyInput,
 } from '@/lib/connections-ui';
@@ -43,7 +46,12 @@ const LINK_CLASSNAME =
   'text-primary-container hover:text-primary-container-hover focus-visible:ring-primary rounded text-sm font-medium underline focus-visible:ring-2 focus-visible:outline-none';
 
 interface CreateJiraProjectProps {
+  /** '' until the site is known (the site list is still loading); only read at submit. */
   cloudId: string;
+  /** The chosen site's name, for the confirmation line; null omits "on ...". */
+  siteName: string | null;
+  /** The site list has not arrived yet. */
+  sitesLoading: boolean;
   /** The chosen site's URL, for the "Open Jira" link; only a safe atlassian.net URL is linked. */
   siteUrl: string | null;
   /** Keys of the projects already listed on the site, for the collision check. */
@@ -51,27 +59,28 @@ interface CreateJiraProjectProps {
   /** Prefill for the Name field (the Throughline project's name). */
   defaultName: string;
   /**
-   * Whether the connection holds `manage:jira-project`; `null` while it is still
+   * Whether the connection holds `manage:jira-configuration`; `null` while it is still
    * being read (the form is then withheld rather than shown and refused).
    */
   canCreate: boolean | null;
   /** Where the reconnect link returns to (this screen). */
   returnTo: string;
   /**
-   * Called once the project exists: the parent lists it, selects it and saves it
-   * as the Throughline project's target. Resolves to an error message when that
-   * last step failed, or `null` when it worked.
+   * Called once the project exists: the parent lists it, selects it, saves it
+   * as the Throughline project's target and shows the persistent confirmation
+   * (or the warning when that save failed). The form then collapses and resets.
    */
-  onCreated: (project: CreatedJiraProject) => Promise<string | null>;
+  onCreated: (project: CreatedJiraProject) => Promise<unknown>;
+  /** Whether a project was created in this session: the toggle then reads "Create another...". */
+  hasCreated: boolean;
+  /** The user started typing a new name: the parent clears its success line. */
+  onEdit: () => void;
   /** Re-reads the site's project list (the "Refresh list" action). */
   onRefreshList: () => void;
 }
 
 type Outcome =
-  | { kind: 'created'; project: CreatedJiraProject; targetError: string | null }
-  | { kind: 'admin_required' }
-  | { kind: 'reconnect' }
-  | { kind: 'error'; message: string };
+  { kind: 'admin_required' } | { kind: 'reconnect' } | { kind: 'error'; message: string };
 
 /**
  * FR-092: create a Jira project from the guided Jira screen, next to the project
@@ -82,12 +91,16 @@ type Outcome =
  */
 export function CreateJiraProject({
   cloudId,
+  siteName,
+  sitesLoading,
   siteUrl,
   existingKeys,
   defaultName,
   canCreate,
   returnTo,
   onCreated,
+  hasCreated,
+  onEdit,
   onRefreshList,
 }: CreateJiraProjectProps) {
   const router = useRouter();
@@ -108,12 +121,26 @@ export function CreateJiraProject({
   const keyError = serverKeyError ?? (touched || key !== '' ? formatError : null);
   const nameError = name.trim() === '' ? 'Enter a project name.' : null;
   const nameTooLong = name.trim().length > 80;
-  const canSubmit = !pending && !formatError && !nameError && !nameTooLong;
+  const canSubmit = canSubmitCreate({ cloudId, name, formatError, pending });
   const openJiraHref = jiraProjectsListHref(siteUrl);
+  const toggle = describeCreateToggle(hasCreated);
+
+  /** Explicit reset after a success (never a remount keyed on something that changes while loading). */
+  function reset() {
+    setOpen(false);
+    setName(defaultName);
+    setKey(deriveProjectKey(defaultName));
+    setKeyEdited(false);
+    setTemplate('scrum');
+    setServerKeyError(null);
+    setTouched(false);
+    setOutcome(null);
+  }
 
   function handleName(value: string) {
     setName(value);
     setOutcome(null);
+    onEdit();
     if (!keyEdited) {
       setKey(deriveProjectKey(value));
       setServerKeyError(null);
@@ -149,8 +176,11 @@ export function CreateJiraProject({
         return;
       }
       const body = (await response.json()) as { project: CreatedJiraProject };
-      const targetError = await onCreated(body.project);
-      setOutcome({ kind: 'created', project: body.project, targetError });
+      // The parent lists, selects and saves the project and shows the persistent
+      // confirmation; this form then collapses and starts over (fresh prefill).
+      await onCreated(body.project);
+      reset();
+      toggleRef.current?.focus();
     } catch {
       setOutcome({
         kind: 'error',
@@ -175,13 +205,17 @@ export function CreateJiraProject({
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => setOpen((value) => !value)}
-        disabled={!cloudId}
-        className="text-primary-container hover:text-primary-container-hover focus-visible:ring-primary inline-flex w-fit items-center gap-1.5 rounded text-sm font-medium focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+        disabled={!cloudId && !sitesLoading}
+        className={
+          toggle.variant === 'secondary'
+            ? `${SECONDARY_CLASSNAME} w-fit gap-1.5`
+            : 'text-primary-container hover:text-primary-container-hover focus-visible:ring-primary inline-flex w-fit items-center gap-1.5 rounded text-sm font-medium focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60'
+        }
       >
         <Plus className="size-4" aria-hidden="true" />
-        Create a new Jira project
+        {toggle.label}
       </button>
-      {!cloudId && (
+      {!cloudId && !sitesLoading && (
         <p className="text-on-surface-variant text-xs">Choose a site to create a project on it.</p>
       )}
 
@@ -203,7 +237,8 @@ export function CreateJiraProject({
           >
             <FieldShell
               id={`${baseId}-name`}
-              label="Project name"
+              label="New Jira project name"
+              helperText="Prefilled with your Throughline project's name - change it to name the Jira project differently."
               errorText={
                 touched && nameError
                   ? nameError
@@ -271,8 +306,23 @@ export function CreateJiraProject({
               ))}
             </fieldset>
 
+            {canSubmit && (
+              <p className="text-on-surface text-sm" aria-live="polite">
+                {describeCreateSummary(name, key, siteName)}
+              </p>
+            )}
+            {cloudId === '' && (
+              <p className="text-on-surface-variant text-xs" role="status">
+                Loading your Jira site…
+              </p>
+            )}
+
             <div className="flex flex-wrap items-center gap-2">
-              <button type="submit" disabled={pending} className={PRIMARY_CLASSNAME}>
+              <button
+                type="submit"
+                disabled={pending || cloudId === ''}
+                className={PRIMARY_CLASSNAME}
+              >
                 {pending ? 'Creating…' : 'Create project'}
               </button>
               <button
@@ -292,17 +342,6 @@ export function CreateJiraProject({
       </div>
 
       <div role="status" aria-live="polite" className="text-xs">
-        {outcome?.kind === 'created' && (
-          <p className="text-success flex items-start gap-1.5">
-            <CircleCheck className="mt-px size-3.5 shrink-0" aria-hidden="true" />
-            <span>
-              Created {outcome.project.name} ({outcome.project.key}).{' '}
-              {outcome.targetError
-                ? `It could not be saved as this project's Jira target yet: ${outcome.targetError} Choose it in the list and use Save target.`
-                : "It is now this project's Jira target."}
-            </span>
-          </p>
-        )}
         {outcome?.kind === 'error' && (
           <p className="text-error flex items-start gap-1.5" role="alert">
             <CircleAlert className="mt-px size-3.5 shrink-0" aria-hidden="true" />
