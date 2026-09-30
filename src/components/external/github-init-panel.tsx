@@ -26,6 +26,11 @@ import { ConnectionSteps } from './connection-steps';
 import { GithubOwnerRow, type ProjectTargets } from './target-pickers';
 import { ImpactGate } from './impact-gate';
 import { OperationStatus } from './operation-status';
+import {
+  RemoveRepositoryLinkDialog,
+  RepositoryRemovedCard,
+  type RemovedRepository,
+} from './remove-repository-link';
 
 interface GithubInitPanelProps {
   projectId: string;
@@ -82,8 +87,11 @@ const INPUT_CLASSNAME =
 const SUBMIT_CLASSNAME =
   'bg-primary-container text-on-primary-container hover:bg-primary-container-hover focus-visible:ring-primary flex h-11 items-center justify-center rounded-lg px-4 text-sm font-medium shadow-sm transition-all focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60';
 
+const SECONDARY_CLASSNAME =
+  'border-outline-variant text-on-surface hover:bg-surface-container-low focus-visible:ring-primary mt-4 inline-flex h-9 items-center justify-center rounded-lg border px-3 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none';
+
 /**
- * `POST /api/projects/:projectId/github/preview` + `.../github/init`
+ * `POST /api/projects/:projectId/github/preview` +`.../github/init`
  * (API Contracts section 8; E5-S9), plus `.../github/check-name` so the user
  * can see whether a name is free before submitting. Client-`fetch` mutation pattern copied
  * from `new-project-form.tsx`: `pending`/`error` state, `401 -> /sign-in`,
@@ -109,6 +117,8 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
   // Set when the project already has a repository (409 GITHUB_ALREADY_INITIALIZED
   // with a link) - the screen then shows that repository instead of a form.
   const [existing, setExisting] = useState<ExistingRepository | null>(null);
+  // Set after the repository link was removed (FR-091, UC-S10).
+  const [removed, setRemoved] = useState<RemovedRepository | null>(null);
   const [connection, setConnection] = useState<PreviewConnection | null>(null);
   const [visibility, setVisibility] = useState<Visibility>('public');
   const [owner, setOwner] = useState<string | null>(githubOwner);
@@ -335,7 +345,38 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
     }
   }
 
-  if (existing) return <ExistingRepositoryCard repository={existing} />;
+  // FR-091: the link was removed here - show that (and that the repository is
+  // still on GitHub), then let the user go back to the normal step flow.
+  if (removed) {
+    return (
+      <RepositoryRemovedCard
+        removed={removed}
+        onCreateNew={() => {
+          setRemoved(null);
+          setExisting(null);
+          setPreview(null);
+          setResult(null);
+          setAvailability(null);
+          setRepoName('');
+          setState({ status: 'loading' });
+          reloadPreview();
+        }}
+      />
+    );
+  }
+
+  if (existing) {
+    return (
+      <ExistingRepositoryCard
+        projectId={projectId}
+        repository={existing}
+        onRemoved={(repository) => {
+          setRemoved(repository);
+          setExisting(null);
+        }}
+      />
+    );
+  }
 
   function handleOwnerSaved(targets: ProjectTargets) {
     setOwner(targets.githubOwner);
@@ -497,7 +538,17 @@ export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps
  * The project already has its one repository (FR-031: one per project, no
  * re-initialization) - so instead of a form, say so and link to it.
  */
-function ExistingRepositoryCard({ repository }: { repository: ExistingRepository }) {
+function ExistingRepositoryCard({
+  projectId,
+  repository,
+  onRemoved,
+}: {
+  projectId: string;
+  repository: ExistingRepository;
+  onRemoved: (removed: RemovedRepository) => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
   return (
     <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
       <p className="text-on-surface text-sm font-medium">
@@ -517,6 +568,17 @@ function ExistingRepositoryCard({ repository }: { repository: ExistingRepository
       <p className="text-on-surface-variant mt-3 text-xs">
         Only one repository is created per project.
       </p>
+      <button type="button" onClick={() => setConfirming(true)} className={SECONDARY_CLASSNAME}>
+        Remove from Throughline
+      </button>
+      {confirming && (
+        <RemoveRepositoryLinkDialog
+          projectId={projectId}
+          repository={repository}
+          onClose={() => setConfirming(false)}
+          onRemoved={onRemoved}
+        />
+      )}
     </div>
   );
 }

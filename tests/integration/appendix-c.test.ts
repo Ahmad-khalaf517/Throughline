@@ -180,6 +180,7 @@ let authModule: typeof import('@/auth');
 let github: typeof import('@/external/github');
 let githubInitRoute: typeof import('@/app/api/projects/[projectId]/github/init/route').POST;
 let githubRefRoute: typeof import('@/app/api/projects/[projectId]/github/ref/route').GET;
+let githubUnlinkRoute: typeof import('@/app/api/projects/[projectId]/github/route').DELETE;
 let jiraExportRoute: typeof import('@/app/api/projects/[projectId]/jira/export/route').POST;
 let jiraPreviewRoute: typeof import('@/app/api/projects/[projectId]/jira/preview/route').GET;
 let externalRefsRoute: typeof import('@/app/api/projects/[projectId]/external-refs/route').GET;
@@ -254,6 +255,7 @@ beforeAll(async () => {
   github = await import('@/external/github');
   githubInitRoute = (await import('@/app/api/projects/[projectId]/github/init/route')).POST;
   githubRefRoute = (await import('@/app/api/projects/[projectId]/github/ref/route')).GET;
+  githubUnlinkRoute = (await import('@/app/api/projects/[projectId]/github/route')).DELETE;
   jiraExportRoute = (await import('@/app/api/projects/[projectId]/jira/export/route')).POST;
   jiraPreviewRoute = (await import('@/app/api/projects/[projectId]/jira/preview/route')).GET;
   externalRefsRoute = (await import('@/app/api/projects/[projectId]/external-refs/route')).GET;
@@ -5285,6 +5287,213 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
     );
     const rows = await sql`SELECT 1 FROM external_operation WHERE project_id = ${projectId}`;
     expect(rows).toHaveLength(0);
+  });
+
+  // T53 (application test, UC-S10, TR FR-091, ERD 7.7): removing a project's GitHub
+  // repository RECORD. Through the real DELETE route and init route, real Postgres,
+  // the in-memory fake GitHub with a call spy.
+  it('T53: unlinkGithubRepository deletes only the GitHub ref and its completed operation, is refused while an operation is pending, makes zero GitHub calls, and a fresh init (same name included) works afterwards', async () => {
+    const { userId, projectId } = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T53' });
+    const other = await fx.createProjectWithOwner(sql, { name: 'appendix-c: T53 other' });
+    mockAuthAsOwner(userId);
+    await connectGithubForProject(userId, projectId);
+
+    const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+    const adr = await fx.createLogicalItemWithVersion(sql, {
+      projectId,
+      artifactId: architectureArtifactId,
+      itemType: 'architecture_decision',
+    });
+    const v1 = await approveItemsVersion(
+      architectureArtifactId,
+      [{ logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId }],
+      { architecture: true },
+    );
+
+    // Project B: its own GitHub op + ref, which nothing below may touch.
+    const otherDraft = await draftArtifactVersion(other.projectId);
+    const otherOp = await fx.createExternalOperation(sql, {
+      projectId: other.projectId,
+      provider: 'github',
+      sourceArtifactVersionId: otherDraft.versionId,
+    });
+    await fx.createExternalRef(sql, {
+      projectId: other.projectId,
+      provider: 'github',
+      externalOperationId: otherOp,
+      sourceArtifactVersionId: otherDraft.versionId,
+    });
+    const otherBefore = await operationSnapshot(other.projectId);
+
+    const fake = createFakeGithubProvider(FAKE_GITHUB_OWNER);
+    const githubCalls: string[] = [];
+    const spyFetch = (url: string | URL, init?: RequestInit): Promise<Response> => {
+      githubCalls.push(`${(init?.method ?? 'GET').toUpperCase()} ${new URL(url).pathname}`);
+      return fake.fetch(url, init);
+    };
+    const initUrl = `http://localhost/api/projects/${projectId}/github/init`;
+    const unlinkUrl = `http://localhost/api/projects/${projectId}/github`;
+    const initAs = (repoName: string) =>
+      githubInitRoute(
+        jsonRequest(initUrl, { repoName, impactAcknowledged: true }),
+        routeParams(projectId),
+      );
+    const unlinkViaRoute = () =>
+      githubUnlinkRoute(new Request(unlinkUrl, { method: 'DELETE' }), routeParams(projectId));
+
+    // What an unlink must leave alone: A's failed / Jira / Stitch rows, B's rows, every lineage table.
+    const untouchedSnapshot = async (): Promise<string> => {
+      const rows = await sql<{ h: string }[]>`
+        SELECT md5(
+          coalesce((SELECT string_agg(row_to_json(o)::text, '|' ORDER BY o.id) FROM external_operation o
+                     WHERE (o.project_id = ${projectId} AND (o.provider <> 'github' OR o.status = 'failed'))
+                        OR o.project_id = ${other.projectId}), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(r)::text, '|' ORDER BY r.id) FROM external_ref r
+                     WHERE (r.project_id = ${projectId} AND r.provider <> 'github')
+                        OR r.project_id = ${other.projectId}), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.id) FROM item_version x
+                     WHERE x.project_id IN (${projectId}, ${other.projectId})), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.id) FROM logical_item x
+                     WHERE x.project_id IN (${projectId}, ${other.projectId})), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.id) FROM semantic_dependency x
+                     WHERE x.project_id IN (${projectId}, ${other.projectId})), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.id) FROM artifact x
+                     WHERE x.project_id IN (${projectId}, ${other.projectId})), '') || '#' ||
+          coalesce((SELECT string_agg(row_to_json(x)::text, '|' ORDER BY x.id) FROM impact_acknowledgement x
+                     WHERE x.project_id IN (${projectId}, ${other.projectId})), '')
+        ) AS h
+      `;
+      return rows[0]!.h;
+    };
+
+    const repoName = `t53-${randomUUID().slice(0, 8)}`;
+    await withFakeFetch(spyFetch, async () => {
+      // A completed GitHub operation + ref through the real init route.
+      const created = await initAs(repoName);
+      expect(created.status).toBe(200);
+      const [githubRef] = await sql<{ id: string }[]>`
+        SELECT id FROM external_ref WHERE project_id = ${projectId} AND provider = 'github'
+      `;
+
+      // A failed GitHub operation (history), plus a Jira and a Stitch ref.
+      await sql`
+        INSERT INTO external_operation
+          (project_id, provider, operation_type, operation_key, status, request_hash,
+           source_artifact_version_id, target_descriptor, error_message)
+        VALUES (${projectId}, 'github', 'create_repo', ${`github:create_repo:${projectId}:earlier-failure`},
+                'failed', 'h-t53-failed', ${v1}, ${sql.json({})}, 'name_taken_by_other')
+      `;
+      const jiraOp = await fx.createExternalOperation(sql, {
+        projectId,
+        provider: 'jira',
+        sourceArtifactVersionId: v1,
+        sourceItemVersionId: adr.itemVersionId,
+      });
+      await fx.createExternalRef(sql, {
+        projectId,
+        provider: 'jira',
+        externalOperationId: jiraOp,
+        sourceArtifactVersionId: v1,
+        sourceItemVersionId: adr.itemVersionId,
+      });
+      const stitchOp = await fx.createExternalOperation(sql, {
+        projectId,
+        provider: 'stitch',
+        sourceArtifactVersionId: v1,
+      });
+      await fx.createExternalRef(sql, {
+        projectId,
+        provider: 'stitch',
+        externalOperationId: stitchOp,
+        sourceArtifactVersionId: v1,
+      });
+
+      // Flag the repository (its ADR moves), so impact() has a row for the GitHub ref.
+      const adrV2 = await fx.createItemVersion(sql, {
+        projectId,
+        logicalItemId: adr.logicalItemId,
+        revisionNumber: 2,
+      });
+      await approveItemsVersion(
+        architectureArtifactId,
+        [{ logicalItemId: adr.logicalItemId, itemVersionId: adrV2 }],
+        { architecture: true },
+      );
+      const impactRowsFor = (refId: string) =>
+        sql`SELECT 1 FROM impact(${projectId}::uuid) WHERE subject_id = ${refId}`;
+      expect(await impactRowsFor(githubRef!.id)).not.toHaveLength(0);
+
+      const untouchedBefore = await untouchedSnapshot();
+      const callsBefore = githubCalls.length;
+
+      // 1. Refused while a GitHub operation is pending: nothing is deleted.
+      const pendingOp = await fx.createExternalOperation(sql, {
+        projectId,
+        provider: 'github',
+        status: 'pending',
+        operationKey: `github:create_repo:${projectId}:still-pending`,
+        sourceArtifactVersionId: v1,
+      });
+      await expect(ops.unlinkGithubRepository(projectId)).rejects.toBeInstanceOf(
+        ops.UnlinkBlockedError,
+      );
+      const blocked = await unlinkViaRoute();
+      expect(blocked.status).toBe(409);
+      expect((await blocked.json()).error.code).toBe('UNLINK_BLOCKED');
+      expect(await githubRefRows(projectId)).toHaveLength(1);
+      expect((await githubOperationRows(projectId)).map((r) => r.status).sort()).toEqual([
+        'completed',
+        'failed',
+        'pending',
+      ]);
+      await sql`DELETE FROM external_operation WHERE id = ${pendingOp}`;
+
+      // 2. The unlink: deletes the GitHub ref and its completed operation, returns { name, url }.
+      const removed = await ops.unlinkGithubRepository(projectId);
+      expect(removed).toEqual({
+        name: `${FAKE_GITHUB_OWNER}/${repoName}`,
+        url: `https://github.com/${FAKE_GITHUB_OWNER}/${repoName}`,
+      });
+      expect(await githubRefRows(projectId)).toHaveLength(0);
+      expect(await githubOperationRows(projectId)).toEqual([
+        expect.objectContaining({ status: 'failed', error_message: 'name_taken_by_other' }),
+      ]);
+      expect(await untouchedSnapshot()).toBe(untouchedBefore);
+      expect(await impactRowsFor(githubRef!.id)).toHaveLength(0);
+      expect(await operationSnapshot(other.projectId)).toBe(otherBefore);
+
+      // 3. Again: nothing linked -> null / 404.
+      expect(await ops.unlinkGithubRepository(projectId)).toBeNull();
+      const gone = await unlinkViaRoute();
+      expect(gone.status).toBe(404);
+      expect((await gone.json()).error.code).toBe('NOT_FOUND');
+
+      // Zero GitHub calls from any of the above.
+      expect(githubCalls.length).toBe(callsBefore);
+
+      // 4. Same name while the old repository still exists on GitHub: the marker is the same,
+      // but the create call itself is refused (422 -> NAME_TAKEN_BY_OTHER); no adoption.
+      const clash = await initAs(repoName);
+      expect(clash.status).toBe(409);
+      expect((await clash.json()).error.code).toBe('NAME_TAKEN_BY_OTHER');
+      expect(await githubRefRows(projectId)).toHaveLength(0);
+
+      // 5. The user deletes the old repository on GitHub; the same name then works.
+      fake.repos.delete(`${FAKE_GITHUB_OWNER}/${repoName}`);
+      const fresh = await initAs(repoName);
+      expect(fresh.status).toBe(200);
+      expect(await githubRefRows(projectId)).toHaveLength(1);
+
+      // 6. Unlink again; a different name works while the old repository still exists.
+      await ops.unlinkGithubRepository(projectId);
+      const differentName = `t53-other-${randomUUID().slice(0, 8)}`;
+      const different = await initAs(differentName);
+      expect(different.status).toBe(200);
+      expect(fake.repos.has(`${FAKE_GITHUB_OWNER}/${repoName}`)).toBe(true); // never touched
+    });
+
+    // Project B was never affected.
+    expect(await operationSnapshot(other.projectId)).toBe(otherBefore);
   });
 
   // T51 / T52 are application tests of the connections module.

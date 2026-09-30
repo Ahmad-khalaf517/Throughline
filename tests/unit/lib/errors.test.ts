@@ -29,6 +29,7 @@ describe('ApiError', () => {
     ['TARGET_REQUIRED', 409],
     ['TARGET_LOCKED', 409],
     ['TARGET_NOT_ACCESSIBLE', 422],
+    ['UNLINK_BLOCKED', 409],
   ] as const)('maps %s to status %i', (code, status) => {
     const error = new ApiError(code, 'message');
     expect(error.code).toBe(code);

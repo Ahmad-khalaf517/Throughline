@@ -367,8 +367,9 @@ async function decideExisting(opts: RunOperationOptions): Promise<ExistingDecisi
     if (!row) {
       // insertOperationRow's ON CONFLICT DO NOTHING lost because a row with
       // this operation_key exists - it must therefore be selectable here.
-      // external_operation rows are never deleted (append-only protocol,
-      // ERD 7.2); this would only fire on a bug elsewhere.
+      // The only deletion is `unlinkGithubRepository` (ERD 7.7), which runs
+      // under the same per-project GitHub lock as the insert; this would only
+      // fire on a bug elsewhere.
       throw new Error(`external_operation ${opts.operationKey} vanished between insert and select`);
     }
 
@@ -785,6 +786,85 @@ export async function hasOperationsFor(
     )
     .limit(1);
   return row !== undefined;
+}
+
+/**
+ * Round 16 (UC-S10, TR FR-091, ERD 7.7): thrown by `unlinkGithubRepository`
+ * while a GitHub operation of the project is `pending` or
+ * `reconciliation_required` - the outcome of that write is not yet known, so
+ * the link cannot be dropped. Nothing was changed.
+ */
+export class UnlinkBlockedError extends Error {
+  constructor() {
+    super('A GitHub operation for this project is still in progress.');
+    this.name = 'UnlinkBlockedError';
+  }
+}
+
+/**
+ * Round 16 (UC-S10, ERD 7.7): removes the project's GitHub repository RECORD -
+ * its `external_ref` and the `completed` operation that produced it. It never
+ * calls GitHub and never touches the repository there; `failed` operations,
+ * other providers' rows, other projects and every lineage table are left alone.
+ *
+ * One transaction under the SAME per-project GitHub advisory lock
+ * `insertOperationRow` takes (same key, same salt), so it cannot interleave
+ * with a new GitHub operation being inserted. The ref goes first because
+ * `external_ref.external_operation_id` is `ON DELETE RESTRICT`.
+ *
+ * Returns the removed repository's `{ name, url }` (both null-able: a ref
+ * adopted through reconciliation may have no stored URL), or `null` when the
+ * project has no GitHub ref. Throws `UnlinkBlockedError` while a GitHub
+ * operation is `pending`/`reconciliation_required`.
+ */
+export async function unlinkGithubRepository(
+  projectId: string,
+): Promise<{ name: string | null; url: string | null } | null> {
+  return withTx(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${projectId} || ':external:github', 1))`,
+    );
+
+    const [inFlight] = await tx
+      .select({ id: schema.externalOperation.id })
+      .from(schema.externalOperation)
+      .where(
+        and(
+          eq(schema.externalOperation.projectId, projectId),
+          eq(schema.externalOperation.provider, 'github'),
+          inArray(schema.externalOperation.status, ['pending', 'reconciliation_required']),
+        ),
+      )
+      .limit(1);
+    if (inFlight) throw new UnlinkBlockedError(); // rolls the (empty) transaction back
+
+    const removedRefs = await tx
+      .delete(schema.externalRef)
+      .where(
+        and(eq(schema.externalRef.projectId, projectId), eq(schema.externalRef.provider, 'github')),
+      )
+      .returning({
+        externalKey: schema.externalRef.externalKey,
+        externalUrl: schema.externalRef.externalUrl,
+        externalOperationId: schema.externalRef.externalOperationId,
+      });
+    if (removedRefs.length === 0) return null;
+
+    await tx.delete(schema.externalOperation).where(
+      and(
+        eq(schema.externalOperation.projectId, projectId),
+        eq(schema.externalOperation.provider, 'github'),
+        eq(schema.externalOperation.status, 'completed'),
+        inArray(
+          schema.externalOperation.id,
+          removedRefs.map((ref) => ref.externalOperationId),
+        ),
+      ),
+    );
+
+    const [removed] = removedRefs;
+    return { name: removed?.externalKey ?? null, url: removed?.externalUrl ?? null };
+  });
 }
 
 export type OperationDTOConnection = OperationConnectionStatus | 'legacy_credential_missing';

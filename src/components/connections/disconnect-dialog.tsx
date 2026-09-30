@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Link2, Loader2 } from 'lucide-react';
+import { Link2 } from 'lucide-react';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
   describeDisconnectResult,
   PROVIDER_LABEL,
@@ -20,49 +20,13 @@ interface DisconnectDialogProps {
 /**
  * The confirm dialog for `DELETE /api/connections/:provider`, shared by the
  * Integrations screen and the guided steps on the GitHub / Jira / Stitch
- * screens. Rendered in a portal; focus starts on Cancel (the safe choice), Tab
- * is trapped inside, Escape and a click outside cancel, and focus returns to the
- * control that opened it (when it still exists) on close.
+ * screens. Rendering and keyboard handling live in the shared `ConfirmDialog`.
  */
 export function DisconnectDialog({ provider, onClose, onDone }: DisconnectDialogProps) {
   const router = useRouter();
   const label = PROVIDER_LABEL[provider];
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const cancelRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    cancelRef.current?.focus();
-    return () => {
-      if (opener && opener.isConnected) opener.focus();
-    };
-  }, []);
-
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        if (!pending) onClose();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled])');
-      if (!focusable || focusable.length === 0) return;
-      const first = focusable[0]!;
-      const last = focusable[focusable.length - 1]!;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, pending]);
 
   async function handleConfirm() {
     setPending(true);
@@ -93,66 +57,23 @@ export function DisconnectDialog({ provider, onClose, onDone }: DisconnectDialog
     }
   }
 
-  return createPortal(
-    <div
-      className="bg-inverse-surface/40 fixed inset-0 z-50 flex items-center justify-center p-4"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !pending) onClose();
-      }}
+  return (
+    <ConfirmDialog
+      idPrefix="disconnect"
+      title={`Disconnect ${label}?`}
+      icon={Link2}
+      confirmLabel="Disconnect"
+      pendingLabel="Disconnecting…"
+      pending={pending}
+      error={error}
+      onConfirm={handleConfirm}
+      onCancel={onClose}
     >
-      <div
-        ref={dialogRef}
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="disconnect-title"
-        aria-describedby="disconnect-description"
-        className="bg-surface-container-lowest border-surface-dim w-full max-w-md rounded-xl border p-6 shadow-lg"
-      >
-        <h2
-          id="disconnect-title"
-          className="text-on-surface flex items-center gap-2 text-lg font-semibold"
-        >
-          <Link2 className="size-5" aria-hidden="true" />
-          Disconnect {label}?
-        </h2>
-        <p
-          id="disconnect-description"
-          className="text-on-surface-variant mt-2 text-sm leading-relaxed"
-        >
-          Throughline will stop using your {label} account and, where {label} allows it, revoke its
-          access. Anything already created there is left untouched, and earlier exports will ask you
-          to reconnect before they can continue.
-        </p>
-        {error && (
-          <p
-            role="alert"
-            className="bg-error-container text-on-error-container mt-3 rounded-lg p-3 text-sm"
-          >
-            {error}
-          </p>
-        )}
-        <div className="mt-5 flex items-center justify-end gap-3">
-          <button
-            ref={cancelRef}
-            type="button"
-            onClick={onClose}
-            disabled={pending}
-            className="text-on-surface-variant hover:text-on-surface focus-visible:ring-primary rounded-lg px-4 py-2 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none disabled:opacity-60"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleConfirm}
-            disabled={pending}
-            className="bg-error text-on-error hover:bg-error/90 focus-visible:ring-error flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium shadow-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {pending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
-            {pending ? 'Disconnecting…' : 'Disconnect'}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
+      <p>
+        Throughline will stop using your {label} account and, where {label} allows it, revoke its
+        access. Anything already created there is left untouched, and earlier exports will ask you
+        to reconnect before they can continue.
+      </p>
+    </ConfirmDialog>
   );
 }
