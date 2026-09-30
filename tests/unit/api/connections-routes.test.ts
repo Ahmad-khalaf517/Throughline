@@ -117,6 +117,7 @@ describe('GET /api/connections', () => {
       displayName: 'octo',
       scopes: ['repo', 'read:org'],
       connectedAt: '2025-01-02T03:04:05.000Z',
+      site: null,
     });
     expect(body.connections[1].status).toBe('none');
   });
