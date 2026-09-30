@@ -91,8 +91,10 @@ function installFakeAtlassian() {
       status: 404,
       body: {},
     };
-    // A string body is sent verbatim (plain text / raw); anything else as JSON.
-    return new Response(typeof body === 'string' ? body : JSON.stringify(body), {
+    // A function body is computed from the request URL; a string body is sent
+    // verbatim (plain text / raw); anything else as JSON.
+    const resolved = typeof body === 'function' ? (body as (u: URL) => unknown)(url) : body;
+    return new Response(typeof resolved === 'string' ? resolved : JSON.stringify(resolved), {
       status,
       headers: { 'content-type': 'application/json' },
     });
@@ -118,8 +120,9 @@ beforeEach(() => {
       status: 200,
       body: [{ id: 'cloud-1', url: 'https://acme.atlassian.net', name: 'Acme' }],
     },
-    // The real shape: Atlassian answers with the requested key as plain text.
-    [VALIDATE]: { status: 200, body: 'SHIFT' },
+    // The real shape: Atlassian answers with the requested key (echoed) as plain
+    // text when it is valid and free. Tests override this only when they mean to.
+    [VALIDATE]: { status: 200, body: (u: URL) => u.searchParams.get('key') ?? '' },
     [CREATE]: {
       status: 201,
       body: { id: '10001', key: 'SHIFT', self: 'https://api.atlassian.com/x' },
