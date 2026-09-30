@@ -984,12 +984,12 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
         const base = `/ex/jira/${CLOUD_ID}/rest/api/3`;
         if (method === 'GET' && parsed.pathname === `${base}/projectvalidate/validProjectKey`) {
           const key = parsed.searchParams.get('key') ?? '';
-          return jsonResponse(
-            200,
-            taken.has(key)
-              ? { errorMessages: [], errors: { projectKey: 'Project X uses this project key.' } }
-              : { errorMessages: [], errors: {} },
-          );
+          // The real shape: PLAIN TEXT. The same key when it is valid and free; a
+          // different generated key when it is in use or invalid.
+          return new Response(taken.has(key) ? `${key}1` : key, {
+            status: 200,
+            headers: { 'content-type': 'text/plain' },
+          });
         }
         if (method === 'POST' && parsed.pathname === `${base}/project`) {
           if (options.createStatus && options.createStatus !== 201) {

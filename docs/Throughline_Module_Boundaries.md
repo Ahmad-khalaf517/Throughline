@@ -733,6 +733,12 @@ listSites(ctx: JiraCtx): Promise<{ cloudId: string; url: string; name: string }[
 listProjects(ctx: JiraCtx, cloudId: string): Promise<{ key: string; name: string }[]>
 checkProjectAccessible(ctx: JiraCtx, cloudId: string, projectKey: string): Promise<boolean>
 validateProjectKey(ctx: JiraCtx, cloudId: string, key: string): Promise<{ valid: boolean }>
+  // GET /rest/api/3/projectvalidate/validProjectKey?key=<KEY> answers with the KEY AS PLAIN TEXT (body `RMF` for key RMF, possibly a quoted JSON
+  // string), not an ErrorCollection: same key back (case-insensitive) = valid and free; a different key = invalid or taken (reported as taken
+  // WITHOUT posting the create). Empty/garbage/unparseable/non-key-shaped body, or any non-2xx other than 401 = 'unsure' -> treated as valid,
+  // the create call's own 400/409 decides. An ErrorCollection object is still tolerated ('uses this project key' / 'already' -> taken, other
+  // messages -> invalid). createProject reads the 201 {id,key,self} defensively: if unusable, one GET /rest/api/3/project/{key} for the id,
+  // else an empty id (the UI treats it as 'created, refresh the list').
 createProject(ctx: JiraCtx, input: { cloudId: string; name: string; key: string; template: 'scrum' | 'kanban' }): Promise<{ id: string; key: string; name: string }>
   // Round 17 (UC-S11, TR FR-092, ERD 7.8): a provider SETUP action, not an external write of an artifact output - no
   // runOperation, no external_operation/external_ref, no table written. Credential = connections.getCredential(ctx.userId, 'jira');

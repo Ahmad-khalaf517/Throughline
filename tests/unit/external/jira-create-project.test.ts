@@ -91,7 +91,10 @@ function installFakeAtlassian() {
       status: 404,
       body: {},
     };
-    return new Response(JSON.stringify(body), {
+    // A function body is computed from the request URL; a string body is sent
+    // verbatim (plain text / raw); anything else as JSON.
+    const resolved = typeof body === 'function' ? (body as (u: URL) => unknown)(url) : body;
+    return new Response(typeof resolved === 'string' ? resolved : JSON.stringify(resolved), {
       status,
       headers: { 'content-type': 'application/json' },
     });
@@ -117,7 +120,9 @@ beforeEach(() => {
       status: 200,
       body: [{ id: 'cloud-1', url: 'https://acme.atlassian.net', name: 'Acme' }],
     },
-    [VALIDATE]: { status: 200, body: { errorMessages: [], errors: {} } },
+    // The real shape: Atlassian answers with the requested key (echoed) as plain
+    // text when it is valid and free. Tests override this only when they mean to.
+    [VALIDATE]: { status: 200, body: (u: URL) => u.searchParams.get('key') ?? '' },
     [CREATE]: {
       status: 201,
       body: { id: '10001', key: 'SHIFT', self: 'https://api.atlassian.com/x' },
@@ -256,6 +261,118 @@ describe('createProject', () => {
     routes[VALIDATE] = { status: 404, body: {} };
     await expect(createProject({ userId: 'user-1' }, INPUT)).resolves.toMatchObject({
       key: 'SHIFT',
+    });
+  });
+
+  describe('validProjectKey real shapes', () => {
+    const RMF = { ...INPUT, key: 'RMF', name: 'RMF project' };
+    const posted = () => seen.some((s) => s.method === 'POST');
+
+    it('plain-text body equal to the key (RMF) is valid and the create proceeds', async () => {
+      routes[VALIDATE] = { status: 200, body: 'RMF' };
+      routes[CREATE] = { status: 201, body: { id: '10009', key: 'RMF' } };
+      await expect(createProject({ userId: 'user-1' }, RMF)).resolves.toEqual({
+        id: '10009',
+        key: 'RMF',
+        name: 'RMF project',
+      });
+      expect(posted()).toBe(true);
+    });
+
+    it('a quoted JSON string equal to the key is valid', async () => {
+      routes[VALIDATE] = { status: 200, body: '"RMF"' };
+      await expect(validateProjectKey({ userId: 'user-1' }, 'cloud-1', 'RMF')).resolves.toEqual({
+        valid: true,
+      });
+    });
+
+    it('case differences and surrounding whitespace are still valid', async () => {
+      routes[VALIDATE] = { status: 200, body: 'rmf' };
+      await expect(validateProjectKey({ userId: 'user-1' }, 'cloud-1', 'RMF')).resolves.toEqual({
+        valid: true,
+      });
+      routes[VALIDATE] = { status: 200, body: ' RMF\n' };
+      await expect(validateProjectKey({ userId: 'user-1' }, 'cloud-1', 'RMF')).resolves.toEqual({
+        valid: true,
+      });
+    });
+
+    it('a different generated key (RMF1) is ProjectKeyTakenError and nothing is created', async () => {
+      routes[VALIDATE] = { status: 200, body: 'RMF1' };
+      await expect(validateProjectKey({ userId: 'user-1' }, 'cloud-1', 'RMF')).resolves.toEqual({
+        valid: false,
+        reason: 'taken',
+      });
+      await expect(createProject({ userId: 'user-1' }, RMF)).rejects.toBeInstanceOf(
+        ProjectKeyTakenError,
+      );
+      expect(posted()).toBe(false);
+
+      routes[VALIDATE] = { status: 200, body: '"RMF1"' };
+      await expect(createProject({ userId: 'user-1' }, RMF)).rejects.toBeInstanceOf(
+        ProjectKeyTakenError,
+      );
+      expect(posted()).toBe(false);
+    });
+
+    it('an ErrorCollection body keeps its taken / invalid classification', async () => {
+      routes[VALIDATE] = {
+        status: 200,
+        body: '{"errorMessages":[],"errors":{"projectKey":"Project X uses this project key."}}',
+      };
+      await expect(validateProjectKey({ userId: 'user-1' }, 'cloud-1', 'RMF')).resolves.toEqual({
+        valid: false,
+        reason: 'taken',
+      });
+      routes[VALIDATE] = {
+        status: 200,
+        body: '{"errorMessages":[],"errors":{"projectKey":"Project key must start with a letter."}}',
+      };
+      await expect(validateProjectKey({ userId: 'user-1' }, 'cloud-1', 'RMF')).resolves.toEqual({
+        valid: false,
+        reason: 'invalid',
+      });
+    });
+
+    it('an empty or garbage body is unsure: valid, and the create call decides', async () => {
+      for (const body of [
+        '',
+        '   ',
+        '<html>Bad gateway</html>',
+        '{not json',
+        'Something went wrong',
+      ]) {
+        routes[VALIDATE] = { status: 200, body };
+        await expect(validateProjectKey({ userId: 'user-1' }, 'cloud-1', 'RMF')).resolves.toEqual({
+          valid: true,
+        });
+      }
+      routes[VALIDATE] = { status: 200, body: '<html>Bad gateway</html>' };
+      routes[CREATE] = { status: 400, body: {} };
+      await expect(createProject({ userId: 'user-1' }, RMF)).rejects.toBeInstanceOf(
+        ProjectKeyTakenError,
+      );
+    });
+
+    it('a 2xx create response with an unparseable body is not an internal error', async () => {
+      routes[CREATE] = { status: 201, body: 'not json at all' };
+      routes['GET api.atlassian.com/ex/jira/cloud-1/rest/api/3/project/RMF'] = {
+        status: 200,
+        body: { id: '10020', key: 'RMF' },
+      };
+      await expect(createProject({ userId: 'user-1' }, RMF)).resolves.toEqual({
+        id: '10020',
+        key: 'RMF',
+        name: 'RMF project',
+      });
+
+      // The lookup fails too: still no throw, empty id.
+      delete routes['GET api.atlassian.com/ex/jira/cloud-1/rest/api/3/project/RMF'];
+      await expect(createProject({ userId: 'user-1' }, RMF)).resolves.toEqual({
+        id: '',
+        key: 'RMF',
+        name: 'RMF project',
+      });
     });
   });
 
