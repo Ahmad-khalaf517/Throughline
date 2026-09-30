@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { CircleAlert, Download, FileText, Loader2 } from 'lucide-react';
 import type { ArtifactVersionDTO, ArtifactVersionStatus } from '@/lib/serialize';
 import { StatusBadge } from '@/components/status/status-badge';
+import { ErdDiagram, parseErdModel } from './erd-diagram';
 
 type DocumentType = 'brd' | 'erd';
 
@@ -79,6 +80,7 @@ export function DocumentReviewScreen({
   const [feedback, setFeedback] = useState('');
   const [error, setError] = useState<string | null>(null);
   const payload = asRecord(version?.payload);
+  const erd = type === 'erd' ? parseErdModel(payload) : null;
 
   async function generate() {
     setPending('generate');
@@ -237,14 +239,28 @@ export function DocumentReviewScreen({
               Version {version.versionNumber}
             </h2>
           </div>
-          {Object.entries(payload).map(([key, value]) => (
-            <section key={key} className="app-card p-6">
-              <h3 className="text-on-surface mb-3 text-base font-semibold">{labelFor(key)}</h3>
-              <div className="text-on-surface-variant text-sm leading-relaxed">
-                {renderValue(value)}
-              </div>
-            </section>
-          ))}
+          {type === 'erd' &&
+            (erd ? (
+              <ErdDiagram model={erd} filename={`erd-v${version.versionNumber}.svg`} />
+            ) : (
+              <p className="border-surface-dim bg-surface-container-lowest text-on-surface-variant rounded-lg border p-6 text-sm">
+                This version has no valid entity diagram. Regenerate it to create one.
+              </p>
+            ))}
+          {Object.entries(payload)
+            .filter(([key]) =>
+              type === 'erd'
+                ? key !== 'entities' && key !== 'relationships' && key !== 'mermaid'
+                : true,
+            )
+            .map(([key, value]) => (
+              <section key={key} className="app-card p-6">
+                <h3 className="text-on-surface mb-3 text-base font-semibold">{labelFor(key)}</h3>
+                <div className="text-on-surface-variant text-sm leading-relaxed">
+                  {renderValue(value)}
+                </div>
+              </section>
+            ))}
         </section>
       ) : (
         <p className="border-surface-dim bg-surface-container-lowest text-on-surface-variant rounded-xl border p-8 text-center text-sm">

@@ -365,6 +365,16 @@ body {
     border-top: 1px solid #ccc;
     padding-top: 1rem;
   }
+
+  .erd-diagram {
+    overflow: visible;
+    border: 0;
+  }
+
+  .erd-diagram svg {
+    width: 100%;
+    height: auto;
+  }
 }
 
 @media (forced-colors: active) {
