@@ -26,9 +26,13 @@ vi.mock('@/artifact-lifecycle', () => ({
   VersionNotDraftError: FakeVersionNotDraftError,
   ApprovalGateBlockedError: FakeApprovalGateBlockedError,
   ItemEditError: FakeItemEditError,
+  DocumentSourceChangedError: class DocumentSourceChangedError extends Error {},
+  getDocumentSourceCurrentness: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('@/artifact-types/requirements', () => ({ generate: vi.fn(), qualityGate: vi.fn() }));
+vi.mock('@/artifact-types/brd', () => ({ generate: vi.fn() }));
+vi.mock('@/artifact-types/erd', () => ({ generate: vi.fn() }));
 vi.mock('@/artifact-types/architecture', () => ({
   generate: vi.fn(),
   getOptionsForVersion: vi.fn(),
@@ -180,6 +184,7 @@ describe('GET /api/projects/:projectId/artifacts/:type/versions', () => {
       payload: { businessProblem: 'p' },
       rawOutput: null,
       selectedArchitectureOptionId: null,
+      sourceCurrent: null,
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-01-02T00:00:00.000Z',
     });

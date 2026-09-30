@@ -19,6 +19,8 @@ export const PROJECT_SECTIONS = [
   { label: 'Architecture', path: '/artifacts/architecture', icon: Boxes },
   { label: 'UI Requirements', path: '/artifacts/ui_requirements', icon: Monitor },
   { label: 'Backlog', path: '/artifacts/backlog', icon: ListTodo },
+  { label: 'BRD', path: '/artifacts/brd', icon: ListChecks },
+  { label: 'ERD', path: '/artifacts/erd', icon: Boxes },
   { label: 'Warnings', path: '/warnings', icon: TriangleAlert },
   { label: 'Dependencies', path: '/dependencies', icon: GitFork },
   { label: 'Outputs', path: '/outputs', icon: Upload },

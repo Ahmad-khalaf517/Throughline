@@ -37,7 +37,8 @@ export type ErrorCode =
   | 'STACK_UNCHANGED_DECISIONS'
   | 'OPTION_NOT_SELECTED'
   | 'OPTION_COUNT_INVALID'
-  | 'NOT_CURRENTLY_FLAGGED';
+  | 'NOT_CURRENTLY_FLAGGED'
+  | 'SOURCE_VERSION_CHANGED';
 
 const STATUS_BY_CODE: Record<ErrorCode, number> = {
   VALIDATION_ERROR: 400,
@@ -62,6 +63,7 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   OPTION_NOT_SELECTED: 422,
   OPTION_COUNT_INVALID: 422,
   NOT_CURRENTLY_FLAGGED: 409,
+  SOURCE_VERSION_CHANGED: 409,
 };
 
 // The one error shape every route handler throws and every response maps

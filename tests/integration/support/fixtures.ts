@@ -67,7 +67,8 @@ export async function createProjectWithOwner(
   return { userId, projectId };
 }
 
-export type ArtifactType = 'requirements' | 'architecture' | 'ui_requirements' | 'backlog';
+export type ArtifactType =
+  'requirements' | 'architecture' | 'ui_requirements' | 'backlog' | 'brd' | 'erd';
 
 export async function createArtifact(
   sql: QueryExecutor,

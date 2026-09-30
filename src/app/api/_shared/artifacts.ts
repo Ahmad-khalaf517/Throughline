@@ -17,9 +17,11 @@
 // transaction or lock logic belongs in this file (Module Boundaries 4.7).
 import {
   getArtifactVersionDetail,
+  getDocumentSourceCurrentness,
   getVersionRef,
   ItemEditError,
   VersionNotDraftError,
+  DocumentSourceChangedError,
   type ArtifactVersionRef,
   type CreateDraftFromGenerationOptions,
   type ImpactRow,
@@ -38,6 +40,8 @@ import {
   qualityGate as qualityGateRequirements,
 } from '@/artifact-types/requirements';
 import { generate as generateUiRequirements } from '@/artifact-types/ui-requirements';
+import { generate as generateBrd } from '@/artifact-types/brd';
+import { generate as generateErd } from '@/artifact-types/erd';
 import { requireProjectOwner } from '@/auth';
 import { toImpactRowDTOs } from '@/app/api/_shared/external';
 import { ApiError } from '@/lib/errors';
@@ -121,6 +125,8 @@ export const ARTIFACT_PREREQUISITES: Record<ArtifactType, readonly ArtifactType[
   architecture: ['requirements'],
   ui_requirements: ['requirements', 'architecture'],
   backlog: ['requirements', 'architecture', 'ui_requirements'],
+  brd: ['requirements'],
+  erd: ['requirements', 'architecture'],
 };
 
 interface ProjectApprovals {
@@ -211,6 +217,8 @@ export const ARTIFACT_TYPE_DISPATCH: Record<ArtifactType, ArtifactTypeDispatch> 
     defaultItemType: 'ui_requirement',
   },
   backlog: { generate: generateBacklog, qualityGate: qualityGateBacklog },
+  brd: { generate: generateBrd, qualityGate: null },
+  erd: { generate: generateErd, qualityGate: null },
 };
 
 // --- Errors ----------------------------------------------------------------
@@ -230,6 +238,9 @@ export const ARTIFACT_TYPE_DISPATCH: Record<ArtifactType, ArtifactTypeDispatch> 
  * approve route builds that one itself.
  */
 export function translateLifecycleError(error: unknown): unknown {
+  if (error instanceof DocumentSourceChangedError) {
+    return new ApiError('SOURCE_VERSION_CHANGED', error.message);
+  }
   if (error instanceof VersionNotDraftError) {
     return new ApiError('VERSION_NOT_DRAFT', 'This version is not a draft.');
   }
@@ -290,5 +301,6 @@ export async function loadVersionDTO(versionId: string): Promise<ArtifactVersion
       toItemVersionDTO(item, impactByItemVersionId.get(item.itemVersionId) ?? null),
     ),
     options,
+    await getDocumentSourceCurrentness(versionId),
   );
 }

@@ -267,10 +267,18 @@ E4 and E5 can run partially in parallel once E3-S10 lands (E5's non-external scr
 
 ## 10. Traceability
 
+### Post-P0 extension: generated BRD and ERD
+
+The user explicitly added BRD and ERD as first-party generated artifacts on 2026-09-30. This is outside the original P0 estimate and does not retroactively change the six-epic baseline above.
+
+| ID | Type | Title | Cites | Depends on | Acceptance |
+|---|---|---|---|---|---|
+| E7-S1 | Story | Generate, review, version, and approve BRD and ERD artifacts in the app | BRD BR-012; TR FR-086..088, FR-080, INV-006; ERD T45; API Contracts sections 1.8 and 4 | E3-S10, E5-S11, E5-S12 | Schema/migration accepts six artifact types and existing projects receive BRD/ERD rows; BRD uses approved Requirements, ERD uses approved Requirements and Architecture; structured generation is validated and source versions recorded; API and UI support generation, feedback, review, approval, history, and source-currentness; stale-source draft approval is refused; existing four-type flows remain green. |
+
 Every story in this plan cites at least one ERD test id or TR requirement id, so the chain from BRD section 3.1 completes:
 
 ```text
 Business Objective (BO) -> Business Requirement (BR) -> FR/INV -> ERD table/section -> Module -> API route -> Jira story (this document) -> verification test
 ```
 
-No new BO/BR/FR/INV is introduced here. If a piece of implementation work has no citation, it does not belong in P0 - flag it rather than adding an uncited story (TR Appendix B guidance).
+The original P0 plan introduces no new BO/BR/FR/INV. E7-S1 is a separately requested post-P0 extension traced to BR-012 and FR-086..088. If a piece of P0 implementation work has no citation, flag it rather than adding an uncited story (TR Appendix B guidance).

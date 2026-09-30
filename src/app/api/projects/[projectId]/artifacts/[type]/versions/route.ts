@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
-import { listArtifactVersions } from '@/artifact-lifecycle';
+import { getDocumentSourceCurrentness, listArtifactVersions } from '@/artifact-lifecycle';
 import { ApiError, errorResponse } from '@/lib/errors';
 import { toArtifactVersionSummaryDTO } from '@/lib/serialize';
 import { parseArtifactType } from '@/app/api/_shared/artifacts';
@@ -28,7 +28,13 @@ export async function GET(request: Request, { params }: RouteParams) {
     const type = parseArtifactType(rawType);
 
     const versions = await listArtifactVersions(projectId, type);
-    return NextResponse.json({ versions: versions.map(toArtifactVersionSummaryDTO) });
+    return NextResponse.json({
+      versions: await Promise.all(
+        versions.map(async (version) =>
+          toArtifactVersionSummaryDTO(version, await getDocumentSourceCurrentness(version.id)),
+        ),
+      ),
+    });
   } catch (error) {
     return errorResponse(error);
   }

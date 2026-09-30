@@ -304,13 +304,14 @@ Added in v1.5 (BR-011). Purely presentational - a read-only view over state that
 The system shall provide one overview screen per project showing:
 
 - The current `artifact_version.status` (FR-013/FR-022/FR-041/FR-064) and item count for each of the four artifact types (Requirements, Architecture, UI Requirements, Backlog), rendered with the same status-badge vocabulary used on each artifact type's own review screen (exactly the four `artifact_version.status` values - no fifth state).
+- The current status of generated BRD and ERD artifact versions (FR-086/FR-087), with an explicit source-currentness indicator (FR-088). Their item count is zero because these terminal documents have no logical items.
 - A chronological feed of recent lineage activity for the project: `item_version` creations, `artifact_version` status changes, and flagged-impact state (INV-020), each entry linking to the item/version it describes.
 
 This screen reads; it does not write. It has no effect on approval gating (FR-083/FR-084), currentness (INV-021), or any other workflow rule in this document - those are unchanged and continue to be evaluated exactly as specified wherever they already are. If a project has generated nothing yet, the screen shows the empty state, not an error (screen-kit "four states" rule).
 
 ### FR-004 - Persistent Navigation Shell
 
-Every screen under a project (Overview, Requirements, Architecture, UI Requirements, Backlog, Warnings, Dependencies, Outputs) shall share one navigation shell: a header identifying the current project and a tab/link set reaching every screen listed above, plus a way back to the user's project list.
+Every screen under a project (Overview, Requirements, Architecture, UI Requirements, Backlog, BRD, ERD, Warnings, Dependencies, Outputs) shall share one navigation shell: a header identifying the current project and a tab/link set reaching every screen listed above, plus a way back to the user's project list.
 
 Only screens that exist as a real FR belong in this shell. Cross-project chrome shown in the Stitch design reference with no backing FR anywhere in this document - a cross-project lineage map, a decisions register, an audit journal, a settings screen - is explicitly **out of scope for this shell** (P1, Jira Plan known-limitations, same treatment as FR-023). Do not add a nav entry that points at a screen this document doesn't define.
 
@@ -729,6 +730,8 @@ An artifact may be generated only from approved upstream artifacts, in workflow 
 | Architecture | Requirements |
 | UI Requirements | Requirements, Architecture |
 | Backlog | Requirements, Architecture, UI Requirements |
+| BRD | Requirements |
+| ERD | Requirements, Architecture |
 
 The approved versions given to the model are recorded as the generation context (section 23.1). Because an approved artifact never returns to unapproved, no current downstream item can depend on an artifact that has no approved version.
 
@@ -763,6 +766,18 @@ The user may approve a blocked version with a **mandatory, non-empty note**. The
 
 Every GitHub, Stitch and Jira preview shall show the current impact warnings for the items the write would be created from. Creating an external object from a flagged item requires an explicit confirmation; it is not blocked. The resulting external reference is flagged from the moment it exists, so nothing stale leaves Throughline silently.
 
+### FR-086 - Generated BRD (BR-012; post-P0)
+
+From the current approved Requirements version, the system shall generate a structured BRD with problem, stakeholders, goals, scope, assumptions, risks, and success measures. The model must distinguish known facts from inferred assumptions. A draft is reviewable, may be regenerated with feedback, and becomes authoritative only on explicit approval. No manual item revision applies because this document has no dependable logical items.
+
+### FR-087 - Generated ERD (BR-012; post-P0)
+
+From the current approved Requirements and Architecture versions, the system shall generate a structured ERD with entities, attributes, keys, and relationships, plus a Mermaid ER diagram for display. The output is a design proposal, never an automatic database migration. A draft is reviewable, may be regenerated with feedback, and becomes authoritative only on explicit approval. No manual item revision applies.
+
+### FR-088 - Document Source Currentness (BR-012; post-P0)
+
+The BRD and ERD are terminal artifact types: the existing four artifact types do not consume them, and the document payload does not create semantic dependency edges. Their generation-context refs record the exact approved source versions. On read, the app compares these refs with the current approved source versions and labels a document whose source changed as needing regeneration, without inventing an `artifact_version.status`. A document draft whose source changed before approval cannot be approved; regenerate it. This document-level signal is distinct from item impact warnings and acknowledgements. Generation freshness still follows INV-006.
+
 ---
 
 # PART B - VERSIONING, IDENTITY, AND LINEAGE
@@ -775,6 +790,8 @@ A project contains first-party Artifacts such as:
 - Architecture
 - UI Requirements
 - Backlog
+- BRD (post-P0)
+- ERD (post-P0)
 
 Each Artifact has multiple ArtifactVersions over time.
 

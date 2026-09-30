@@ -14,7 +14,11 @@
 // (Module Boundaries 4.8), and never reaches layer 0/1 (`db`, `identity`,
 // `impact`) itself - `getArtifactVersionDetailResolved` already did that
 // resolution inside artifact-lifecycle.
-import { getArtifactVersionDetailResolved, listArtifactVersions } from '@/artifact-lifecycle';
+import {
+  getArtifactVersionDetailResolved,
+  getDocumentSourceCurrentness,
+  listArtifactVersions,
+} from '@/artifact-lifecycle';
 import { getOptionsForVersion } from '@/artifact-types/architecture';
 import { qualityGate as qualityGateBacklog } from '@/artifact-types/backlog';
 import { qualityGate as qualityGateRequirements } from '@/artifact-types/requirements';
@@ -71,6 +75,7 @@ export async function loadReviewVersion(
       version,
       items.map((item) => toItemVersionDTO(item, item.impact)),
       options,
+      await getDocumentSourceCurrentness(version.id),
     ),
     qualityIssues,
     upstreamDisplayKeysByItemVersionId: Object.fromEntries(

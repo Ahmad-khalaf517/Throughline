@@ -28,9 +28,13 @@ vi.mock('@/artifact-lifecycle', () => ({
   VersionNotDraftError: FakeVersionNotDraftError,
   ApprovalGateBlockedError: FakeApprovalGateBlockedError,
   ItemEditError: FakeItemEditError,
+  DocumentSourceChangedError: class DocumentSourceChangedError extends Error {},
+  getDocumentSourceCurrentness: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('@/artifact-types/requirements', () => ({ generate: vi.fn(), qualityGate: vi.fn() }));
+vi.mock('@/artifact-types/brd', () => ({ generate: vi.fn() }));
+vi.mock('@/artifact-types/erd', () => ({ generate: vi.fn() }));
 vi.mock('@/artifact-types/architecture', () => ({
   generate: vi.fn(),
   getOptionsForVersion: vi.fn(),

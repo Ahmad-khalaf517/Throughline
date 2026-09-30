@@ -1,6 +1,7 @@
 # Throughline - ERD / Data Model
 
-**Document version:** 1.10 - **FROZEN for implementation** (see section 14 for what may still change)
+**Document version:** 1.11 - **FROZEN for implementation** (see section 14 for what may still change)
+**Post-P0 extension (2026-09-30):** BR-012/FR-086..088 add two terminal document artifact types, `brd` and `erd`, at the user's explicit request. This reopens only the `artifact.type` check and the set of artifact rows created per project; the five dependable item types, immutable edges, and `impact()` remain unchanged. The generated document payload is non-dependable. Its exact source versions are recorded by `generation_context_ref`, and source-currentness is checked on read and again before approval. The pre-existing PostgreSQL 15/17 verification statement below applies to v1.10; the new migration requires separate execution evidence.
 **Status:** Derived from Throughline BRD v2.2 and Technical Requirements & Lineage Invariants v1.4, after thirteen review rounds (round 13: whole-project deletion - the original decision that "project deletion is out of scope" is reopened at the project owner's request (section 4.2, Appendix B round 13); a new `delete_project()` function (migration `0008`, Appendix A.4) is the one sanctioned way to remove a project and all its rows, `forbid_mutation` and `membership_draft_only` now let a DELETE through only while it runs, every FK stays `ON DELETE RESTRICT`, T44 added, no table or column changed; round 12: section 7.4's Jira marker mechanism, previously "validate in Spike C", is now confirmed final by Spike C - label `tl-<item_version_id>` plus description-footer backup, both requiring a complete-marker-string match, validated live against project SCRUM issue SCRUM-75 and `scripts/spike-jira-reconciliation.ts` - reopened per TR 30.2's own "must be validated during the spike" and this document's own line ~1035 ("Spike C... can change only the content of the marker, not any table"); no table changed; round 11: auth email templates switched to the `token_hash` link pattern - no schema change, a real production PKCE/cross-browser gap found while building forgot-password; round 10: pinned `SET search_path = public` on all 7 Appendix A.2/6.3 functions; all 16 tables, every trigger and `impact()` are applied and verified against the live Supabase project, Project Setup section 13). Parent of Modules -> Project Setup -> API Contracts -> Jira Plan -> Implementation.
 **Target engine:** PostgreSQL 15+ (`NULLS NOT DISTINCT` needs 15). **Verified:** the complete Appendix A DDL, all triggers, `impact()` and the Supabase hardening apply cleanly and pass the behaviour suite (Appendix C) on **PostgreSQL 15 and 17** (the versions Supabase runs), as a non-superuser table owner with Supabase's roles and default grants reproduced.
 **Platform:** Supabase Auth + Supabase Postgres (sections 2 and 4.1). **ORM:** Drizzle ORM + drizzle-kit (section 2.1).
@@ -264,7 +265,7 @@ Creating a project inserts its four `artifact` rows in the same transaction.
 |---|---|---|
 | `id` | uuid PK | |
 | `project_id` | uuid NN FK `project` | |
-| `type` | text NN | CHECK in (`requirements`,`architecture`,`ui_requirements`,`backlog`) |
+| `type` | text NN | CHECK in (`requirements`,`architecture`,`ui_requirements`,`backlog`,`brd`,`erd`) |
 | `created_at` | timestamptz NN | |
 
 **[DB]** `UNIQUE (project_id, type)`; `UNIQUE (id, project_id)` (target of `logical_item`'s composite FK).
@@ -615,6 +616,8 @@ Order inside one transaction (section 3.2 lock held): bind -> hash -> insert `it
 
 **Dependency edge rules [APP]:** edges point strictly to an earlier artifact in the order requirements < architecture < ui_requirements < backlog, which makes the graph acyclic by construction. Allowed (downstream -> upstream): ADR -> requirement; UI requirement -> requirement | ADR; story -> requirement | ADR | UI requirement. Epics have no upstream edges. Source and target must be in the same project: **[DB]** through the `semantic_dependency` composite FKs (section 4.11).
 
+The post-P0 BRD and ERD documents are terminal artifact versions outside this item-edge order. They contain no `logical_item` rows and therefore add no `semantic_dependency` edge type. `generation_context_ref` records approved Requirements as the BRD source and approved Requirements plus Architecture as the ERD sources (FR-088).
+
 ### 5.6 What lives in `payload` versus items
 
 If something downstream should be flagged when it changes, it must be a `logical_item`.
@@ -623,6 +626,8 @@ If something downstream should be flagged when it changes, it must be a `logical
 |---|---|
 | Requirements: business problem, actors, assumptions, unresolved questions, user journeys | Functional and non-functional requirements **and architecture-driving constraints** (acceptance criteria are inside the item) |
 | Architecture: overall recommendation text | Selected ADRs (materialized at approval) |
+| BRD: business problem, stakeholders, goals, scope, assumptions, risks, success measures (post-P0 terminal document) | None |
+| ERD: entities, attributes, keys, relationships, Mermaid diagram, assumptions (post-P0 terminal document) | None |
 | UI Requirements: cross-cutting UX priorities | Screens/flows/component requirements |
 | Backlog: export settings | Epics, Stories |
 
@@ -926,6 +931,7 @@ Each is an integration test against a real PostgreSQL instance. T1 is the core p
 | T42 | Preview a Jira export whose Stories include a flagged Story. | The preview lists the impact rows and requires an explicit confirmation; the resulting ref is flagged immediately. |
 | T43 | Try to generate UI Requirements before Architecture is approved, and a Backlog before UI Requirements is approved. | Both refused (TR FR-080). |
 | T44 | Delete a project that has a row in every project-scoped table (approved Architecture with its selected option, an Epic with a child Story, GitHub/Jira/Stitch refs, acknowledgements against an item version and an external ref) via `delete_project()`, alongside a second identical project. Also: delete without the function; a forbidden delete or update after it in the same transaction; roll back after it; call it as `anon`; an unknown project id. | The first project has zero rows in all 15 project-scoped tables and the second is untouched; the owner's `app_user` row remains. Without the function every delete stays refused (`append-only`, `frozen`, FK `RESTRICT`); after it returns, and for any `UPDATE`, the guards are back in force; a rollback leaves the whole project in place; `anon` is denied `EXECUTE` (T34); an unknown id returns `false` and deletes nothing. |
+| T45 | Create BRD and ERD artifact rows for a project, then generate and approve versions against their required approved source versions. Change an approved source after a document draft or approved document exists. | The type CHECK accepts only the six declared values; each project has exactly one of each. Generation refuses missing prerequisites and captures the exact source versions. A source change before approval blocks document approval; a source change after approval leaves its status approved but marks its source-currentness as needing regeneration. No logical item or semantic dependency is minted for either document (FR-086..088). |
 
 ---
 
@@ -1079,7 +1085,7 @@ CREATE TABLE project (
 CREATE TABLE artifact (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id  uuid NOT NULL REFERENCES project (id) ON DELETE RESTRICT,
-  type        text NOT NULL CHECK (type IN ('requirements','architecture','ui_requirements','backlog')),
+  type        text NOT NULL CHECK (type IN ('requirements','architecture','ui_requirements','backlog','brd','erd')),
   created_at  timestamptz NOT NULL DEFAULT now(),
   UNIQUE (project_id, type),
   UNIQUE (id, project_id)
@@ -1750,7 +1756,7 @@ This is an Auth **configuration** change (Supabase Dashboard -> Authentication -
 
 ## Appendix C - Verification suite
 
-Round 13 adds T44 (project deletion, section 10; `tests/integration/project-deletion.test.ts`, passing on PostgreSQL 15 through the real triggers and FKs). Otherwise:
+Round 13 adds T44 (project deletion, section 10; `tests/integration/project-deletion.test.ts`, passing on PostgreSQL 15 through the real triggers and FKs). The post-P0 extension adds T45 for generated BRD/ERD document artifacts; verification is tracked separately from the historical suite below. Otherwise:
 
 Round 7 changed no DDL, so these results still apply unchanged. T40-T43 are application-level integration tests (they exercise service code, not new constraints) and belong to slices 2 and 4.
 

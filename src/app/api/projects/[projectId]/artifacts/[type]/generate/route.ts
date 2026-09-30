@@ -94,6 +94,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       const result = await createDraftFromGeneration({
         projectId,
         artifactId,
+        artifactType: type,
         ...(dispatch.defaultItemType ? { itemType: dispatch.defaultItemType } : {}),
         contextSourceVersionIds: prerequisiteVersionIds(project, type),
         actorUserId: user.id,

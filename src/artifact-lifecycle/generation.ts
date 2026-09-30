@@ -5,6 +5,8 @@
 // Nothing outside src/artifact-lifecycle may import this file directly - it
 // is re-exported through ./index.ts (Module Boundaries section 7).
 import { db, schema, withProjectLock, type Tx } from '@/db';
+import type { ArtifactType } from '@/lib/serialize';
+import { eq, inArray } from 'drizzle-orm';
 import { linkGenerationRun } from '@/ai-client';
 import { bindUpstreamRefs, checkFreshness } from '@/lineage/dependency-binding';
 import {
@@ -28,6 +30,7 @@ export type ArtifactVersion = typeof schema.artifactVersion.$inferSelect;
 export interface CreateDraftFromGenerationOptions {
   projectId: string;
   artifactId: string;
+  artifactType?: ArtifactType;
   // The default ItemType `identity.matchAndPersistItems` is called with for
   // any candidate that doesn't carry its own `itemType` (requirement /
   // architecture_decision / ui_requirement / epic / story - Architecture's
@@ -295,6 +298,41 @@ export async function createDraftFromGeneration(
       // model did not see), then evaluate currentness of what was bound.
       const members = await getSourceVersionMembers(tx, contextSourceVersionIds);
       boundUpstream = bindUpstreamRefs({ members, candidates });
+      // BRD/ERD have no item-level candidates, so the normal bound-upstream
+      // freshness check is vacuous. Their captured source versions themselves
+      // must still be current when the model result is persisted (FR-088).
+      if (opts.artifactType === 'brd' || opts.artifactType === 'erd') {
+        const [artifact] = await tx
+          .select({ type: schema.artifact.type })
+          .from(schema.artifact)
+          .where(eq(schema.artifact.id, artifactId))
+          .limit(1);
+        if (artifact?.type !== opts.artifactType) {
+          throw new Error('Document artifact type does not match its artifact row');
+        }
+        const expectedTypes =
+          opts.artifactType === 'brd' ? ['requirements'] : ['requirements', 'architecture'];
+        const sourceVersions =
+          contextSourceVersionIds.length > 0
+            ? await tx
+                .select({ type: schema.artifact.type, status: schema.artifactVersion.status })
+                .from(schema.artifactVersion)
+                .innerJoin(
+                  schema.artifact,
+                  eq(schema.artifact.id, schema.artifactVersion.artifactId),
+                )
+                .where(inArray(schema.artifactVersion.id, contextSourceVersionIds))
+            : [];
+        if (
+          contextSourceVersionIds.length !== expectedTypes.length ||
+          sourceVersions.length !== expectedTypes.length ||
+          !expectedTypes.every((type) =>
+            sourceVersions.some((source) => source.type === type && source.status === 'approved'),
+          )
+        ) {
+          staleReason = 'dependency_superseded';
+        }
+      }
       const currentItemVersionIds = await getCurrentItemVersionIds(tx, projectId, [
         ...boundUpstream.values(),
       ]);

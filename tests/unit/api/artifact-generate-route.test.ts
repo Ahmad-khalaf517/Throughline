@@ -29,9 +29,13 @@ vi.mock('@/artifact-lifecycle', () => ({
   VersionNotDraftError: FakeVersionNotDraftError,
   ApprovalGateBlockedError: FakeApprovalGateBlockedError,
   ItemEditError: FakeItemEditError,
+  DocumentSourceChangedError: class DocumentSourceChangedError extends Error {},
+  getDocumentSourceCurrentness: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('@/artifact-types/requirements', () => ({ generate: vi.fn(), qualityGate: vi.fn() }));
+vi.mock('@/artifact-types/brd', () => ({ generate: vi.fn() }));
+vi.mock('@/artifact-types/erd', () => ({ generate: vi.fn() }));
 vi.mock('@/artifact-types/architecture', () => ({
   generate: vi.fn(),
   getOptionsForVersion: vi.fn(),
@@ -60,6 +64,8 @@ import {
 } from '@/artifact-types/architecture';
 import { generate as generateUiRequirements } from '@/artifact-types/ui-requirements';
 import { generate as generateBacklog } from '@/artifact-types/backlog';
+import { generate as generateBrd } from '@/artifact-types/brd';
+import { generate as generateErd } from '@/artifact-types/erd';
 import { getDisplayKeysForItemVersions } from '@/external/operations';
 import { POST } from '@/app/api/projects/[projectId]/artifacts/[type]/generate/route';
 import { ApiError } from '@/lib/errors';
@@ -83,6 +89,8 @@ const mockedGenerate = {
   architecture: vi.mocked(generateArchitecture),
   ui_requirements: vi.mocked(generateUiRequirements),
   backlog: vi.mocked(generateBacklog),
+  brd: vi.mocked(generateBrd),
+  erd: vi.mocked(generateErd),
 };
 const mockedCreateOptions = vi.mocked(createOptions);
 const mockedGetOptions = vi.mocked(getOptionsForVersion);
@@ -152,6 +160,31 @@ describe('POST /api/projects/:projectId/artifacts/:type/generate', () => {
     });
     mockedGenerate.backlog.mockReset().mockResolvedValue({
       payload: {},
+      candidates: [],
+      runId: 'run-1',
+    });
+    mockedGenerate.brd.mockReset().mockResolvedValue({
+      payload: {
+        problem: 'p',
+        stakeholders: [],
+        goals: ['g'],
+        scope: ['s'],
+        outOfScope: [],
+        assumptions: [],
+        risks: [],
+        successMeasures: ['m'],
+      },
+      candidates: [],
+      runId: 'run-1',
+    });
+    mockedGenerate.erd.mockReset().mockResolvedValue({
+      payload: {
+        overview: 'o',
+        entities: [],
+        relationships: [],
+        mermaid: 'erDiagram',
+        assumptions: [],
+      },
       candidates: [],
       runId: 'run-1',
     });
@@ -345,6 +378,8 @@ describe('POST /api/projects/:projectId/artifacts/:type/generate', () => {
       ['architecture', undefined, ['req-v1']],
       ['ui_requirements', 'ui_requirement', ['req-v1', 'arch-v1']],
       ['backlog', undefined, ['req-v1', 'arch-v1', 'ui-v1']],
+      ['brd', undefined, ['req-v1']],
+      ['erd', undefined, ['req-v1', 'arch-v1']],
     ] as const)(
       '%s: default itemType %s, context sources %j (canonical order)',
       async (type, itemType, contextSourceVersionIds) => {
@@ -364,7 +399,7 @@ describe('POST /api/projects/:projectId/artifacts/:type/generate', () => {
       },
     );
 
-    it.each(['requirements', 'architecture', 'ui_requirements', 'backlog'] as const)(
+    it.each(['requirements', 'architecture', 'ui_requirements', 'backlog', 'brd', 'erd'] as const)(
       "%s: the callback runs that type's own module's generate, threading the exact ids createDraftFromGeneration hands it (INV-006)",
       async (type) => {
         // Values deliberately different from anything the route could have read

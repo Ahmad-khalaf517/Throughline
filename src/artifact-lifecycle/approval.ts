@@ -4,6 +4,7 @@ import { acknowledgeGateBlockers, evaluateGate, type ImpactRow } from '@/lineage
 import { getDisplayKeysByItemVersionId, getSourceVersionMembers } from '@/lineage/identity';
 import { loadArchitectureDraftContext, type ArchitectureDraftContext } from './architecture';
 import { VersionNotDraftError } from './errors';
+import { DocumentSourceChangedError, getDocumentSourceCurrentness } from './document-currentness';
 
 // Thrown by `approveWithOverride` when the gate recomputed inside its own
 // transaction still blocks (FR-084: an override satisfies the gate, it does
@@ -128,6 +129,13 @@ async function approveVersionInternal(
         .limit(1);
       if (!draft || draft.status !== 'draft') {
         throw new VersionNotDraftError(versionId);
+      }
+
+      if (
+        (draft.type === 'brd' || draft.type === 'erd') &&
+        !(await getDocumentSourceCurrentness(versionId, tx))
+      ) {
+        throw new DocumentSourceChangedError();
       }
 
       // The architecture facade supplies its peer's callback; lifecycle alone

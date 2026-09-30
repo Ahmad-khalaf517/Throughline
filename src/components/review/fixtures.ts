@@ -303,6 +303,7 @@ function requirementsFixture(): { version: ArtifactVersionDTO; qualityIssues: Qu
     id: 'fixture-version-requirements-v2',
     artifactId: 'fixture-artifact-requirements',
     artifactType: 'requirements',
+    sourceCurrent: null,
     versionNumber: 2,
     status: 'draft',
     statusReason: null,
@@ -424,6 +425,7 @@ function architectureFixture(): { version: ArtifactVersionDTO; qualityIssues: Qu
     id: 'fixture-version-architecture-v1',
     artifactId: 'fixture-artifact-architecture',
     artifactType: 'architecture',
+    sourceCurrent: null,
     versionNumber: 1, // first Architecture draft, generated once Requirements was approved
     status: 'draft',
     statusReason: null,
@@ -598,6 +600,7 @@ function backlogFixture(): { version: ArtifactVersionDTO; qualityIssues: Quality
     id: 'fixture-version-backlog-v1',
     artifactId: 'fixture-artifact-backlog',
     artifactType: 'backlog',
+    sourceCurrent: null,
     // First Backlog draft, generated once Requirements + Architecture +
     // UI Requirements were all approved (FR-080).
     versionNumber: 1,
@@ -722,6 +725,7 @@ function uiRequirementsFixture(): {
     id: 'fixture-version-ui-requirements-v1',
     artifactId: 'fixture-artifact-ui-requirements',
     artifactType: 'ui_requirements',
+    sourceCurrent: null,
     // First UI Requirements draft, generated once Requirements + Architecture
     // were both approved (FR-041/FR-080).
     versionNumber: 1,

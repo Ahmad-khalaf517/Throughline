@@ -143,10 +143,13 @@ GitHub, Stitch, and Jira are useful outputs of the planning process. They do not
 | **BR-009** | AI shall be used for interpretation, generation, trade-off reasoning, and semantic mapping. Deterministic code shall own identifiers, validation, workflow state, approvals, lineage storage, traversal, and external-operation state. | BO-002, BO-006 |
 | **BR-010** | When scope pressure occurs, optional AI commentary and advanced polish shall be removed before weakening the core lineage, approval, versioning, or traceability behavior. | BO-005, BO-006 |
 | **BR-011** | Throughline shall present each project's current approval status across artifact types and its recent lineage activity in one overview screen, reachable through navigation shared by every project screen, so a user can see the state of the traceability chain without opening each artifact type individually. | BO-001, BO-004 |
+| **BR-012** | Throughline shall generate reviewable, versioned BRD and ERD documents from approved planning artifacts, record the exact source versions used, and require explicit approval before either document is authoritative. | BO-001, BO-003, BO-005 |
 
 ---
 
 ## 8. MVP Scope (P0)
+
+**Post-P0 scope extension (BR-012, requested 2026-09-30):** Generated BRD and ERD documents are additional artifact types. The generated BRD is derived from approved Requirements; the generated ERD is derived from approved Requirements and Architecture. They are terminal planning documents, not new sources for the existing Requirements, Architecture, UI Requirements, or Backlog generation chain. Their structured sections live in artifact-version payloads, and their source artifact versions are recorded as generation context. A source-version change makes the document due for regeneration. This addition reopens the original four-artifact scope expressly at the user's request; the original P0 evaluation and estimate remain the historical baseline.
 
 The capstone MVP must demonstrate the following end-to-end capabilities:
 

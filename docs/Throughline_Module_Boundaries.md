@@ -25,7 +25,7 @@
 Layer 0  db, auth, ai-client                         (foundation - no domain logic)
 Layer 1  identity, dependency-binding, impact         (lineage core - pure + thin persistence)
 Layer 2  artifact-lifecycle, architecture-materialization   (state machine + transactions)
-Layer 3  requirements, architecture, ui-requirements, backlog   (artifact-type modules)
+Layer 3  requirements, architecture, ui-requirements, backlog, brd, erd   (artifact-type modules)
 Layer 4  external-operations                          (shared external-write protocol)
 Layer 5  github, jira, stitch                         (provider integrations)
 Layer 6  api (Next.js route handlers)                 (thin: auth + ownership + call layer 3/5)
@@ -56,6 +56,8 @@ A module in layer N may import layer < N freely. It may not import layer >= N, w
 | 15 | `jira` | 5 | (none of its own table) | `external-operations`, `backlog` (read-only) |
 | 16 | `stitch` | 5 | `stitch_output` | `external-operations`, `ui-requirements` (read-only) |
 | 17 | `api` | 6 | - | everything below it |
+| 18 | `brd` (post-P0) | 3 | payload shape + prompt only; no table | `ai-client`, `artifact-lifecycle`, `identity` (read-only), `db` (`withTx`, read-only) |
+| 19 | `erd` (post-P0) | 3 | payload shape + prompt only; no table | `ai-client`, `artifact-lifecycle`, `identity` (read-only), `db` (`withTx`, read-only) |
 
 Every one of the 16 ERD tables appears in exactly one "Owns" cell above. Section 5 gives the full matrix with the ERD section that defines each table's rules.
 
@@ -329,7 +331,7 @@ This is the module every artifact-type module and every route handler goes throu
 **Exports:**
 ```ts
 createProject(userId: string, name: string, brief: string, inputContext?: unknown): Promise<Project>
-  // inserts project + its 4 artifact rows in one transaction (ERD 4.2)
+  // inserts project + its 6 artifact rows in one transaction (ERD 4.2; BR-012 extension)
 deleteProject(projectId: string): Promise<boolean>
   // ERD 4.2 "Deletion" (round 13): under withProjectLock, one call to the database function
   // `delete_project(projectId)` - the project and every row that hangs off it, in one transaction, or
@@ -526,7 +528,7 @@ getOptionsForVersion(artifactVersionId: string): Promise<ArchitectureOption[]>
 
 ### 4.4 Layer 3 - Artifact-type modules
 
-All four modules share one shape. Each owns no table of its own - persistence goes through `artifact-lifecycle` + `identity`, per principle 1. What each module actually owns is: **the prompt, the output schema, and the type-specific quality gate.**
+The artifact-type modules share one generation shape. Each owns no table of its own - persistence goes through `artifact-lifecycle` + `identity`, per principle 1. What each module actually owns is: **the prompt, the output schema, and the type-specific quality gate.** The post-P0 `brd` and `erd` modules return `candidates: []`, so they use lifecycle persistence without calling identity to mint logical items.
 
 ```ts
 // shared shape, one per artifact type
@@ -538,7 +540,7 @@ interface ArtifactTypeModule<TPayload, TItem> {
 }
 ```
 
-Every module also exports `generate(ctx: { projectId: string; feedback?: string; contextSourceVersionIds?: string[]; baseVersionId?: string | null }): Promise<{ payload: unknown; candidates: Candidate[]; runId: string }>` (E3-S10) - the exact callback shape `artifact-lifecycle.createDraftFromGeneration` takes (4.3): it loads the project's brief and the approved upstream items, folds the optional reviewer `feedback` into the prompt, calls `ai-client`, and returns the validated payload plus `toCandidates(...)`. It never calls `createDraftFromGeneration` itself - it has no `artifactId`/`actorUserId` - so the API route composes the two. `contextSourceVersionIds`/`baseVersionId` are the values `createDraftFromGeneration` captured for this generation and hands its callback (4.3); the route threads them in, and when present they replace the module's own read of the project's currently approved ids for loading the context (the module still loads `brief` from `getProjectById` and still runs its own FR-080 refusal against the project), so the prompt is built from exactly the versions the draft is recorded against (INV-006). `contextSourceVersionIds` is the approved versions of the type's FR-080 prerequisites in the fixed artifact order requirements -> architecture -> ui_requirements: `requirements` takes `[]`, `architecture` `[requirements]`, `ui-requirements` `[requirements, architecture]` (read by position) and `backlog` `[requirements, architecture, ui_requirements]` (classified by each member's item type, so only the count is checked); a list of any other length is a plain Error. `baseVersionId` is the type's own approved version, and `null` (a first generation) is a value, not "absent" - only an omitted field falls back to reading the project. `architecture`'s `generate` additionally returns `options: [OptionInput, OptionInput]` (its `toCandidates` is always `[]`, decisions are not lineage until approval): the route passes them to `architecture.createOptions(draft.id, options)` once `createDraftFromGeneration` returns a non-stale draft, in a second transaction (the limitation API Contracts v1.5's Status note records as its decision 5: a failure between the two transactions leaves an option-less draft that cannot be approved and is replaced by the next generate). Modules with an FR-080 prerequisite (`architecture`, `ui-requirements`, `backlog`) refuse inside `generate` before any model call; the route checks the same prerequisite first so the client gets `409 PREREQUISITE_NOT_APPROVED` rather than a 500.
+Every module also exports `generate(ctx: { projectId: string; feedback?: string; contextSourceVersionIds?: string[]; baseVersionId?: string | null }): Promise<{ payload: unknown; candidates: Candidate[]; runId: string }>` (E3-S10) - the exact callback shape `artifact-lifecycle.createDraftFromGeneration` takes (4.3): it loads the project's brief and the approved upstream items, folds the optional reviewer `feedback` into the prompt, calls `ai-client`, and returns the validated payload plus `toCandidates(...)`. It never calls `createDraftFromGeneration` itself - it has no `artifactId`/`actorUserId` - so the API route composes the two. `contextSourceVersionIds`/`baseVersionId` are the values `createDraftFromGeneration` captured for this generation and hands its callback (4.3); the route threads them in, and when present they replace the module's own read of the project's currently approved ids for loading the context (the module still loads `brief` from `getProjectById` and still runs its own FR-080 refusal against the project), so the prompt is built from exactly the versions the draft is recorded against (INV-006). `contextSourceVersionIds` is the approved versions of the type's FR-080 prerequisites in the fixed artifact order requirements -> architecture -> ui_requirements: `requirements` takes `[]`, `architecture` `[requirements]`, `ui-requirements` `[requirements, architecture]`, `backlog` `[requirements, architecture, ui_requirements]`, `brd` `[requirements]`, and `erd` `[requirements, architecture]`; a list of any other length is a plain Error. `baseVersionId` is the type's own approved version, and `null` (a first generation) is a value, not "absent" - only an omitted field falls back to reading the project. `architecture`'s `generate` additionally returns `options: [OptionInput, OptionInput]` (its `toCandidates` is always `[]`, decisions are not lineage until approval): the route passes them to `architecture.createOptions(draft.id, options)` once `createDraftFromGeneration` returns a non-stale draft, in a second transaction (the limitation API Contracts v1.5's Status note records as its decision 5: a failure between the two transactions leaves an option-less draft that cannot be approved and is replaced by the next generate). Modules with an FR-080 prerequisite (`architecture`, `ui-requirements`, `backlog`, `brd`, `erd`) refuse inside `generate` before any model call; the route checks the same prerequisite first so the client gets `409 PREREQUISITE_NOT_APPROVED` rather than a 500.
 
 #### `requirements`
 - **Item type:** `requirement`, including `payload.type='constraint'` items (TR FR-010).
@@ -566,6 +568,12 @@ Every module also exports `generate(ctx: { projectId: string; feedback?: string;
 - **Generation prerequisite:** approved Requirements + Architecture + UI Requirements.
 - **Manual revision:** supported.
 - Epic/Story parent resolution: `toCandidates` is pure. It tags every Epic candidate with `outputKey` (the model's output-local Epic label - the Epic's `displayKey` in that response) and every candidate with its own `itemType`; Story candidates carry that same label as `parentDisplayKey` (`outputSchema` guarantees it names an Epic in the same output). `createDraftFromGeneration` mints Epics before Stories into the one draft, and after the Epic group is persisted - before the Story group - rewrites each Story's label to the real `display_key` of the Epic that carried it (real keys don't exist earlier: the allocator never reuses keys, so labels and real keys drift on any regeneration). `matchAndPersistItems` then resolves that real key to `parent_logical_item_id`; it never sees a model label.
+
+#### `brd` and `erd` (BR-012, FR-086..088; post-P0)
+- **Item type:** none. Structured document sections live in `artifact_version.payload`; `toCandidates` returns `[]` and no module writes `logical_item` or `semantic_dependency`.
+- **Generation prerequisites:** BRD requires approved Requirements; ERD requires approved Requirements and Architecture. The route passes the captured source version ids to each module, as it does for the existing types (INV-006).
+- **Quality gate:** validated structured payload and nonempty required sections, without an item-level gate.
+- **Manual revision:** unsupported; regenerate with feedback. The existing lifecycle approval remains the only status write path. `artifact-lifecycle` reads `generation_context_ref` for FR-088 source-currentness and refuses approval of a document draft whose source versions are no longer current.
 
 **Rule:** artifact-type modules never import each other. A Backlog Story's dependency on a UI Requirement item is expressed only as a `upstreamRefs` display key resolved by `dependency-binding` against `ui-requirements`'s already-approved output - `backlog` never imports `ui-requirements`'s code.
 
@@ -800,7 +808,7 @@ Each module folder exports its public surface from an `index.ts`; nothing outsid
 |---|---|
 | 1 | `db`, `auth`, `artifact-lifecycle` (tables + guards only, no generation yet) |
 | 2 | `identity`, `dependency-binding`, `impact`, `artifact-lifecycle.createDraftFromGeneration`/`createManualRevisionDraft` |
-| 3 | `architecture-materialization`, `artifact-lifecycle.approveVersion`/`approveWithOverride`, all four artifact-type modules |
+| 3 | `architecture-materialization`, `artifact-lifecycle.approveVersion`/`approveWithOverride`, all six artifact-type modules |
 | 4 | `external-operations`, `github`, `jira`, `stitch` |
 
 This matches the ERD's own risk ordering: the lineage core (layers 1-2) is built and tested against the Appendix C suite before any artifact-type module exists to generate real data for it.

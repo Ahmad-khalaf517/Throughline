@@ -47,12 +47,12 @@ None. P0 data size is tens to low hundreds of rows per project (ERD "Performance
 
 ### 1.7 The `:type` path segment
 
-Routes parameterized by artifact type use exactly the `artifact.type` CHECK values from the ERD: `requirements`, `architecture`, `ui_requirements`, `backlog`. There is no separate API-level naming for artifact types, to avoid a translation layer that could drift from the database enum. Any other `:type` value is `404 NOT_FOUND`, decided only after the caller is authenticated and `requireProjectOwner` has passed, so an unknown type on someone else's project answers exactly what a valid type on it would. Likewise a path id that is not a uuid (`:projectId`, `:versionId`, `:logicalItemId`) is `404 NOT_FOUND`, never a database error; a well-formed `:logicalItemId` that is not in the version is `409 ITEM_NOT_IN_VERSION` (section 5).
+Routes parameterized by artifact type use exactly the `artifact.type` CHECK values from the ERD: `requirements`, `architecture`, `ui_requirements`, `backlog`, `brd`, `erd`. There is no separate API-level naming for artifact types, to avoid a translation layer that could drift from the database enum. Any other `:type` value is `404 NOT_FOUND`, decided only after the caller is authenticated and `requireProjectOwner` has passed, so an unknown type on someone else's project answers exactly what a valid type on it would. Likewise a path id that is not a uuid (`:projectId`, `:versionId`, `:logicalItemId`) is `404 NOT_FOUND`, never a database error; a well-formed `:logicalItemId` that is not in the version is `409 ITEM_NOT_IN_VERSION` (section 5).
 
 ### 1.8 Common DTOs
 
 ```ts
-type ArtifactType = 'requirements' | 'architecture' | 'ui_requirements' | 'backlog';
+type ArtifactType = 'requirements' | 'architecture' | 'ui_requirements' | 'backlog' | 'brd' | 'erd';
 type ArtifactVersionStatus = 'draft' | 'approved' | 'superseded' | 'rejected';
 
 interface ProjectDTO {
@@ -77,6 +77,7 @@ interface ArtifactVersionDTO {
   items: ItemVersionDTO[];
   options: ArchitectureOptionDTO[] | null;              // architecture only, else null
   selectedArchitectureOptionId: string | null;           // architecture only, set once approved
+  sourceCurrent: boolean | null;              // BRD/ERD only: captured source versions still approved; null for other types
   createdAt: string; updatedAt: string;
 }
 
@@ -169,7 +170,9 @@ Permanently deletes the project and everything that hangs off it - every artifac
 
 ## 4. Artifacts and versions
 
-These routes are generic across all four artifact types; the type-specific parts (prompt, schema, quality gate) live in the cited artifact-type module (Module Boundaries 4.4), selected by the `:type` path segment.
+These routes are generic across all six artifact types; the type-specific parts (prompt, schema, quality gate) live in the cited artifact-type module (Module Boundaries 4.4), selected by the `:type` path segment. BRD and ERD are post-P0 terminal document artifacts (TR FR-086..088): their `items` are always `[]`, `options` is `null`, and `sourceCurrent` reports whether their captured source versions remain the current approved versions.
+
+For BRD and ERD, `POST .../approve` returns `409 SOURCE_VERSION_CHANGED` when a captured source version is no longer the current approved version. Regeneration is the repair path; an impact override note does not bypass this guard. `GET .../versions`, `GET .../current`, and `GET /api/artifact-versions/:versionId` all include `sourceCurrent` in each returned version DTO.
 
 ### `GET /api/projects/:projectId/artifacts/:type/versions`
 
@@ -190,7 +193,7 @@ Full detail including items (each with `impact` populated from `impact.getWarnin
 
 ### `POST /api/projects/:projectId/artifacts/:type/generate`
 
-AI generation. Requires the prerequisite artifacts to be approved (TR FR-080): `architecture` needs `requirements`; `ui_requirements` needs `requirements` + `architecture`; `backlog` needs all three.
+AI generation. Requires the prerequisite artifacts to be approved (TR FR-080): `architecture` needs `requirements`; `ui_requirements` needs `requirements` + `architecture`; `backlog` needs all three; `brd` needs `requirements`; `erd` needs `requirements` + `architecture`.
 
 `-> artifact-lifecycle.createDraftFromGeneration`, using the `:type` module's `buildPrompt`/`outputSchema`/`toCandidates` (its `generate` is the callback; the route threads the callback's own captured `baseVersionId`/`contextSourceVersionIds` into it, Module Boundaries 4.4). For `architecture` only, a second domain call follows a non-stale result: `-> architecture.createOptions(draft.id, options)` (Module Boundaries 4.4), in a second transaction (v1.5 note, decision 5).
 
@@ -211,7 +214,7 @@ Manual revision: a new draft with every item unchanged, no model call (ERD 3.6, 
 
 **Request:** none
 **Response `200`:** `{ version: ArtifactVersionDTO }`
-**Errors:** `409 PREREQUISITE_NOT_APPROVED`, `409 NO_APPROVED_VERSION` (nothing to revise yet), `422 MANUAL_REVISION_UNSUPPORTED` for `architecture` (ERD 3.6: Architecture has no manual revision path)
+**Errors:** `409 PREREQUISITE_NOT_APPROVED`, `409 NO_APPROVED_VERSION` (nothing to revise yet), `422 MANUAL_REVISION_UNSUPPORTED` for `architecture`, `brd`, and `erd` (these types have no manual item revision path)
 
 ### `GET /api/artifact-versions/:versionId/quality-gate`
 
@@ -466,6 +469,7 @@ A `manual_fallback` result is `200`, not an error: FR-054 requires the workflow 
 | `UPSTREAM_REMOVED` | 409 | Manual edit cannot rebind: an upstream item was removed |
 | `CONFIRMATION_REQUIRED` | 409 | Item edit changes dependencies; resubmit with `confirmed: true` |
 | `APPROVAL_BLOCKED` | 409 | Approval gate found unacknowledged warnings (ERD 6.5) |
+| `SOURCE_VERSION_CHANGED` | 409 | A BRD or ERD draft's captured source version changed before approval (FR-088) |
 | `STACK_UNCHANGED_DECISIONS` | 409 | Architecture stack changed with no changed decision (ERD 5.5) |
 | `OPTION_NOT_SELECTED` / `OPTION_COUNT_INVALID` | 422 | Architecture approval guard-trigger conditions |
 | `NOT_CURRENTLY_FLAGGED` | 409 | `POST /api/impact/acknowledgements`: no row `impact.getWarnings` reports at that moment matches BOTH the subject and `obsoleteUpstreamItemVersionId` - the warning is gone, or was never this pair's (includes a subject that is a draft or otherwise non-current item, and a root the subject's warning does not trace to) |

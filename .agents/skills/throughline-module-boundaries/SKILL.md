@@ -13,7 +13,7 @@ Source: `docs/Throughline_Module_Boundaries.md`. Frozen, derived from the frozen
 Layer 0  db, auth, ai-client                                 foundation, no domain logic
 Layer 1  identity, dependency-binding, impact                lineage core: pure + thin persistence
 Layer 2  artifact-lifecycle, architecture-materialization     state machine + transactions
-Layer 3  requirements, architecture, ui-requirements, backlog artifact-type modules
+Layer 3  requirements, architecture, ui-requirements, backlog, brd, erd artifact-type modules
 Layer 4  external-operations                                  shared external-write protocol
 Layer 5  github, jira, stitch                                 provider integrations
 Layer 6  api (Next.js route handlers)                          thin: auth + ownership + call layer 3/5
@@ -35,7 +35,7 @@ Peers in the same layer never import each other. This is what stops `backlog` im
 | `impact` | 1 | `impact_acknowledgement` |
 | `artifact-lifecycle` | 2 | `project`, `artifact`, `artifact_version`, `approval_event`, `generation_context_ref` |
 | `architecture-materialization` | 2 | `architecture_option` |
-| `requirements` / `architecture` / `ui-requirements` / `backlog` | 3 | payload shape + prompt only - no table of their own; persistence goes through `identity` / `artifact-lifecycle` |
+| `requirements` / `architecture` / `ui-requirements` / `backlog` / `brd` / `erd` | 3 | payload shape + prompt only - no table of their own; persistence goes through `identity` / `artifact-lifecycle` (BRD/ERD have no logical items) |
 | `external-operations` | 4 | `external_operation`, `external_ref` |
 | `github` / `jira` | 5 | no table of their own |
 | `stitch` | 5 | `stitch_output` |
