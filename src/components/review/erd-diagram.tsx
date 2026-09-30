@@ -1,7 +1,7 @@
 'use client';
 
 import { useId, useRef } from 'react';
-import { Download } from 'lucide-react';
+import { Download, Maximize2, X } from 'lucide-react';
 
 export interface ErdAttribute {
   name: string;
@@ -30,6 +30,8 @@ export interface ErdModel {
 
 type Box = { x: number; y: number; width: number; height: number };
 type PositionedEntity = ErdEntity & { box: Box };
+type Multiplicity = 'one' | 'many' | 'zero-or-one' | 'zero-or-many';
+type Endpoint = { x: number; y: number; direction: -1 | 1 };
 
 const CARD_WIDTH = 346;
 const HEADER_HEIGHT = 48;
@@ -159,10 +161,8 @@ function relationPath(from: Box, to: Box) {
       d: `M ${edge} ${fromCenter - 10} H ${elbow} V ${fromCenter + 10} H ${edge}`,
       labelX: elbow + 14,
       labelY: fromCenter,
-      startX: edge,
-      startY: fromCenter - 10,
-      endX: edge,
-      endY: fromCenter + 10,
+      fromEndpoint: { x: edge, y: fromCenter - 10, direction: (isLeftColumn ? 1 : -1) as -1 | 1 },
+      toEndpoint: { x: edge, y: fromCenter + 10, direction: (isLeftColumn ? 1 : -1) as -1 | 1 },
     };
   }
   if (from.x !== to.x) {
@@ -175,10 +175,14 @@ function relationPath(from: Box, to: Box) {
       d: `M ${left.x + left.width} ${leftY} H ${gutterX} V ${rightY} H ${right.x}`,
       labelX: gutterX,
       labelY: (leftY + rightY) / 2,
-      startX: left.x + left.width,
-      startY: leftY,
-      endX: right.x,
-      endY: rightY,
+      fromEndpoint:
+        from.x < to.x
+          ? { x: left.x + left.width, y: leftY, direction: 1 as const }
+          : { x: right.x, y: rightY, direction: -1 as const },
+      toEndpoint:
+        from.x < to.x
+          ? { x: right.x, y: rightY, direction: -1 as const }
+          : { x: left.x + left.width, y: leftY, direction: 1 as const },
     };
   }
   const isLeftColumn = from.x === MARGIN;
@@ -188,11 +192,58 @@ function relationPath(from: Box, to: Box) {
     d: `M ${edgeX} ${fromCenter} H ${gutterX} V ${toCenter} H ${edgeX}`,
     labelX: gutterX,
     labelY: (fromCenter + toCenter) / 2,
-    startX: edgeX,
-    startY: fromCenter,
-    endX: edgeX,
-    endY: toCenter,
+    fromEndpoint: { x: edgeX, y: fromCenter, direction: (isLeftColumn ? 1 : -1) as -1 | 1 },
+    toEndpoint: { x: edgeX, y: toCenter, direction: (isLeftColumn ? 1 : -1) as -1 | 1 },
   };
+}
+
+function parseMultiplicity(value: string): Multiplicity | null {
+  const token = value.trim().toLowerCase().replace(/[\s_]/g, '');
+  if (token === 'one' || token === '1' || token === 'exactlyone') return 'one';
+  if (token === 'many' || token === 'n' || token === 'm' || token === '*') return 'many';
+  if (token === 'zero-or-one' || token === '0..1' || token === 'optionalone') return 'zero-or-one';
+  if (
+    token === 'zero-or-many' ||
+    token === '0..*' ||
+    token === '0..n' ||
+    token === 'optionalmany'
+  ) {
+    return 'zero-or-many';
+  }
+  return null;
+}
+
+/** Only recognized cardinalities get semantic endpoint marks; preserve other model text. */
+export function parseCardinality(value: string): [Multiplicity, Multiplicity] | null {
+  const normalized = value.trim().toLowerCase().replace(/[–—→]/g, '-');
+  if (/^1\s*\.\.\s*(?:\*|n|many)$/.test(normalized)) return ['one', 'many'];
+  const parts = normalized.split(/\s*(?:-?to-?|:)\s*/);
+  if (parts.length !== 2) return null;
+  const from = parseMultiplicity(parts[0] ?? '');
+  const to = parseMultiplicity(parts[1] ?? '');
+  return from && to ? [from, to] : null;
+}
+
+function CardinalityMark({ endpoint, kind }: { endpoint: Endpoint; kind: Multiplicity }) {
+  const { x, y, direction } = endpoint;
+  const many = kind === 'many' || kind === 'zero-or-many';
+  const optional = kind === 'zero-or-one' || kind === 'zero-or-many';
+  return (
+    <g data-cardinality-mark={kind} fill="none" stroke="#9f381c" strokeWidth={2}>
+      {many ? (
+        <path
+          d={`M ${x + direction * 13} ${y} L ${x + direction * 2} ${y - 8} M ${x + direction * 13} ${y} L ${x + direction * 2} ${y} M ${x + direction * 13} ${y} L ${x + direction * 2} ${y + 8}`}
+        />
+      ) : (
+        <line x1={x + direction * 7} y1={y - 8} x2={x + direction * 7} y2={y + 8} />
+      )}
+      {optional ? (
+        <circle cx={x + direction * 21} cy={y} r={4.5} fill="#fffdfb" />
+      ) : !many ? (
+        <line x1={x + direction * 14} y1={y - 8} x2={x + direction * 14} y2={y + 8} />
+      ) : null}
+    </g>
+  );
 }
 
 function visibleText(value: string, max: number) {
@@ -267,6 +318,8 @@ function EntityCard({ entity }: { entity: PositionedEntity }) {
 
 export function ErdDiagram({ model, filename }: { model: ErdModel; filename: string }) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const expandedCanvasRef = useRef<HTMLDivElement>(null);
   const rawId = useId();
   const titleId = `${rawId}-title`;
   const descriptionId = `${rawId}-description`;
@@ -278,6 +331,7 @@ export function ErdDiagram({ model, filename }: { model: ErdModel; filename: str
     if (!svg) return;
     const copy = svg.cloneNode(true) as SVGSVGElement;
     copy.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    copy.removeAttribute('class');
     const url = URL.createObjectURL(
       new Blob([new XMLSerializer().serializeToString(copy)], { type: 'image/svg+xml' }),
     );
@@ -288,6 +342,24 @@ export function ErdDiagram({ model, filename }: { model: ErdModel; filename: str
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
+  function expandDiagram() {
+    const svg = svgRef.current;
+    const dialog = dialogRef.current;
+    const canvas = expandedCanvasRef.current;
+    if (!svg || !dialog || !canvas) return;
+    const copy = svg.cloneNode(true) as SVGSVGElement;
+    copy.removeAttribute('class');
+    copy.setAttribute('width', String(layout.width));
+    copy.setAttribute('height', String(layout.height));
+    const title = copy.querySelector('title');
+    const description = copy.querySelector('desc');
+    if (title) title.id = `${rawId}-expanded-title`;
+    if (description) description.id = `${rawId}-expanded-description`;
+    copy.setAttribute('aria-labelledby', `${rawId}-expanded-title ${rawId}-expanded-description`);
+    canvas.replaceChildren(copy);
+    dialog.showModal();
+  }
+
   return (
     <section className="app-card p-6" aria-labelledby="erd-diagram-heading">
       <div className="document-print-hide mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -296,17 +368,30 @@ export function ErdDiagram({ model, filename }: { model: ErdModel; filename: str
           <h3 id="erd-diagram-heading" className="text-on-surface mt-1 text-lg font-semibold">
             Entity relationship diagram
           </h3>
+          <p className="text-on-surface-variant mt-1 text-xs">
+            {model.entities.length} tables · {model.relationships.length} relationships
+          </p>
         </div>
-        <button
-          type="button"
-          onClick={downloadSvg}
-          className="border-surface-dim text-on-surface focus-visible:ring-primary inline-flex min-h-10 items-center gap-2 rounded-lg border px-4 text-sm font-medium focus-visible:ring-2"
-        >
-          <Download className="size-4" aria-hidden="true" />
-          Download SVG
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={expandDiagram}
+            className="border-surface-dim text-on-surface focus-visible:ring-primary inline-flex min-h-10 items-center gap-2 rounded-lg border px-4 text-sm font-medium focus-visible:ring-2"
+          >
+            <Maximize2 className="size-4" aria-hidden="true" />
+            Expand
+          </button>
+          <button
+            type="button"
+            onClick={downloadSvg}
+            className="border-surface-dim text-on-surface focus-visible:ring-primary inline-flex min-h-10 items-center gap-2 rounded-lg border px-4 text-sm font-medium focus-visible:ring-2"
+          >
+            <Download className="size-4" aria-hidden="true" />
+            Download SVG
+          </button>
+        </div>
       </div>
-      <div className="erd-diagram overflow-x-auto rounded-lg border border-[#ded4cc] bg-[#f8f6f2]">
+      <div className="erd-diagram overflow-hidden rounded-lg border border-[#ded4cc] bg-[#f8f6f2]">
         <svg
           ref={svgRef}
           xmlns="http://www.w3.org/2000/svg"
@@ -315,7 +400,7 @@ export function ErdDiagram({ model, filename }: { model: ErdModel; filename: str
           viewBox={`0 0 ${layout.width} ${layout.height}`}
           role="img"
           aria-labelledby={`${titleId} ${descriptionId}`}
-          className="block max-w-none"
+          className="block h-80 w-full"
         >
           <title id={titleId}>Entity relationship diagram</title>
           <desc id={descriptionId}>
@@ -331,8 +416,6 @@ export function ErdDiagram({ model, filename }: { model: ErdModel; filename: str
               <g key={`${relation.from}-${relation.to}-${index}`}>
                 <title>{`${relation.from} to ${relation.to}: ${relation.cardinality}. ${relation.explanation}`}</title>
                 <path d={path.d} fill="none" stroke="#9f381c" strokeWidth={2} />
-                <circle cx={path.startX} cy={path.startY} r={4} fill="#9f381c" />
-                <circle cx={path.endX} cy={path.endY} r={4} fill="#9f381c" />
               </g>
             );
           })}
@@ -344,6 +427,15 @@ export function ErdDiagram({ model, filename }: { model: ErdModel; filename: str
             const to = byName.get(relation.to);
             if (!from || !to) return null;
             const path = relationPath(from.box, to.box);
+            const marks = parseCardinality(relation.cardinality);
+            if (marks) {
+              return (
+                <g key={`marks-${index}`}>
+                  <CardinalityMark endpoint={path.fromEndpoint} kind={marks[0]} />
+                  <CardinalityMark endpoint={path.toEndpoint} kind={marks[1]} />
+                </g>
+              );
+            }
             const label = visibleText(relation.cardinality, 19);
             const labelWidth = Math.max(30, label.length * 7 + 18);
             return (
@@ -373,9 +465,32 @@ export function ErdDiagram({ model, filename }: { model: ErdModel; filename: str
         </svg>
       </div>
       <p className="document-print-hide text-on-surface-variant mt-3 text-xs">
-        PK = primary key · FK = foreign key · ? = nullable column. Scroll horizontally to inspect
-        larger diagrams.
+        PK = primary key · FK = foreign key · ? = nullable column · || = one · crow&apos;s foot =
+        many · ○ = optional. Expand to inspect the full-size diagram.
       </p>
+      <dialog
+        ref={dialogRef}
+        aria-label="Expanded entity relationship diagram"
+        className="document-print-hide fixed inset-4 m-auto max-h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-none overflow-hidden rounded-xl border border-[#ded4cc] bg-[#fffdfb] p-0 shadow-xl backdrop:bg-black/50"
+      >
+        <div className="border-surface-dim bg-surface-container-lowest sticky top-0 z-10 flex items-center justify-between gap-3 border-b p-4">
+          <p className="text-on-surface text-sm font-semibold">
+            Entity relationship diagram · full size
+          </p>
+          <button
+            type="button"
+            onClick={() => dialogRef.current?.close()}
+            className="border-surface-dim text-on-surface focus-visible:ring-primary inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium focus-visible:ring-2"
+          >
+            <X className="size-4" aria-hidden="true" />
+            Close
+          </button>
+        </div>
+        <div
+          ref={expandedCanvasRef}
+          className="max-h-[calc(100vh-6rem)] overflow-auto bg-[#f8f6f2]"
+        />
+      </dialog>
       <div className="sr-only">
         {model.entities.map((entity) => (
           <section key={entity.name}>
