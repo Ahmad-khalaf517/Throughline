@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { CircleAlert, CircleCheck } from 'lucide-react';
 import { FieldShell } from '@/components/auth/field-shell';
@@ -16,12 +16,26 @@ import {
   type ExistingRepository,
   type RepoNameAvailability,
 } from '@/lib/external-preview';
+import {
+  connectionAfterWriteError,
+  isWriteWithheld,
+  type PreviewConnection,
+} from '@/lib/connections-ui';
 import { PreviewShell, type PreviewState } from './preview-shell';
+import { ConnectionSteps } from './connection-steps';
+import { GithubOwnerRow, type ProjectTargets } from './target-pickers';
 import { ImpactGate } from './impact-gate';
 import { OperationStatus } from './operation-status';
+import {
+  RemoveRepositoryLinkDialog,
+  RepositoryRemovedCard,
+  type RemovedRepository,
+} from './remove-repository-link';
 
 interface GithubInitPanelProps {
   projectId: string;
+  /** The project's saved GitHub owner (FR-088); `null` = the default, the connected account. */
+  githubOwner: string | null;
 }
 
 interface GithubPreviewData {
@@ -30,7 +44,11 @@ interface GithubPreviewData {
   /** The pinned starter whose files will be added, or `null` (docs-only). */
   starter: { id: string; label: string; files: string[]; notScaffolded: string[] } | null;
   impact: ImpactRowDTO[];
+  /** FR-089: connection status and the connected account's name. */
+  connection?: PreviewConnection;
 }
+
+type Visibility = 'public' | 'private';
 
 type GithubWriteResult =
   { kind: 'completed'; ref: ExternalRefDTO } | { kind: 'pending'; operationId: string };
@@ -50,14 +68,30 @@ const AVAILABILITY_TONE = {
   error: { className: 'text-error', Icon: CircleAlert },
 } as const;
 
+const VISIBILITY_OPTIONS: { value: Visibility; label: string; description: string }[] = [
+  {
+    value: 'public',
+    label: 'Public',
+    description: 'anyone on GitHub can read the README and ADRs',
+  },
+  {
+    value: 'private',
+    label: 'Private',
+    description: 'only you and people you add on GitHub',
+  },
+];
+
 const INPUT_CLASSNAME =
   'border-outline-variant bg-surface-container-lowest text-on-surface placeholder:text-outline focus:border-primary focus:bg-surface-container-low focus:ring-primary h-11 w-full rounded-lg border px-3.5 text-sm transition-colors focus:ring-1 focus:outline-none';
 
 const SUBMIT_CLASSNAME =
   'bg-primary-container text-on-primary-container hover:bg-primary-container-hover focus-visible:ring-primary flex h-11 items-center justify-center rounded-lg px-4 text-sm font-medium shadow-sm transition-all focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60';
 
+const SECONDARY_CLASSNAME =
+  'border-outline-variant text-on-surface hover:bg-surface-container-low focus-visible:ring-primary mt-4 inline-flex h-9 items-center justify-center rounded-lg border px-3 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none';
+
 /**
- * `POST /api/projects/:projectId/github/preview` + `.../github/init`
+ * `POST /api/projects/:projectId/github/preview` +`.../github/init`
  * (API Contracts section 8; E5-S9), plus `.../github/check-name` so the user
  * can see whether a name is free before submitting. Client-`fetch` mutation pattern copied
  * from `new-project-form.tsx`: `pending`/`error` state, `401 -> /sign-in`,
@@ -70,7 +104,7 @@ const SUBMIT_CLASSNAME =
  * `min(1)`, then the field is populated from the response's `repoName`, not
  * the other way around. This is surprising, hence spelled out here.
  */
-export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
+export function GithubInitPanel({ projectId, githubOwner }: GithubInitPanelProps) {
   const router = useRouter();
   const [state, setState] = useState<PreviewState>({ status: 'loading' });
   const [preview, setPreview] = useState<GithubPreviewData | null>(null);
@@ -83,7 +117,22 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
   // Set when the project already has a repository (409 GITHUB_ALREADY_INITIALIZED
   // with a link) - the screen then shows that repository instead of a form.
   const [existing, setExisting] = useState<ExistingRepository | null>(null);
+  // Set after the repository link was removed (FR-091, UC-S10).
+  const [removed, setRemoved] = useState<RemovedRepository | null>(null);
+  const [connection, setConnection] = useState<PreviewConnection | null>(null);
+  const [visibility, setVisibility] = useState<Visibility>('public');
+  const [owner, setOwner] = useState<string | null>(githubOwner);
+  // Bumped when the owner changes so the name availability is checked again.
+  const [ownerVersion, setOwnerVersion] = useState(0);
   const typedName = repoName.trim();
+  // The name check needs the caller's own connection; without one it stays quiet.
+  const connected = connection?.status === 'active';
+
+  // Re-load the preview (after a connect / disconnect made from the steps)
+  // without flipping the screen back to "loading": the effect below simply runs
+  // again, and the steps stay mounted.
+  const [reloadKey, setReloadKey] = useState(0);
+  const reloadPreview = useCallback(() => setReloadKey((key) => key + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,15 +187,14 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
 
         const data = body as GithubPreviewData;
         setPreview(data);
-        setRepoName(data.repoName);
+        setConnection(data.connection ?? null);
+        setRepoName((current) => current || data.repoName);
         setState({ status: 'ready' });
       } catch {
-        if (!cancelled) {
-          setState({
-            status: 'error',
-            message: 'Could not reach the server. Check your connection and try again.',
-          });
-        }
+        setState({
+          status: 'error',
+          message: 'Could not reach the server. Check your connection and try again.',
+        });
       }
     }
 
@@ -154,7 +202,7 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [projectId, router]);
+  }, [projectId, router, reloadKey]);
 
   // `POST .../github/check-name` (API Contracts section 8), advisory only:
   // `github/init` still decides for real. Waits for the preview (which
@@ -162,7 +210,7 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
   // edit. No state is set synchronously here - "checking" is derived from
   // `availability` being for different text than the field holds now.
   useEffect(() => {
-    if (state.status !== 'ready' || result || typedName === '') return;
+    if (state.status !== 'ready' || !connected || result || typedName === '') return;
 
     const controller = new AbortController();
     const timer = setTimeout(async () => {
@@ -207,7 +255,7 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [projectId, router, state.status, result, typedName]);
+  }, [projectId, router, state.status, connected, result, typedName, ownerVersion]);
 
   const availabilityCopy = describeRepoNameAvailability(availability, typedName);
   const availabilityTone = availabilityCopy ? AVAILABILITY_TONE[availabilityCopy.tone] : null;
@@ -224,7 +272,7 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
       const response = await fetch(`/api/projects/${projectId}/github/init`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repoName, impactAcknowledged: acknowledged }),
+        body: JSON.stringify({ repoName, impactAcknowledged: acknowledged, visibility }),
       });
 
       if (response.status === 401) {
@@ -264,6 +312,19 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
           // re-enabling submit.
         }
 
+        // FR-089: a 409 CONNECTION_REQUIRED / RECONNECT_REQUIRED is answered by
+        // the steps at the top (connect / reconnect), not a dead-end error.
+        // (TARGET_REQUIRED is not folded in: GitHub needs no chosen target, so
+        // it is shown as the error it is.)
+        const nextConnection =
+          errorBody.error?.code === 'TARGET_REQUIRED'
+            ? null
+            : connectionAfterWriteError(errorBody.error?.code, connection);
+        if (nextConnection) {
+          setConnection(nextConnection);
+          return;
+        }
+
         // NAME_TAKEN_BY_OTHER (and every other error here) leaves `repoName`
         // untouched and the field editable - the user can immediately try a
         // different name (API Contracts section 8).
@@ -284,102 +345,192 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
     }
   }
 
-  if (existing) return <ExistingRepositoryCard repository={existing} />;
+  // FR-091: the link was removed here - show that (and that the repository is
+  // still on GitHub), then let the user go back to the normal step flow.
+  if (removed) {
+    return (
+      <RepositoryRemovedCard
+        removed={removed}
+        onCreateNew={() => {
+          setRemoved(null);
+          setExisting(null);
+          setPreview(null);
+          setResult(null);
+          setAvailability(null);
+          setRepoName('');
+          setState({ status: 'loading' });
+          reloadPreview();
+        }}
+      />
+    );
+  }
+
+  if (existing) {
+    return (
+      <ExistingRepositoryCard
+        projectId={projectId}
+        repository={existing}
+        onRemoved={(repository) => {
+          setRemoved(repository);
+          setExisting(null);
+        }}
+      />
+    );
+  }
+
+  function handleOwnerSaved(targets: ProjectTargets) {
+    setOwner(targets.githubOwner);
+    // The name may be free under one owner and taken under another.
+    setAvailability(null);
+    setOwnerVersion((version) => version + 1);
+  }
+
+  // Until GitHub is connected the preview stays readable but locked (dimmed,
+  // `inert` so no control - the submit included - can be reached by keyboard).
+  const locked = connection !== null && !connected;
 
   return (
-    <PreviewShell state={state}>
-      {preview &&
-        (result ? (
-          <GithubResultView result={result} />
-        ) : (
-          <form onSubmit={handleSubmit} className="flex flex-col gap-6">
-            <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
-              <p className="text-on-surface text-sm font-medium">
-                Mode: <span className="font-mono-code">{preview.mode}</span>
-                <span className="text-outline mx-2" aria-hidden="true">
-                  ·
-                </span>
-                Visibility: <span className="font-mono-code">public</span>
-              </p>
-              <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
-                {preview.starter
-                  ? `Adds a ${preview.starter.label} starter generated from the approved stack (${preview.starter.files.length} files), plus a README with the stack and trade-offs and one ADR per approved decision.`
-                  : 'No pinned starter matches this stack, so the repository is created with documentation only - a README with the stack and trade-offs, and one ADR per approved decision.'}
-              </p>
-              {preview.starter && (
-                <>
-                  <details className="text-on-surface-variant mt-2 text-sm">
-                    <summary className="text-on-surface cursor-pointer font-medium">
-                      Starter files ({preview.starter.files.length})
-                    </summary>
-                    <ul className="font-mono-code mt-2 columns-1 gap-6 text-xs leading-relaxed sm:columns-2">
-                      {preview.starter.files.map((path) => (
-                        <li key={path}>{path}</li>
-                      ))}
-                    </ul>
-                  </details>
-                  {preview.starter.notScaffolded.length > 0 && (
-                    <p className="text-on-surface-variant mt-2 text-sm leading-relaxed">
-                      Not generated (documentation only): {preview.starter.notScaffolded.join('; ')}
-                      .
-                    </p>
-                  )}
-                </>
-              )}
-              <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
-                The repository is created <strong className="font-medium">public</strong> - anyone
-                on GitHub can read its README and ADRs.
-              </p>
-            </div>
-
-            <FieldShell id="github-repo-name" label="Repository name">
-              <input
-                id="github-repo-name"
-                value={repoName}
-                onChange={(event) => setRepoName(event.target.value)}
-                aria-describedby="github-repo-name-availability"
-                aria-invalid={isRepoNameBlocked(availability, typedName) || undefined}
-                autoComplete="off"
-                spellCheck={false}
-                className={INPUT_CLASSNAME}
-              />
-              <p
-                id="github-repo-name-availability"
-                role="status"
-                aria-live="polite"
-                className={`flex min-h-4 items-start gap-1.5 text-xs ${availabilityTone?.className ?? ''}`}
-              >
-                {AvailabilityIcon && (
-                  <AvailabilityIcon className="mt-px size-3.5 shrink-0" aria-hidden="true" />
-                )}
-                <span>{availabilityCopy?.text}</span>
-              </p>
-            </FieldShell>
-
-            <ImpactGate
-              impact={preview.impact}
-              acknowledged={acknowledged}
-              onAcknowledgedChange={setAcknowledged}
-              idPrefix="github-init"
+    <div className="flex flex-col gap-6">
+      {connection && (
+        <ConnectionSteps
+          provider="github"
+          connection={connection}
+          returnTo={`/projects/${projectId}/outputs/github`}
+          onChanged={reloadPreview}
+          configure={
+            <GithubOwnerRow
+              projectId={projectId}
+              savedOwner={owner}
+              accountLogin={connection.accountName}
+              onSaved={handleOwnerSaved}
             />
-
-            {submitError && <FormMessage variant="error">{submitError}</FormMessage>}
-
-            <button
-              type="submit"
-              disabled={
-                submitting ||
-                typedName.length === 0 ||
-                isRepoNameBlocked(availability, typedName) ||
-                isExternalWriteBlocked(preview.impact, acknowledged)
-              }
-              className={SUBMIT_CLASSNAME}
+          }
+        />
+      )}
+      <PreviewShell state={state}>
+        {preview &&
+          (result ? (
+            <GithubResultView result={result} />
+          ) : (
+            <form
+              onSubmit={handleSubmit}
+              inert={locked}
+              className={`flex flex-col gap-6 transition-opacity ${locked ? 'opacity-60' : ''}`}
             >
-              {submitting ? 'Creating repository…' : 'Create repository'}
-            </button>
-          </form>
-        ))}
-    </PreviewShell>
+              <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
+                <p className="text-on-surface text-sm font-medium">
+                  Mode: <span className="font-mono-code">{preview.mode}</span>
+                  <span className="text-outline mx-2" aria-hidden="true">
+                    ·
+                  </span>
+                  Visibility: <span className="font-mono-code">{visibility}</span>
+                </p>
+                <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
+                  {preview.starter
+                    ? `Adds a ${preview.starter.label} starter generated from the approved stack (${preview.starter.files.length} files), plus a README with the stack and trade-offs and one ADR per approved decision.`
+                    : 'No pinned starter matches this stack, so the repository is created with documentation only - a README with the stack and trade-offs, and one ADR per approved decision.'}
+                </p>
+                {preview.starter && (
+                  <>
+                    <details className="text-on-surface-variant mt-2 text-sm">
+                      <summary className="text-on-surface cursor-pointer font-medium">
+                        Starter files ({preview.starter.files.length})
+                      </summary>
+                      <ul className="font-mono-code mt-2 columns-1 gap-6 text-xs leading-relaxed sm:columns-2">
+                        {preview.starter.files.map((path) => (
+                          <li key={path}>{path}</li>
+                        ))}
+                      </ul>
+                    </details>
+                    {preview.starter.notScaffolded.length > 0 && (
+                      <p className="text-on-surface-variant mt-2 text-sm leading-relaxed">
+                        Not generated (documentation only):{' '}
+                        {preview.starter.notScaffolded.join('; ')}.
+                      </p>
+                    )}
+                  </>
+                )}
+                <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">
+                  The repository is created <strong className="font-medium">{visibility}</strong> -{' '}
+                  {visibility === 'public'
+                    ? 'anyone on GitHub can read its README and ADRs.'
+                    : 'only you and the people you add on GitHub can read it.'}
+                </p>
+              </div>
+
+              <FieldShell id="github-repo-name" label="Repository name">
+                <input
+                  id="github-repo-name"
+                  value={repoName}
+                  onChange={(event) => setRepoName(event.target.value)}
+                  aria-describedby="github-repo-name-availability"
+                  aria-invalid={isRepoNameBlocked(availability, typedName) || undefined}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className={INPUT_CLASSNAME}
+                />
+                <p
+                  id="github-repo-name-availability"
+                  role="status"
+                  aria-live="polite"
+                  className={`flex min-h-4 items-start gap-1.5 text-xs ${availabilityTone?.className ?? ''}`}
+                >
+                  {AvailabilityIcon && (
+                    <AvailabilityIcon className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+                  )}
+                  <span>{availabilityCopy?.text}</span>
+                </p>
+              </FieldShell>
+
+              <fieldset className="flex flex-col gap-2">
+                <legend className="text-on-surface mb-1 text-sm font-medium">Visibility</legend>
+                {VISIBILITY_OPTIONS.map((option) => (
+                  <label
+                    key={option.value}
+                    className="text-on-surface flex items-start gap-2 text-sm"
+                  >
+                    <input
+                      type="radio"
+                      name="github-visibility"
+                      value={option.value}
+                      checked={visibility === option.value}
+                      onChange={() => setVisibility(option.value)}
+                      className="text-primary-container focus-visible:ring-primary mt-1 focus-visible:ring-2 focus-visible:outline-none"
+                    />
+                    <span>
+                      <span className="font-medium">{option.label}</span>
+                      <span className="text-on-surface-variant"> - {option.description}</span>
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+
+              <ImpactGate
+                impact={preview.impact}
+                acknowledged={acknowledged}
+                onAcknowledgedChange={setAcknowledged}
+                idPrefix="github-init"
+              />
+
+              {submitError && <FormMessage variant="error">{submitError}</FormMessage>}
+
+              <button
+                type="submit"
+                disabled={
+                  submitting ||
+                  isWriteWithheld(connection) ||
+                  typedName.length === 0 ||
+                  isRepoNameBlocked(availability, typedName) ||
+                  isExternalWriteBlocked(preview.impact, acknowledged)
+                }
+                className={SUBMIT_CLASSNAME}
+              >
+                {submitting ? 'Creating repository…' : 'Create repository'}
+              </button>
+            </form>
+          ))}
+      </PreviewShell>
+    </div>
   );
 }
 
@@ -387,7 +538,17 @@ export function GithubInitPanel({ projectId }: GithubInitPanelProps) {
  * The project already has its one repository (FR-031: one per project, no
  * re-initialization) - so instead of a form, say so and link to it.
  */
-function ExistingRepositoryCard({ repository }: { repository: ExistingRepository }) {
+function ExistingRepositoryCard({
+  projectId,
+  repository,
+  onRemoved,
+}: {
+  projectId: string;
+  repository: ExistingRepository;
+  onRemoved: (removed: RemovedRepository) => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
   return (
     <div className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
       <p className="text-on-surface text-sm font-medium">
@@ -407,6 +568,17 @@ function ExistingRepositoryCard({ repository }: { repository: ExistingRepository
       <p className="text-on-surface-variant mt-3 text-xs">
         Only one repository is created per project.
       </p>
+      <button type="button" onClick={() => setConfirming(true)} className={SECONDARY_CLASSNAME}>
+        Remove from Throughline
+      </button>
+      {confirming && (
+        <RemoveRepositoryLinkDialog
+          projectId={projectId}
+          repository={repository}
+          onClose={() => setConfirming(false)}
+          onRemoved={onRemoved}
+        />
+      )}
     </div>
   );
 }

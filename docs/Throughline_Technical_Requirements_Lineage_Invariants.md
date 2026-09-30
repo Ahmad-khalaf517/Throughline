@@ -1,10 +1,26 @@
 # Throughline - Technical Requirements & Lineage Invariants
 
-**Document version:** 1.6  
+**Document version:** 1.12
 **Project type:** AI-assisted software project initialization platform  
 **Delivery context:** Solo capstone project, 8 full-time development days  
-**Status:** Technical baseline aligned with Throughline BRD v2.4 and ERD/Data Model v1.9; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v1.5: added FR-003/FR-004 (BR-011) for the project dashboard overview and persistent navigation shell. v1.6: FR-032 now pins a small set of starters (Django, Next.js) instead of one, each a deterministic file set generated in scaffold mode (FR-031); BRD v2.4.  
+**Status:** v1.12: FR-093..095 add generated BRD/ERD documents. Technical baseline aligned with Throughline BRD v2.6 and ERD/Data Model v1.16; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v1.5: added FR-003/FR-004 (BR-011) for the project dashboard overview and persistent navigation shell. v1.6: FR-032 now pins a small set of starters (Django, Next.js) instead of one, each a deterministic file set generated in scaffold mode (FR-031); BRD v2.4. v1.7: per-user provider connections (BR-012) - new section 16B (FR-086 through FR-090), NFR-005 amended, the shared-credential model reversed at the project owner request. v1.11: UC-S11 adds FR-092 (create a Jira project from Throughline), the Jira OAuth scope set gains `manage:jira-project` (FR-086, NFR-005), and FR-087/FR-088 show the connected Jira site and the chosen project. v1.10: FR-091 corrected - the same repository name is reusable only once the old repository is deleted on GitHub. v1.9: UC-S10 adds FR-091 (remove a repository link without deleting the repository on GitHub); the Connections screen becomes the user-facing "Integrations" section in the navigation (FR-004, FR-087, UC-S7 note). v1.8: UC-S9 product feedback - the GitHub owner defaults to the connected account and the three provider screens get a guided step list (FR-088, FR-089 refined) and the GitHub repository visibility is user-selectable, public by default (FR-030, FR-031).
 **Primary audience:** Developer, technical reviewers, and AI coding agents
+
+### Revision 1.11 alignment
+
+UC-S11: **FR-092** (new, BR-008/BR-012) lets the user create a Jira project from the guided Jira screen instead of only picking an existing one. The Jira OAuth scope set becomes `read:jira-work write:jira-work manage:jira-project offline_access read:me` (FR-086, NFR-005); connections made before this change must reconnect once to grant it. FR-087 shows the connected Jira site; FR-088's Jira target is shown by key and name. It is a provider setup action, not an external write of an artifact output: no `external_operation`/`external_ref`, no schema change. FR ids are not renumbered.
+
+### Revision 1.9 alignment
+
+(1) **FR-091** (new, BR-008, FR-031): the user can remove a project's GitHub repository *record* from Throughline so a new repository can be created; Throughline never deletes anything on GitHub. No schema change. (2) **Navigation wording:** the FR-087 screen is presented to the user as **Integrations** (top-level entry in the persistent header navigation with an attention hint, plus an account-menu shortcut); the route stays `/connections`. FR-004's round 14 exception is amended accordingly; FR ids are not renumbered.
+
+### Revision 1.8 alignment
+
+UC-S9 (product feedback after trying UC-E1): (1) the GitHub owner no longer has to be picked. `project.github_owner` stays a nullable **override**; when it is NULL the repository is created under the connected GitHub account's own login (FR-088). (2) The GitHub, Jira and Stitch screens lead with a guided step list instead of a prompt below the form (FR-089). No BR text changes and no schema change (the column was already nullable); FR ids are unchanged, only FR-088 and FR-089 are refined, and FR-030/FR-031 now use FR-030's "visibility if configurable" clause.
+
+### Revision 1.7 alignment
+
+BRD v2.5 added **BR-012**: every signed-in user connects their own GitHub, Jira and Stitch accounts, and every external write is made with the acting user's own connected account. **Stated reason for reopening earlier positions: project owner request - users must act with their own provider accounts; this reverses the shared-credential model.** What this reopens, each in the same edit: NFR-005's "API credentials shall remain server-side" bullet (it still holds - tokens are now encrypted at rest and stay server-side - but the ERD no longer says provider credentials are "never a column"); the R9-4 accepted-risk note (users now spend their own GitHub, Jira and Stitch quota; only the LLM key stays shared and server-side); the "one configured Jira project" scope lines in section 5.1, FR-071, section 30.2 and section 36 (now one chosen Jira project per Throughline project, FR-088); and the section 9A shell rule that a settings screen is out of scope (exactly one settings-like screen, Connections, now has a backing FR - FR-087). New section 16B adds **FR-086 through FR-090**. ERD v1.11 adds table `provider_connection` (17th table), three nullable `project` columns and `external_operation.connection_id`; Module Boundaries adds the `connections` module.
 
 ### Revision 1.6 alignment
 
@@ -152,9 +168,9 @@ The capstone implementation has the following fixed constraints:
 | ORM / migrations | Drizzle ORM + drizzle-kit, SQL-first |
 | Object storage | Private Supabase Storage bucket for Stitch HTML/screenshots |
 | AI | One LLM provider |
-| External systems | GitHub (pinned starters: Django, Next.js), one configured Jira project, Google Stitch |
+| External systems | GitHub (pinned starters: Django, Next.js), one chosen Jira project per Throughline project, Google Stitch - each reached with the acting user's own connected account (section 16B) |
 
-Schema, triggers, the impact function, and connection and hardening rules are specified in the ERD/Data Model v1.9.
+Schema, triggers, the impact function, and connection and hardening rules are specified in the ERD/Data Model v1.11.
 
 ---
 
@@ -304,7 +320,7 @@ Added in v1.5 (BR-011). Purely presentational - a read-only view over state that
 The system shall provide one overview screen per project showing:
 
 - The current `artifact_version.status` (FR-013/FR-022/FR-041/FR-064) and item count for each of the four artifact types (Requirements, Architecture, UI Requirements, Backlog), rendered with the same status-badge vocabulary used on each artifact type's own review screen (exactly the four `artifact_version.status` values - no fifth state).
-- The current status of generated BRD and ERD artifact versions (FR-086/FR-087), with an explicit source-currentness indicator (FR-088). Their item count is zero because these terminal documents have no logical items.
+- The current status of generated BRD and ERD artifact versions (FR-093/FR-094), with an explicit source-currentness indicator (FR-095). Their item count is zero because these terminal documents have no logical items.
 - A chronological feed of recent lineage activity for the project: `item_version` creations, `artifact_version` status changes, and flagged-impact state (INV-020), each entry linking to the item/version it describes.
 
 This screen reads; it does not write. It has no effect on approval gating (FR-083/FR-084), currentness (INV-021), or any other workflow rule in this document - those are unchanged and continue to be evaluated exactly as specified wherever they already are. If a project has generated nothing yet, the screen shows the empty state, not an error (screen-kit "four states" rule).
@@ -313,7 +329,7 @@ This screen reads; it does not write. It has no effect on approval gating (FR-08
 
 Every screen under a project (Overview, Requirements, Architecture, UI Requirements, Backlog, BRD, ERD, Warnings, Dependencies, Outputs) shall share one navigation shell: a header identifying the current project and a tab/link set reaching every screen listed above, plus a way back to the user's project list.
 
-Only screens that exist as a real FR belong in this shell. Cross-project chrome shown in the Stitch design reference with no backing FR anywhere in this document - a cross-project lineage map, a decisions register, an audit journal, a settings screen - is explicitly **out of scope for this shell** (P1, Jira Plan known-limitations, same treatment as FR-023). Do not add a nav entry that points at a screen this document doesn't define.
+Only screens that exist as a real FR belong in this shell. Cross-project chrome shown in the Stitch design reference with no backing FR anywhere in this document - a cross-project lineage map, a decisions register, an audit journal, a settings screen - is explicitly **out of scope for this shell** (P1, Jira Plan known-limitations, same treatment as FR-023). Do not add a nav entry that points at a screen this document doesn't define. **Round 14 exception (BR-012), amended v1.9:** the Integrations screen (FR-087; route `/connections`) has a backing FR and is reached from the shell through exactly two entries in the user-level chrome, since integrations belong to the user, not to a project: one top-level **Integrations** link in the persistent header navigation (with a status hint when an integration needs attention - not connected where a write is waiting, or reconnect required - never a token or secret), and one shortcut to the same screen in the account menu. It is the only item from that out-of-scope list that is admitted, and no project-level settings screen is admitted; a general settings screen, a decisions register, an audit journal and a cross-project lineage map remain out of scope.
 
 ---
 
@@ -451,7 +467,7 @@ GitHub is mandatory in the MVP, but it is not a blocking dependency for later pl
 Before any GitHub write, the system shall show a preview containing at least:
 
 - repository name
-- visibility if configurable
+- visibility (public or private; default public, chosen by the user before the write - UC-S9)
 - repository initialization mode
 - base template when used
 - project-specific files or documentation to be added
@@ -472,7 +488,9 @@ The system must not silently create a mismatched codebase.
 
 The mode is chosen from the selected option's structured stack descriptor (FR-020), not from free text.
 
-The MVP creates **one repository per project**. There is no re-initialization flow; a later architecture change is reported as drift (FR-036), never applied to the repository.
+The repository is created **public by default**; the user may choose **private** before the write (UC-S9). The chosen visibility is recorded with the operation and reused on retry; a different visibility for the same operation is a request conflict, like a changed repository name. Operations that use the legacy environment credential stay public.
+
+The MVP creates **one repository per project**. There is no re-initialization flow; a later architecture change is reported as drift (FR-036), never applied to the repository. The only way to create a different repository is to first remove the project's repository link (FR-091), which never deletes the repository on GitHub.
 
 ### FR-032 - Use Pinned Starters for MVP
 
@@ -676,7 +694,7 @@ The MVP shall create:
 - Epics
 - Stories
 
-in one configured Jira project.
+in one Jira project chosen for the Throughline project (FR-088), in the Jira site the acting user has connected (FR-086).
 
 ### FR-072 - One-Way Integration Only
 
@@ -695,7 +713,7 @@ Canonical provenance must use `sourceItemVersionId`, not only the human display 
 
 ### FR-074 - Re-export Changed Story Behavior
 
-If a logical Epic or Story already has a Jira issue (in the configured project) created from an older ItemVersion and the item changes, Throughline must not silently duplicate, update, or skip the issue. This applies to **Epics as well as Stories**: an edited Epic title creates a new Epic ItemVersion, and re-exporting it without this choice would silently create a second Jira Epic.
+If a logical Epic or Story already has a Jira issue (in the project's chosen Jira project - the same Jira site and project key as recorded on the operation's target) created from an older ItemVersion and the item changes, Throughline must not silently duplicate, update, or skip the issue. This applies to **Epics as well as Stories**: an edited Epic title creates a new Epic ItemVersion, and re-exporting it without this choice would silently create a second Jira Epic.
 
 The user shall see a choice similar to:
 
@@ -766,17 +784,71 @@ The user may approve a blocked version with a **mandatory, non-empty note**. The
 
 Every GitHub, Stitch and Jira preview shall show the current impact warnings for the items the write would be created from. Creating an external object from a flagged item requires an explicit confirmation; it is not blocked. The resulting external reference is flagged from the moment it exists, so nothing stale leaves Throughline silently.
 
-### FR-086 - Generated BRD (BR-012; post-P0)
+### FR-093 - Generated BRD (BR-013; post-P0)
 
 From the current approved Requirements version, the system shall generate a structured BRD with problem, stakeholders, goals, scope, assumptions, risks, and success measures. The model must distinguish known facts from inferred assumptions. A draft is reviewable, may be regenerated with feedback, and becomes authoritative only on explicit approval. No manual item revision applies because this document has no dependable logical items.
 
-### FR-087 - Generated ERD (BR-012; post-P0)
+### FR-094 - Generated ERD (BR-013; post-P0)
 
 From the current approved Requirements and Architecture versions, the system shall generate a structured ERD with entities, attributes, keys, and relationships, plus a Mermaid ER diagram for display. The output is a design proposal, never an automatic database migration. A draft is reviewable, may be regenerated with feedback, and becomes authoritative only on explicit approval. No manual item revision applies.
 
-### FR-088 - Document Source Currentness (BR-012; post-P0)
+### FR-095 - Document Source Currentness (BR-013; post-P0)
 
 The BRD and ERD are terminal artifact types: the existing four artifact types do not consume them, and the document payload does not create semantic dependency edges. Their generation-context refs record the exact approved source versions. On read, the app compares these refs with the current approved source versions and labels a document whose source changed as needing regeneration, without inventing an `artifact_version.status`. A document draft whose source changed before approval cannot be approved; regenerate it. This document-level signal is distinct from item impact warnings and acknowledgements. Generation freshness still follows INV-006.
+
+---
+
+## 16B. Provider Connections (per-user accounts)
+
+Added in v1.7 (BR-012, priority P0 - reopened scope, project owner request). Before this section, GitHub, Jira and Stitch were reached with one shared server credential per provider taken from environment variables. From now on each signed-in user connects their own accounts. The **LLM key stays shared and server-side**. Tokens still never reach the browser; they are encrypted at rest (NFR-005). The acting user of every external write is the project owner (every request is authorized by project ownership, NFR-005), so "the acting user's connection" is always the owner's.
+
+### FR-086 - Connect and Disconnect a Provider Account
+
+A signed-in user shall be able to connect, and later disconnect, one account per provider (GitHub, Jira, Stitch). GitHub connects through an OAuth App web flow (scopes `repo read:org` (`read:org` so org membership and the owner picker work; amended in UC-S4); a GitHub App is a documented later hardening step, not P0). Jira connects through Atlassian OAuth 2.0 (3LO) with scopes `read:jira-work write:jira-work manage:jira-project offline_access read:me` (`manage:jira-project` added in UC-S11 so a Jira project can be created from Throughline, FR-092; a connection whose stored scopes lack it must reconnect once). Stitch connects by the user pasting an API key, which is validated by one cheap read-only call (list projects) before it is saved. Disconnecting revokes the credential at the provider where a revocation API exists, then deletes the connection row - or, when an `external_operation` still references it, keeps a secret-free tombstone of it (ERD 4.17); it never touches objects already created in the provider.
+
+- A new external operation always requires the acting user's active connection for that provider. Without one the write is refused before any operation row exists, with `CONNECTION_REQUIRED` (API Contracts).
+- Every operation records the connection it was created with (`external_operation.connection_id`). Reconcile, retry and drift checks for that operation use the recorded connection, never "whatever the user has connected today".
+- Operations created before this section existed carry no connection (NULL, "legacy"). They keep working with the optional legacy environment credential and only with it; new operations never fall back to it.
+- The OAuth flows use a signed `state` value plus PKCE, and redirect only to an allowlist derived from `NEXT_PUBLIC_SITE_URL`.
+
+### FR-087 - Integrations Screen
+
+The system shall provide one **Integrations** screen (user-facing name; the id and route keep the earlier name, `/connections`) listing, for each provider, what the integration is for (GitHub: create the project's repository; Jira: export the Backlog; Stitch: generate UI screens), whether the user has an active connection, which account it is (display name only), and whether it needs to be reconnected, with connect, reconnect and disconnect actions. For a connected Jira account it also shows the connected site (site name and URL, non-secret `provider_meta`). It shows status and identity only - never a token, key or secret, not even masked. It is reached from the navigation entries admitted by FR-004 and is the only screen admitted by that exception.
+
+### FR-088 - Project Targets
+
+Each project shall record where its external outputs go, chosen by the owner: an optional GitHub owner override (an organization the user can create repositories in, or the user's own login) that new repositories are created under, and the Jira site and Jira project (picked from the sites and projects the user's connection can see). The Jira site and project key are set together or not at all, and the guided Jira screen shows the chosen project by key and name (UC-S11). **The GitHub owner is not required (UC-S9):** when no override is set, the repository owner is the connected GitHub account's own login, so a user with an active GitHub connection never has to choose one; clearing the override returns to that default. The Jira target has no sensible default and must still be chosen (the screen may pre-select the only site or project when exactly one exists). These replace the environment settings `GITHUB_OWNER` and `JIRA_PROJECT_KEY` for new operations.
+
+- The GitHub owner cannot be changed while a GitHub operation for the project is `pending`, `reconciliation_required` or `completed` (one repository per project, ERD section 4.15); to use another owner, no such operation may exist. A `failed` operation cannot be retried under a different owner with the same repository name (the request hash includes the owner, so that is a hash conflict); the user picks a new repository name, which is a new operation.
+- Changing the Jira target starts new operations (target-specific operation keys, ERD section 4.14); it never reuses or moves an existing Jira issue.
+
+### FR-089 - Guided Connect-Then-Create Steps
+
+The GitHub, Jira and Stitch screens shall show a guided step list at the **top** of the screen (UC-S9; previously a connect-to-continue prompt below the form): Step 1 **Connect** (an OAuth button for GitHub and Jira; an inline key field for Stitch that connects without leaving the screen), Step 2 **target or review** (GitHub: the optional repository owner, shown as the connected login with a Change action; Jira: site and project; Stitch: prompt review), Step 3 **create or export**. Steps after the first unfinished one are visibly locked - by text and icon, not colour alone - and the active step carries `aria-current="step"`. The write action stays withheld until every earlier step is done (no active connection; for Jira, no chosen target; for GitHub, only the connection is required). The preview stays readable, shown locked/dimmed (FR-030, FR-050, FR-070), so planning is never blocked by a missing connection (NFR-006). The OAuth button returns to the screen the user came from after connecting.
+
+### FR-090 - Reconnect-Required State
+
+When an operation's recorded connection is `needs_reauth` or `revoked`, or a provider rejects its credential as invalid, the system shall show a distinct **reconnect required** state and shall stop there. It must **never** turn the operation into `failed`, and it must **never** create or raise an impact warning or mark an `external_ref` stale: a lapsed credential says nothing about whether any planning work changed (BRD section 10 "never flag unchanged work", ERD section 1.1). The operation stays exactly as it was (`pending`, `reconciliation_required` or `completed`); once the user reconnects the same provider account the operation continues from where it stopped. The API reports it as `RECONNECT_REQUIRED` (API Contracts), distinct from `CONNECTION_REQUIRED` (no connection at all).
+
+
+### FR-091 - Remove a Repository Link (without deleting it on GitHub)
+
+Added in v1.9 (UC-S10; serves BR-008, refines the FR-031 one-repository rule). The project owner shall be able to remove the project's GitHub repository **record** from Throughline so that a new repository can be created. **Throughline never deletes, archives or modifies anything on GitHub, and makes no GitHub call when unlinking**; the screen must say so plainly before and after: the repository still exists on GitHub, and the user deletes it there manually (the repository's settings page, Danger Zone).
+
+- Removing the link deletes the project's GitHub `external_ref` and the completed GitHub operation that produced it. Operations that ended `failed` are kept as history. Nothing else changes: other projects, the project's Jira and Stitch refs, and every lineage table are untouched.
+- The link cannot be removed while a GitHub operation for the project is `pending` or `reconciliation_required` (the outcome of a write is not yet known); the API refuses with `UNLINK_BLOCKED`. This check comes before the "nothing linked" lookup, so a pending operation that has no repository record yet is refused (409), not reported as not found.
+- Because the link is gone, the repository's impact rows disappear with it (INV-025 concerns warnings on links that exist); no warning is raised or acknowledged by unlinking.
+- Afterwards the one-repository-per-project and one-non-failed-operation rules are satisfied again, so a new repository can be created by the normal FR-030/FR-031 flow. **A new repository cannot reuse the old name while the old one still exists on GitHub** - the name check reports it as taken; the user uses another name or deletes the old repository on GitHub first.
+- The action is owner-only and explicit (a confirmation naming the repository), and is idempotent in effect: with nothing linked it reports "not found".
+
+### FR-092 - Create a Jira Project From Throughline
+
+Added in v1.11 (UC-S11; serves BR-008 and BR-012). In Step 2 of the guided Jira screen (FR-089) the user shall be able to choose **Create a new Jira project** instead of picking an existing one, giving a name (prefilled from the Throughline project name), a key (derived from the name, uppercase letters and digits, 2-10 characters, starting with a letter, editable) and a template (Scrum or Kanban team-managed software project). The key is validated against Jira **before** submit. The server creates the project in the chosen Jira site with the acting user's own connection, with the connected account as project lead; on success the new project becomes the Throughline project's Jira target (FR-088).
+
+- It is a provider **setup action**, not an external write of an artifact output: it creates no `external_operation` or `external_ref`, is outside the lineage and the FR-074 re-export rules, and is idempotent by Jira's key uniqueness (a repeated submit answers `PROJECT_KEY_TAKEN`). The exported Epic and Story issue types exist in both software templates.
+- It requires the `manage:jira-project` scope. A connection whose stored scopes lack it is reported as reconnect required with reason `missing_scope` (FR-090); existing connections reconnect once.
+- Jira may refuse because the account lacks the Administer Jira global permission; the system reports `JIRA_ADMIN_REQUIRED` and tells the user to ask a Jira admin, or to create the project in Jira and refresh the list.
+- A taken or invalid key is `PROJECT_KEY_TAKEN`; a site the connection cannot reach is `TARGET_NOT_ACCESSIBLE`. No token, key or secret appears in any response or message (NFR-005).
 
 ---
 
@@ -1285,7 +1357,7 @@ After an ambiguous failure:
 
 ### 30.2 Jira Reconciliation
 
-For Jira creation, Throughline shall use a deterministic Throughline source marker, or an equivalent queryable reconciliation mechanism, in the configured Jira project.
+For Jira creation, Throughline shall use a deterministic Throughline source marker, or an equivalent queryable reconciliation mechanism, in the Jira project recorded on the operation (the project's chosen target at the time of the write), searched with the connection recorded on that operation (FR-086, FR-090).
 
 After an ambiguous failure:
 
@@ -1293,7 +1365,7 @@ After an ambiguous failure:
 2. if an issue exists, reconcile the local ExternalRef
 3. if no issue exists, allow a retry that the user confirms explicitly
 
-The Jira marker mechanism is confirmed final: a label `tl-<item_version_id>` as the primary marker, repeated in the issue's description footer as a backup, reconciled by searching within the configured Jira project. Both paths must match the **complete** marker string - never a substring or truncated form; a partial marker matches zero results on either path. Validated live against a real Jira Cloud project (project SCRUM, issue SCRUM-75) during planning, and against `scripts/spike-jira-reconciliation.ts`'s (Jira Plan E4-T2) design.
+The Jira marker mechanism is confirmed final: a label `tl-<item_version_id>` as the primary marker, repeated in the issue's description footer as a backup, reconciled by searching within the Jira project recorded on the operation. Both paths must match the **complete** marker string - never a substring or truncated form; a partial marker matches zero results on either path. Validated live against a real Jira Cloud project (project SCRUM, issue SCRUM-75) during planning, and against `scripts/spike-jira-reconciliation.ts`'s (Jira Plan E4-T2) design.
 
 The MVP does not require an enterprise distributed transaction architecture, but it must not claim writes are safe if ambiguous failures can silently duplicate objects.
 
@@ -1409,11 +1481,12 @@ Where practical, generated ArtifactVersions should record:
 
 ### NFR-005 - Security
 
-- API credentials shall remain server-side.
+- API credentials shall remain server-side. Since v1.7 (BR-012) this covers two kinds: the **shared** LLM key and Supabase service-role key, which are server configuration only; and each user's **own** GitHub, Jira and Stitch credentials (FR-086), which are stored in the database **only as AES-256-GCM ciphertext** and decrypted server-side at the moment of a provider call. The encryption key (`CONNECTION_ENCRYPTION_KEY`) is server configuration and is never stored in the database.
+- Provider credentials shall never appear in a log line, an error message, an API response, `external_operation.target_descriptor`, `external_ref.metadata`, `provider_connection.provider_meta` or any other column. Requested scopes are minimal (GitHub `repo`; Jira `read:jira-work write:jira-work manage:jira-project offline_access read:me`, the last added for FR-092). The OAuth flows are protected against CSRF with a signed `state` and PKCE and redirect only to an allowlisted origin. Disconnecting revokes the credential at the provider where a revocation API exists, then deletes the row, or keeps a secret-free tombstone when an `external_operation` references it.
 - Secrets shall not be stored in generated repositories.
 - Generated HTML shall be sandboxed for preview.
 - External writes shall require explicit user action after preview.
-- The hosted capstone instance shall be protected by at least a basic access gate: **email/password sign-up with mandatory email verification** (Supabase Auth, `mailer_autoconfirm` off) so an unverified or unauthenticated visitor cannot use stored GitHub, Jira, Stitch, or LLM credentials to trigger external actions or spend API budget. **Accepted risk (round 9):** public sign-up is open - any verified account, not only a pre-approved one, can create its own project and trigger generation/external-write actions on it. Project ownership (the next bullet) still stops one user from touching another's project or data; it does not cap how many verified users can spend the shared LLM/GitHub/Jira credentials. Revisit if API cost or abuse becomes a problem before the capstone demo.
+- The hosted capstone instance shall be protected by at least a basic access gate: **email/password sign-up with mandatory email verification** (Supabase Auth, `mailer_autoconfirm` off) so an unverified or unauthenticated visitor cannot use stored credentials to trigger external actions or spend API budget. **Accepted risk (round 9):** public sign-up is open - any verified account, not only a pre-approved one, can create its own project and trigger generation/external-write actions on it. Project ownership (the next bullet) still stops one user from touching another's project or data; it does not cap how many verified users can spend the shared LLM key. **Round 14 (R9-4 amended):** GitHub, Jira and Stitch are no longer shared - users spend their own accounts' quota there; only the LLM key stays shared and server-side. Revisit if LLM cost or abuse becomes a problem before the capstone demo.
 - Authentication uses Supabase Auth with public sign-up **enabled** and email verification required before a session is usable. The user's identity is taken only from verified session data (`auth.getUser()`, never `getSession()`). There is no server-side email allowlist - superseded by the above (was invite-only + allowlist through round 8; see ERD Appendix B round 9).
 - Every request is authorized by project ownership before any read or write.
 - The database is reachable only through the application server: the Supabase Data API is denied to its public roles for every table and function.
@@ -1457,6 +1530,7 @@ P0 is the minimum acceptable capstone.
 - immutable history
 - selected Architecture option, with approval-time materialization of its decisions
 - authentication with mandatory email verification (public sign-up); Data API closed to public roles
+- per-user provider connections: each user connects their own GitHub, Jira and Stitch accounts and external writes use them (BR-012, FR-086..FR-090)
 
 ### Lineage
 
@@ -1510,7 +1584,7 @@ P0 is the minimum acceptable capstone.
 ### Jira
 
 - preview
-- one configured project
+- one chosen project (per Throughline project)
 - Epics and Stories
 - ExternalRef mapping by ItemVersion
 - changed-Story re-export choice: Skip vs Create New
@@ -1568,6 +1642,8 @@ The MVP shall not implement:
 - GitHub-to-Throughline round-trip import
 - arbitrary repository-template generation
 - enterprise workflow customization
+- shared team or organization-level provider connections (a connection belongs to exactly one user; FR-086)
+- a GitHub App installation flow (documented later hardening for the GitHub connection, not P0)
 
 ---
 
@@ -1881,7 +1957,7 @@ Recommended next development documents:
 
 ## 45. Business-to-Technical Traceability
 
-This matrix connects the business requirements in **Throughline BRD v2.3** to the technical requirements and invariants in this document. It is intentionally high-level; the ERD and API contracts will provide the next level of implementation traceability.
+This matrix connects the business requirements in **Throughline BRD v2.5** to the technical requirements and invariants in this document. It is intentionally high-level; the ERD and API contracts will provide the next level of implementation traceability.
 
 | Business Requirement | Technical realization |
 |---|---|
@@ -1891,11 +1967,12 @@ This matrix connects the business requirements in **Throughline BRD v2.3** to th
 | **BR-004** - Specific direct/transitive change impact with inspectable reason | FR-083; INV-013, INV-020 through INV-026; Sections 25-27 |
 | **BR-005** - Honest GitHub initialization from approved architecture | FR-030 through FR-036; Sections 12, 29-31 |
 | **BR-006** - Stitch generation from approved UI Requirements without controlling backlog lineage | FR-040, FR-041, FR-050 through FR-054; Sections 13-14 |
-| **BR-007** - Preview/create Jira Epics and Stories with exact local provenance | FR-070 through FR-074; Sections 16 and 28-30 |
-| **BR-008** - Explicit, previewed, retry-aware external writes | FR-030, FR-050, FR-070, FR-085; Sections 29-31 |
+| **BR-007** - Preview/create Jira Epics and Stories with exact local provenance | FR-070 through FR-074, FR-088; Sections 16 and 28-30 |
+| **BR-008** - Explicit, previewed, retry-aware external writes | FR-030, FR-050, FR-070, FR-085, FR-089, FR-090, FR-091, FR-092; Sections 29-31 |
 | **BR-009** - AI for semantic work; deterministic code for state and integrity | Sections 23-24 and 32-33; all approval/lineage invariants |
 | **BR-010** - Protect core lineage when scope pressure occurs | Sections 36-38 and 41-44 |
 | **BR-011** - Per-project dashboard overview + shared navigation shell | FR-003, FR-004; Section 9A |
+| **BR-012** - Per-user provider connections; writes made with the acting user's own accounts | FR-086 through FR-090 (FR-092 also serves BR-012; FR-091 sits under BR-008); Section 16B; NFR-005 |
 
 ### 45.1 Traceability Rule for Later Artifacts
 

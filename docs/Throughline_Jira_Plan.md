@@ -1,11 +1,33 @@
 # Throughline - Jira Implementation Plan
 
-**Document version:** 1.5
-**Status:** Derived from ERD/Data Model v1.10, Technical Requirements & Lineage Invariants v1.6, Module Boundaries v1.16, API Contracts v1.14, and Project Setup & Configuration Plan v1.4. Parent of the day-by-day implementation plan and of coding. v1.5: added E5-S13 to align the existing Backlog review UI with the Stitch hierarchy and quality-gate layout, without changing FR-063/FR-064 behavior.
+**Document version:** 2.0
+**Status:** v2.0: E7-S1 adds generated BRD/ERD documents under BR-013, FR-093..095 and T55. Derived from ERD/Data Model v1.16, Technical Requirements & Lineage Invariants v1.12, Module Boundaries v1.22, API Contracts v1.20, and Project Setup & Configuration Plan v1.10. v1.9 (UC-S11): adds story UC-S11 (show the Jira site on Integrations and create a Jira project from the app; TR FR-092, ERD 7.8, T54), +4h, 82 -> 83 issues; existing ids not renumbered. v1.8 (UC-S10): adds story UC-S10 (remove a repository link from Throughline without deleting it on GitHub; TR FR-091, ERD 7.7, T53), +3h, 81 -> 82 issues; note on UC-S7 for the "Integrations" navigation wording (FR-004/FR-087); existing ids not renumbered. v1.7 (UC-S9, product feedback after trying UC-E1): adds story UC-S9 (guided connect-then-create flow, GitHub owner defaults to the connected account, selectable repository visibility); +4h, 80 -> 81 issues; existing ids not renumbered. v1.6 (round 14): adds Epic UC-E1 (per-user provider connections, BR-012), 8 stories UC-S1..UC-S8, at the project owner request; existing ids are not renumbered. Parent of the day-by-day implementation plan and of coding. v1.5: added E5-S13 to align the existing Backlog review UI with the Stitch hierarchy and quality-gate layout, without changing FR-063/FR-064 behavior.
 **Purpose:** The ticket breakdown for building **Throughline itself** over the 8-day capstone window - not the in-product Jira *integration* (that is FR-070..074, delivered by Epic 4 below). This plan is what gets created in a real Jira project to run the build.
-**CSV export:** `Throughline_Jira_Import.csv` is not kept in the repo - it was a mechanical, always-derivable restatement of the table below with no decisions of its own. Regenerate it from this plan (same 71 issues, Jira's CSV import format) immediately before the actual bulk-import, rather than carrying a second copy that can drift from this table.
+**CSV export:** `Throughline_Jira_Import.csv` is not kept in the repo - it was a mechanical, always-derivable restatement of the table below with no decisions of its own. Regenerate it from this plan (same 71 issues plus the 12 of UC-E1 from v1.6-v1.9 = 83, Jira's CSV import format) immediately before the actual bulk-import, rather than carrying a second copy that can drift from this table.
 
 > **For AI agents:** every story below cites the exact ERD test id(s), TR requirement id(s), Module Boundaries function(s), and/or API Contracts route(s) it delivers. Do not close a story without its cited tests passing. Do not invent a story that has nothing to cite - if a task doesn't trace to one of the four parent documents, it does not belong in P0. Epic 1's stories are the ticket-level view of `Throughline_Project_Setup.md`'s section 10 setup sequence - that document, not this one, is the authoritative step order and tool list (OpenAI, Tailwind/shadcn, Vitest/Testcontainers, Vercel/GitHub Actions); this plan cites it rather than restating it, so the two cannot drift.
+
+### Revision 1.9 changes
+
+- **Added story UC-S11** to Epic UC-E1 (section 8A): show the connected Jira site on Integrations, and create a Jira project from the guided Jira screen. Cites the new **FR-092**, FR-087, FR-088 and the new ERD test **T54**; depends on UC-S9; 4h. No schema change; adds the `manage:jira-project` OAuth scope (existing Jira connections reconnect once; Atlassian app console setting in Project Setup).
+- Issue count 82 -> 83 (UC-E1 now has 11 stories/tasks); hours 209.5 -> 213.5 (+4h); gap +133.5h (167%) over the 80h budget. Section 1.6 prose figures remain pre-UC-E1 (add 45h now).
+
+### Revision 1.8 changes
+
+- **Added story UC-S10** to Epic UC-E1 (section 8A): remove a project's GitHub repository link from Throughline (never deleting it on GitHub). Cites the new **FR-091**, FR-031 and the new ERD test **T53**; depends on UC-S9; 3h. No schema change.
+- **UC-S7 note only** (its title is fixed to match its Jira ticket): the screen it builds is now user-facing "Integrations" - a top-level header-navigation entry with an attention hint plus an account-menu shortcut (TR FR-004 amended, FR-087 retitled); the route stays `/connections`.
+- Issue count 81 -> 82 (UC-E1 now has 10 stories/tasks); hours 206.5 -> 209.5 (+3h); gap +129.5h (162%) over the 80h budget. Section 1.6 prose figures remain pre-UC-E1 (add 41h now).
+
+### Revision 1.7 changes
+
+- **Added story UC-S9** to Epic UC-E1 (section 8A): guided connect-then-create flow on the GitHub, Jira and Stitch screens, the GitHub owner defaulting to the connected account, and selectable GitHub repository visibility. **Reason:** product feedback after trying the feature. Cites FR-088, FR-089, FR-090, plus FR-030/FR-031 for the visibility choice (see the row). Depends on UC-S7.
+- Issue count 80 -> 81 (UC-E1 now has 9 stories/tasks); hours 202.5 -> 206.5 (+4h); gap +126.5h (158%) over the 80h budget. The section 1.6 prose figures are still the pre-UC-E1 figures (see its v1.6 note; add 38h now).
+
+### Revision 1.6 changes
+
+- **Added Epic UC-E1** (section 8A) with stories **UC-S1..UC-S8**: per-user GitHub, Jira and Stitch connections instead of one shared server credential each. **Reason it exists:** project owner request - users must act with their own provider accounts; this reverses the shared-credential model. It is a P0-reopening scope addition, so it is recorded in the BRD (BR-012, v2.5), the Technical Requirements (FR-086..FR-090, v1.7), the ERD (table #17, round 14, v1.11), Module Boundaries (module 18, v1.17) and API Contracts (section 10A, v1.15) **before** these stories, as the doc-sync chain requires. Every story cites at least one of those.
+- Issue count 71 -> 80 (1 epic + 8 stories/tasks); hours 168.5 -> 202.5 (+34h). See section 1.6 for what this does to the capacity gap: it makes it worse, and it is not hidden.
+- `UC-` ids use their own prefix because they are not part of any of E1-E6 or of the ERD's four build slices; nothing existing was renumbered.
 
 ### Revision 1.5 changes
 
@@ -44,7 +66,7 @@ A traceability pass found two P0 routes with no owning story and several stale/u
 
 ### 1.1 Issue types
 
-- **Epic** - one per ERD build slice plus UI and hardening/evaluation (6 total, section 2).
+- **Epic** - one per ERD build slice plus UI and hardening/evaluation (7 total, section 2; the seventh, UC-E1, is labelled `uc` instead of `slice-N`).
 - **Story** - a unit of work that changes product behavior; always cites at least one ERD test id or TR FR/INV id.
 - **Task** - a unit of work with no product behavior of its own (setup, spikes, deployment, write-ups). Spikes are Tasks, not Stories, because TR section 42 frames them as proving a boundary, not shipping a feature.
 
@@ -55,7 +77,7 @@ IDs keep sequential `-S`/`-T` numbering per epic in the order they were planned,
 ### 1.2 Labels
 
 Every issue carries:
-- `slice-N` (1-4) or `ui` or `eval`, matching section 2's epics
+- `slice-N` (1-4) or `ui` or `eval` or `uc` (Epic UC-E1, section 8A), matching section 2's epics
 - `module-<name>` for every Module Boundaries module it touches (e.g. `module-identity`, `module-github`); E5's UI stories carry `module-api` since they touch the `api` layer module (map row 17) rather than a lower-layer module directly
 - `p0` or `p1` (TR sections 36-37; nothing in this plan is P1 except where explicitly marked - see section 6)
 - `test-<id>` for every ERD acceptance test the story is responsible for (e.g. `test-T21`)
@@ -87,7 +109,10 @@ Hours are rough sizing for a single developer already deeply familiar with this 
 | **Backend/lineage subtotal (E1-E4)** | **109.5** | **already +29.5h over budget with no UI and no evaluation** |
 | E5 UI | 38 | |
 | E6 Demo & Evaluation | 21 | |
-| **Total** | **168.5** | **+88.5h (111%) over an 8 x 10h budget** |
+| UC-E1 Per-user provider connections (v1.6, round 14; +UC-S9 in v1.7, +UC-S10 in v1.8, +UC-S11 in v1.9 - added after the figures quoted in the prose below) | 45 | |
+| **Total** | **213.5** | **+133.5h (167%) over an 8 x 10h budget** (168.5h / +88.5h / 111% before UC-E1) |
+
+*v1.6 note: every hour figure quoted in the prose from here to the end of this section (168.5h, 147.5h, 142.5h, and the gaps computed from them) is the pre-UC-E1 figure and was not recomputed; add 45h to each (34h at v1.6, +4h for UC-S9 at v1.7, +3h for UC-S10 at v1.8, +4h for UC-S11 at v1.9). UC-E1 is not part of the E1-E5 "build" subtotal those options refer to, and none of the three options above shrinks it - UC-S4..UC-S6 cannot be cut one provider at a time either: a new operation for a provider with no per-user path would have no credential at all, because new operations never fall back to the legacy shared one (FR-086) - that is the point of BR-012. This is stated rather than smoothed over.*
 
 This is the single most important finding of this planning pass: the P0 scope as specified across the BRD, Technical Requirements, ERD, Module Boundaries and Project Setup plan plus the E5-S13 Stitch presentation refinement sizes to roughly **168.5 focused hours**, not the ~68-80 hours an 8-day build literally holds. This was true the moment BRD section 8's P0 list and TR section 36 were written; a ticket-level estimate is just what makes it visible. (v1.0 of this plan put the figure at ~150h; v1.1 revised it up after E1-S5 was re-scoped to actually porting the Appendix C suite rather than just running four tests of it, and after two previously-uncited P0 routes - project creation and the impact endpoints - were given owning stories. Neither change added scope; both were already implied by the frozen parent documents.)
 
@@ -113,8 +138,9 @@ Applying option 1 drops evaluation's 21h out of the 8-day build window, leaving 
 | E4 | External Integrations | Slice 4 | 5-6 | 9 |
 | E5 | UI and Visualization | (cross-cutting) | 4-7 | 13 |
 | E6 | Demo, Evaluation and Hardening | (none - wrap-up) | 8, then a separate evaluation phase (section 1.6) | 8 |
+| UC-E1 | Per-user provider connections (round 14) | (none - after slice 4; needs E1-E4 code) | after E4 | 11 |
 
-71 issues (6 epics + 65 stories/tasks) across 8 days, averaging ~8-9 issues/day.
+83 issues (7 epics + 76 stories/tasks); 71 originally across 8 days (~8-9 issues/day), plus UC-E1's 12 (epic + 11 stories), which are outside that 8-day plan (section 8A).
 
 ---
 
@@ -128,11 +154,11 @@ Applying option 1 drops evaluation's 21h out of the 8-day build window, leaving 
 | E1-T3 | Task | Scaffold Next.js app; `tsconfig` strictness; `eslint-plugin-boundaries` config; verify it fails on a deliberate bad import | Project Setup sections 2, 3, 5.1, 5.3; step 1-3 | - | 1h |
 | E1-T4 | Task | Code-hygiene tooling: husky, lint-staged, Prettier, `.npmrc`, `.vscode`, `.gitattributes` | Project Setup sections 5.5-5.8; step 2b | E1-T3 | 1.5h |
 | E1-T5 | Task | Env schema (Zod, throws at boot) + `.env.example` | Project Setup section 7; step 4 | E1-T4 | 0.5h |
-| E1-S1 | Story | Drizzle schema for all 16 tables (Appendix A.1) | ERD Appendix A.1; Module Boundaries `db` | E1-T1, E1-T5 | 3h |
+| E1-S1 | Story | Drizzle schema for all 16 tables (Appendix A.1; the 17th, `provider_connection`, arrives with UC-S3) | ERD Appendix A.1; Module Boundaries `db` | E1-T1, E1-T5 | 3h |
 | E1-S2 | Story | Custom migration: triggers (Appendix A.2) | ERD Appendix A.2 | E1-S1 | 1.5h |
 | E1-S3 | Story | Custom migration: `impact()` function (section 6.3) | ERD 6.3 | E1-S2 | 1h |
 | E1-S4 | Story | Custom migration: Supabase hardening (Appendix A.3) | ERD Appendix A.3; T34 | E1-S3 | 1h |
-| E1-S5 | Task | Port ERD Appendix C (T1-T43) into `tests/integration` as executable stubs; **T14, T27, T28, T34 pass in this slice** - the rest turn green as their owning slice lands (E2-S9, E3-T1, E4-T3 each re-run this same suite, not a copy of it) | ERD Appendix C; Project Setup section 10 step 9; T14, T27, T28, T34 | E1-S4 | 5h |
+| E1-S5 | Task | Port ERD Appendix C (T1-T52) into `tests/integration` as executable stubs; **T14, T27, T28, T34 pass in this slice** - the rest turn green as their owning slice lands (E2-S9, E3-T1, E4-T3 each re-run this same suite, not a copy of it) | ERD Appendix C; Project Setup section 10 step 9; T14, T27, T28, T34 | E1-S4 | 5h |
 | E1-S6 | Story | `auth` module + `POST /api/session/bootstrap`: open sign-up with mandatory email verification, `app_user` upsert | TR NFR-005; Module Boundaries `auth`; API Contracts section 2 | E1-S4 | 3h |
 | E1-S8 | Story | `artifact-lifecycle.createProject` (minimal - project + its 4 blank artifact rows, no generation) + `POST/GET /api/projects`, `GET/PATCH /api/projects/:projectId` | TR FR-001, FR-002, INV-007; Module Boundaries `artifact-lifecycle`; API Contracts section 3; T33 (brief immutability, via `PATCH`'s `project_seed_frozen` guard) | E1-S4, E1-S6 | 1.5h |
 | E1-S7 | Story | CI workflow (GitHub Actions): typecheck, lint, format:check, unit + integration tests on every PR | Project Setup section 9; step 11 | E1-S5 | 2h |
@@ -251,6 +277,46 @@ Applying option 1 drops evaluation's 21h out of the 8-day build window, leaving 
 
 ---
 
+## 8A. Epic UC-E1 - Per-user provider connections (round 14)
+
+**Goal:** every signed-in user connects their own GitHub, Jira and Stitch accounts and every external write is made with them; the shared server credentials survive only as an optional legacy path for operations that already exist. Tokens stay server-side and are stored only as ciphertext (NFR-005).
+
+**Reason this epic exists (recorded, not assumed):** project owner request - users must act with their own provider accounts; this reverses the shared-credential model. Parent documents: BRD BR-012; TR section 16B (FR-086..FR-090) and NFR-005; ERD round 14 (section 4.17, 7.6, Appendix A.5, T45-T52); Module Boundaries 4.9; API Contracts 10A.
+
+**Conventions for this epic.** Labels: `uc` (in place of `slice-N`), `module-connections` plus every other module touched, `p0`, `test-T45`.. as cited. UC-S1..UC-S8 (all eleven from v1.9) assume E1-E4 are built (the modules they modify exist). `Depends on` lists only the UC dependencies. Estimates are as rough as section 1.6 says.
+
+| ID | Type | Title | Cites | Depends on | Est. |
+|---|---|---|---|---|---|
+| UC-S1 | Task | Docs round | BRD BR-012; TR FR-086..FR-090, NFR-005; ERD round 14 (4.17, 7.6, A.5, C.2); Module Boundaries 4.9; API Contracts 10A; Project Setup section 7 | - | 3h |
+| UC-S2 | Story | connections module (encryption, CRUD, refresh-with-row-lock) | Module Boundaries 4.9, 5, 6; ERD 4.17, 7.6; TR FR-086, FR-090, NFR-005; T45, T46, T52 | UC-S1 | 5h |
+| UC-S3 | Story | Migration provider_connection + project targets + external_operation.connection_id | ERD A.5, 4.2, 4.14, 4.17; TR FR-088; T34 (extended), T45-T48, SQL halves of T49, T50 | UC-S1 | 3h |
+| UC-S4 | Story | GitHub OAuth connect/disconnect + per-user credential in external/github | TR FR-086, FR-088; ERD 7.3, 7.6; Module Boundaries 4.5-4.7; API Contracts 10A (GitHub routes, `PATCH .../targets`), section 8 errors; T45, T51 | UC-S2, UC-S3 | 5h |
+| UC-S5 | Story | Jira 3LO connect + site/project picker + per-user credential in external/jira | TR FR-086, FR-088; ERD 7.4, 7.6; API Contracts 10A (Jira routes), section 9 errors; T26, T41, T52 | UC-S2, UC-S3, UC-S4 | 6h |
+| UC-S6 | Story | Stitch API-key connect + per-user credential in external/stitch | TR FR-086; ERD 7.5, 7.6; API Contracts 10A (`POST /api/connections/stitch`), section 10 errors; T45 | UC-S2, UC-S3, UC-S4 | 3h |
+| UC-S7 | Story | Connections page + inline connect-to-continue prompts | TR FR-087, FR-089, FR-004 (exception); API Contracts 10A (`GET /api/connections`, `DELETE /api/connections/:provider`, `PreviewConnectionDTO`) | UC-S4, UC-S5, UC-S6 | 5h |
+| UC-S8 | Story | Legacy system-credential path + reconnect-required state + security pass (T34 re-run) | TR FR-090, NFR-005; ERD 7.2, 7.6; API Contracts `RECONNECT_REQUIRED`, `needsReconnect`; T34, T49, T50, T51; extends E6-S3 | UC-S4, UC-S5, UC-S6 | 4h |
+| UC-S9 | Story | Guided connect-then-create flow; GitHub owner defaults to the connected account | TR FR-088, FR-089, FR-090 (and FR-030/FR-031 for the visibility choice); ERD 4.2, 7.3, 7.6, round 15; Module Boundaries 4.6, 4.7; API Contracts 10A (`PreviewConnectionDTO.accountName`, `PATCH .../targets` null = default), section 8 (`visibility`, `TARGET_REQUIRED` defensive) | UC-S7 | 4h |
+| UC-S10 | Story | Remove a repository link from Throughline (without deleting it on GitHub) | TR FR-091, FR-031 (one-repository rule); ERD 7.7, T53 (application test); Module Boundaries 4.5 (`external-operations.unlinkGithubRepository`), 4.7; API Contracts section 8 (`DELETE /api/projects/:projectId/github`), section 11 (`UNLINK_BLOCKED`) | UC-S9 | 3h |
+| UC-S11 | Story | Show the Jira site on Integrations and create a Jira project from the app | TR FR-092, FR-087, FR-088; ERD 7.8, 7.6, 4.17, T54 (application test); Module Boundaries 4.6 (`jira.createProject`, `jira.validateProjectKey`), 4.7; API Contracts 10A (`POST /api/connections/jira/projects`, OAuth start scope), section 11 (`PROJECT_KEY_TAKEN`, `JIRA_ADMIN_REQUIRED`, `RECONNECT_REQUIRED` reason `missing_scope`); Project Setup section 7 (Atlassian scope) | UC-S9 | 4h |
+
+**Scope notes** (the ticket titles above are fixed - they match the tickets already created in Jira - so scope detail lives here):
+- **UC-S2** also owns the lint change for the new boundary: a `layer3b-connections` element type in `eslint.config.mjs` (`src/connections`, importable by layers 4-6 only, never by 1-3), added to the `layer6-api` (and `layer4`/`layer5`) allow-lists (Module Boundaries 4.7; Project Setup lint-element list), plus `CONNECTION_ENCRYPTION_KEY`, `OAUTH_STATE_SECRET` and the OAuth client variables in `src/lib/env.ts` and `.env.example`.
+- **UC-S3** creates migrations `0009` and `0010`, runs ERD C.2 against a scratch PostgreSQL 15 and records the real output there.
+- **UC-S4** carries the shared plumbing the other two providers reuse, so it must land first: `external-operations.runOperation` recording `connection_id` at insert (and leaving the row untouched on `ReconnectRequiredError`), the `ctx` pass-through convention for provider modules (Module Boundaries 4.6), `getRefsForLogicalItem`'s Jira target filter and `hasOperationsFor`, `artifact-lifecycle.updateProjectTargets`, and the `PATCH /api/projects/:projectId/targets` route (GitHub owner validation first; Jira validation is added by UC-S5), together with the GitHub owner picker route.
+- **UC-S7 (v1.8 note; title unchanged):** the screen is presented to users as **Integrations** - one top-level link in the persistent header navigation with a status hint when an integration needs attention, plus an account-menu shortcut (TR FR-004 amended, FR-087 retitled); the route stays `/connections`. If UC-S7 has already shipped as "Connections", the rename and the navbar entry are follow-up work under UC-S9's UI pass.
+- **UC-S11** (v1.9) owns: the connected Jira site (name + URL from `provider_meta`) on the Integrations screen and the chosen project (key + name) in Step 2 of the Jira screen; the "Create a new Jira project" option in Step 2 (name prefilled from the Throughline project name, derived editable key validated against Jira before submit, Scrum or Kanban template) selecting the new project as the Jira target via `PATCH .../targets`; `jira.validateProjectKey`/`jira.createProject` and `POST /api/connections/jira/projects`; the `manage:jira-project` scope in the authorize URL (plus a `missing_scope` reconnect prompt for older connections) and the Atlassian app-console setting (Project Setup); and the T54 application test. Verify the Jira validation path and template keys against Atlassian's docs at implementation. No migration, no operation/ref row.
+- **UC-S10** (v1.8) owns: `external-operations.unlinkGithubRepository` + `UnlinkBlockedError`, the `DELETE /api/projects/:projectId/github` route, the GitHub-screen "Remove repository link" action with its confirmation (must state that the repository still exists on GitHub, and link to `https://github.com/<owner>/<name>/settings`, Danger Zone, for manual deletion), and the T53 application test. No migration.
+- **UC-S9** (v1.7) owns: the guided step list at the top of the GitHub, Jira and Stitch screens (Step 1 Connect - OAuth button, or the inline Stitch key field calling `POST /api/connections/stitch`; Step 2 target/review; Step 3 create/export; later steps visibly locked, `aria-current` on the active step, preview dimmed but readable); the `github` module resolving the owner as `ctx.githubOwner ?? credential.meta.login` and the `PATCH .../targets` null = default behaviour; `PreviewConnectionDTO.accountName` and GitHub `targetReady` = connection active; and the public/private repository visibility (recorded in `target_descriptor`, hashed only when private). No schema change.
+- **UC-S5** adds the Jira half of the targets route (`jira.checkProjectAccessible`) and the site/project picker routes; **UC-S6** adds the Stitch key validation route. Both reuse UC-S4's plumbing.
+
+Dependencies as scheduled: UC-S2 and UC-S3 need UC-S1 (they can run in parallel); UC-S4 needs UC-S2 and UC-S3; UC-S5 and UC-S6 each need UC-S4's plumbing commit (they may then run in parallel with each other); UC-S7 and UC-S8 need UC-S4 through UC-S6.
+
+**Definition of Done for the epic:** with two different user accounts, each connects their own GitHub, Jira and Stitch and creates outputs in their own accounts; a user with no connection is stopped with `CONNECTION_REQUIRED` and no operation row; a revoked or expired connection shows reconnect-required and leaves the operation, its refs and every warning unchanged (T49); a pre-existing operation still reconciles with the legacy credential (T50); T45-T52 pass (the SQL halves against a real PostgreSQL 15 - ERD C.2 is written but **not yet executed** as of v1.6); T34 passes against the real Supabase project with `provider_connection` present.
+
+**What this plan does not do:** it applies nothing to the live database (migrations `0009`/`0010` are applied by UC-S3, directly and in one transaction, like `0008` - not with `pnpm db:migrate`), and it does not add a GitHub App flow (documented later hardening, ERD 7.3).
+
+---
+
 ## 9. Dependency graph (epic level)
 
 ```text
@@ -261,7 +327,7 @@ E1 (Foundation)
             -> E5 (UI)  ------------------------+--> E6 (Demo/Evaluation)
 ```
 
-E4 and E5 can run partially in parallel once E3-S10 lands (E5's non-external screens don't block on E4). E6 needs both finished.
+E4 and E5 can run partially in parallel once E3-S10 lands (E5's non-external screens don't block on E4). E6 needs both finished. UC-E1 (section 8A, round 14) is built on E1-E4 and is outside this graph: UC-S7 also touches E5's GitHub/Jira/Stitch screens, and UC-S8 extends E6-S3's security pass.
 
 ---
 
@@ -273,7 +339,7 @@ The user explicitly added BRD and ERD as first-party generated artifacts on 2026
 
 | ID | Type | Title | Cites | Depends on | Acceptance |
 |---|---|---|---|---|---|
-| E7-S1 | Story | Generate, review, version, and approve BRD and ERD artifacts in the app | BRD BR-012; TR FR-086..088, FR-080, INV-006; ERD T45; API Contracts sections 1.8 and 4 | E3-S10, E5-S11, E5-S12 | Schema/migration accepts six artifact types and existing projects receive BRD/ERD rows; BRD uses approved Requirements, ERD uses approved Requirements and Architecture; structured generation is validated and source versions recorded; API and UI support generation, feedback, review, approval, history, and source-currentness; stale-source draft approval is refused; existing four-type flows remain green. |
+| E7-S1 | Story | Generate, review, version, and approve BRD and ERD artifacts in the app | BRD BR-013; TR FR-093..095, FR-080, INV-006; ERD T55; API Contracts sections 1.8 and 4 | E3-S10, E5-S11, E5-S12 | Schema/migration accepts six artifact types and existing projects receive BRD/ERD rows; BRD uses approved Requirements, ERD uses approved Requirements and Architecture; structured generation is validated and source versions recorded; API and UI support generation, feedback, review, approval, history, and source-currentness; stale-source draft approval is refused; existing four-type flows remain green. |
 
 Every story in this plan cites at least one ERD test id or TR requirement id, so the chain from BRD section 3.1 completes:
 
@@ -281,4 +347,4 @@ Every story in this plan cites at least one ERD test id or TR requirement id, so
 Business Objective (BO) -> Business Requirement (BR) -> FR/INV -> ERD table/section -> Module -> API route -> Jira story (this document) -> verification test
 ```
 
-The original P0 plan introduces no new BO/BR/FR/INV. E7-S1 is a separately requested post-P0 extension traced to BR-012 and FR-086..088. If a piece of P0 implementation work has no citation, flag it rather than adding an uncited story (TR Appendix B guidance).
+BR-012 and FR-086..FR-092 were added upstream for per-user provider connections and related work. E7-S1 is a separately requested post-P0 extension traced to BR-013 and FR-093..095. If a piece of implementation work has no citation, flag it rather than adding an uncited story (TR Appendix B guidance).

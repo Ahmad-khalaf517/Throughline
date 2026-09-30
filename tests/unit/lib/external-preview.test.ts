@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { ImpactRowDTO } from '@/lib/serialize';
 import {
+  describeUnlinkError,
+  githubRepositorySettingsUrl,
   describeExternalError,
   describeOperationStatus,
   describeRepoNameAvailability,
@@ -365,5 +367,48 @@ describe('readExistingRepository', () => {
     ['repository is a string', { error: { details: { repository: 'oops' } } }],
   ])('returns null for a malformed body (%s)', (_label, body) => {
     expect(readExistingRepository(body)).toBeNull();
+  });
+});
+
+describe('githubRepositorySettingsUrl (UC-S10)', () => {
+  it('builds the settings URL for a github.com repository URL', () => {
+    expect(githubRepositorySettingsUrl('https://github.com/octo/my-repo')).toBe(
+      'https://github.com/octo/my-repo/settings',
+    );
+    expect(githubRepositorySettingsUrl('https://github.com/octo/my-repo/')).toBe(
+      'https://github.com/octo/my-repo/settings',
+    );
+  });
+
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['blank', ''],
+    ['not a URL', 'octo/my-repo'],
+    ['http', 'http://github.com/octo/my-repo'],
+    ['another host', 'https://gitlab.com/octo/my-repo'],
+    ['a look-alike host', 'https://github.com.evil.example/octo/my-repo'],
+    ['credentials', 'https://user:pw@github.com/octo/my-repo'],
+    ['javascript:', 'javascript:alert(1)'],
+    ['owner only', 'https://github.com/octo'],
+    ['extra path', 'https://github.com/octo/my-repo/issues'],
+    ['unsafe characters', 'https://github.com/octo/my%20repo'],
+  ])('returns null for %s', (_label, url) => {
+    expect(githubRepositorySettingsUrl(url as string | null | undefined)).toBeNull();
+  });
+});
+
+describe('describeUnlinkError (UC-S10)', () => {
+  it('explains UNLINK_BLOCKED as a repository still being created', () => {
+    expect(describeUnlinkError('UNLINK_BLOCKED')).toBe(
+      'A repository is still being created - try again in a minute.',
+    );
+  });
+
+  it('falls back to a generic retry message for anything else', () => {
+    expect(describeUnlinkError(undefined)).toBe('Could not remove the link. Please try again.');
+    expect(describeUnlinkError('INTERNAL_ERROR')).toBe(
+      'Could not remove the link. Please try again.',
+    );
   });
 });

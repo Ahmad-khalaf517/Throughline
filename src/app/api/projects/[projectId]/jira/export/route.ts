@@ -9,8 +9,10 @@ import {
 } from '@/external/jira';
 import { getBacklogVersionMembers } from '@/artifact-types/backlog';
 import { getOperationsForVersion } from '@/external/operations';
-import { ApiError, errorResponse } from '@/lib/errors';
+import { ApiError } from '@/lib/errors';
+import { routeErrorResponse } from '@/app/api/_shared/connection-errors';
 import { serializeRefsWithFreshDrift, toImpactRowDTOs } from '@/app/api/_shared/external';
+import { toJiraCtx, translateJiraError } from '@/app/api/_shared/jira-ctx';
 import { jiraExportSchema } from '../schemas';
 
 interface RouteParams {
@@ -58,9 +60,13 @@ export async function POST(request: Request, { params }: RouteParams) {
       throw new ApiError('PREREQUISITE_NOT_APPROVED', 'Backlog has no approved version.');
     }
 
+    // Round 14 (D1): the project's chosen Jira site + project key and the verified
+    // owner. exportBacklog resolves the owner's own connection before any operation row.
+    const ctx = toJiraCtx(user.id, project);
+
     let preview;
     try {
-      preview = await previewExport(backlogVersionId);
+      preview = await previewExport(backlogVersionId, ctx);
     } catch (error) {
       if (error instanceof BacklogVersionNotApprovedError) {
         throw new ApiError('PREREQUISITE_NOT_APPROVED', error.message);
@@ -89,7 +95,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       });
     }
 
-    const created = await exportBacklog(backlogVersionId, decisionsMap);
+    const created = await exportBacklog(backlogVersionId, decisionsMap, ctx);
 
     // Every LogicalItem the caller's response should list as `skipped`:
     // never-exportable this call (kind='skipped', epic_has_no_jira_ref) plus
@@ -144,6 +150,8 @@ export async function POST(request: Request, { params }: RouteParams) {
       failures,
     });
   } catch (error) {
-    return errorResponse(error);
+    // 409 CONNECTION_REQUIRED / RECONNECT_REQUIRED / TARGET_REQUIRED before any
+    // operation row exists (or, for a lapsed credential mid-batch, leaving rows as they were).
+    return routeErrorResponse(translateJiraError(error));
   }
 }

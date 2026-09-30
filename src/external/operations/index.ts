@@ -15,6 +15,12 @@
 // mechanics belong to their own provider modules in later stories.
 import { and, desc, eq, getTableColumns, inArray, ne, sql } from 'drizzle-orm';
 import { db, schema, withTx } from '@/db';
+import { legacyCredentialAvailable } from '@/lib/legacy-credentials';
+import {
+  ReconnectRequiredError,
+  getConnectionStatusForOperation,
+  type OperationConnectionStatus,
+} from '@/connections';
 
 export type ExternalRef = typeof schema.externalRef.$inferSelect;
 
@@ -40,6 +46,15 @@ export class DefinitiveProviderError extends Error {
     this.name = 'DefinitiveProviderError';
   }
 }
+
+/**
+ * Round 14 (Module Boundaries 4.5): what `send`/`reconcile` are handed. The
+ * provider closure obtains its credential from
+ * `connections.getCredentialForOperation(operationId)`, so a retry or
+ * reconcile of an EXISTING row uses the connection recorded on it (or the
+ * legacy environment credential when `connection_id` is NULL).
+ */
+export type OperationContext = { operationId: string };
 
 type SendResult = {
   externalId: string;
@@ -96,8 +111,21 @@ export interface RunOperationOptions {
   targetDescriptor: unknown;
   sourceArtifactVersionId: string;
   sourceItemVersionId?: string;
-  send: () => Promise<SendResult>;
-  reconcile: () => Promise<ReconcileResult>;
+  /**
+   * Round 14 (ERD 7.2 step 0, 4.14): the acting user's connection, resolved by
+   * the provider module BEFORE this call. Written at insert and never updated.
+   * `null` only for a legacy operation made with the environment credential.
+   */
+  connectionId: string | null;
+  /**
+   * The provider's id for the connected account (`Credential.accountId`),
+   * snapshotted into `target_descriptor.account_id` in the same insert (ERD
+   * 4.14) so a later switch to a different account is detected (T51). Required
+   * whenever `connectionId` is set; ignored for a legacy operation.
+   */
+  accountId?: string | null;
+  send: (ctx: OperationContext) => Promise<SendResult>;
+  reconcile: (ctx: OperationContext) => Promise<ReconcileResult>;
 }
 
 // Module Boundaries 4.5 documents a 4-variant return union (completed /
@@ -166,6 +194,11 @@ const RECONCILIATION_THRESHOLD_MS: Record<ExternalProvider, number> = {
  * hard rule, repeated at Module Boundaries line ~517).
  */
 export async function runOperation(opts: RunOperationOptions): Promise<RunOperationResult> {
+  // Programmer-error guard, before anything is written: a connection-backed
+  // operation must snapshot its account (ERD 4.14).
+  if (opts.connectionId !== null && !opts.accountId) {
+    throw new Error('runOperation: accountId is required when connectionId is set.');
+  }
   const inserted = await insertOperationRow(opts);
   if ('refused' in inserted) {
     return { status: 'refused', reason: inserted.reason };
@@ -190,11 +223,39 @@ export async function runOperation(opts: RunOperationOptions): Promise<RunOperat
       // decideExisting's own transaction already committed the
       // reconciliation_required status update before returning - reconcile()
       // runs with no lock/tx held (ERD 7.2, Module Boundaries line ~517).
-      return reconcileAndFinalize(decision.operationId, opts);
+      return reconcileAndFinalize(decision.operationId, opts, decision.restore);
     case 'retry':
       // Same rule: the pending status update already committed.
-      return sendAndFinalize(decision.operationId, opts);
+      return sendAndFinalize(decision.operationId, opts, decision.restore);
   }
+}
+
+/**
+ * ERD 4.14: `target_descriptor.account_id` is the provider's id for the
+ * connected account at insert time. Merged into the caller's whitelisted
+ * descriptor here so every provider records it identically.
+ */
+function withAccountSnapshot(opts: RunOperationOptions): unknown {
+  if (opts.connectionId === null) return opts.targetDescriptor;
+  const base =
+    opts.targetDescriptor && typeof opts.targetDescriptor === 'object'
+      ? (opts.targetDescriptor as Record<string, unknown>)
+      : {};
+  return { ...base, account_id: opts.accountId };
+}
+
+/**
+ * ERD 4.16 / 7.6, T49: before an EXISTING row is moved to a new status (which is
+ * what precedes a retry's `send` or a reconcile), check - from the database
+ * only, no decrypt, no refresh, no network - that the connection recorded on it
+ * is usable. If not, throw inside the deciding transaction, which rolls back:
+ * the row is byte-identical, no `failed`, no `reconciliation_required`.
+ */
+async function assertRecordedConnectionUsable(row: ExternalOperation): Promise<void> {
+  if (row.connectionId === null) return;
+  const status: OperationConnectionStatus = await getConnectionStatusForOperation(row.id);
+  if (status === 'active' || status === 'legacy') return;
+  throw new ReconnectRequiredError(row.provider as ExternalProvider, status, row.connectionId);
 }
 
 /**
@@ -215,7 +276,8 @@ async function insertOperationRow(
     requestHash: opts.requestHash,
     sourceArtifactVersionId: opts.sourceArtifactVersionId,
     sourceItemVersionId: opts.sourceItemVersionId ?? null,
-    targetDescriptor: opts.targetDescriptor,
+    connectionId: opts.connectionId,
+    targetDescriptor: withAccountSnapshot(opts),
   };
 
   if (opts.provider !== 'github') {
@@ -287,8 +349,11 @@ type ExistingDecision =
   | { kind: 'conflict' }
   | { kind: 'completed'; ref: ExternalRef }
   | { kind: 'in_flight' }
-  | { kind: 'reconcile'; operationId: string }
-  | { kind: 'retry'; operationId: string };
+  | { kind: 'reconcile'; operationId: string; restore?: PriorState }
+  | { kind: 'retry'; operationId: string; restore?: PriorState };
+
+/** The state `decideExisting` moved a row out of, so a mid-flight `ReconnectRequiredError` can put it back. */
+type PriorState = { status: 'pending' | 'failed'; errorMessage: string | null };
 
 /** ERD 7.2 step 3: `SELECT ... FOR UPDATE` the existing row, then decide. */
 async function decideExisting(opts: RunOperationOptions): Promise<ExistingDecision> {
@@ -302,8 +367,9 @@ async function decideExisting(opts: RunOperationOptions): Promise<ExistingDecisi
     if (!row) {
       // insertOperationRow's ON CONFLICT DO NOTHING lost because a row with
       // this operation_key exists - it must therefore be selectable here.
-      // external_operation rows are never deleted (append-only protocol,
-      // ERD 7.2); this would only fire on a bug elsewhere.
+      // The only deletion is `unlinkGithubRepository` (ERD 7.7), which runs
+      // under the same per-project GitHub lock as the insert; this would only
+      // fire on a bug elsewhere.
       throw new Error(`external_operation ${opts.operationKey} vanished between insert and select`);
     }
 
@@ -341,14 +407,20 @@ async function decideExisting(opts: RunOperationOptions): Promise<ExistingDecisi
       // R10: T is derived from the provider timeout, so "older than T"
       // implies the original call's own HTTP timeout has already elapsed -
       // safe to move to reconciliation_required.
+      await assertRecordedConnectionUsable(row);
       await tx
         .update(schema.externalOperation)
         .set({ status: 'reconciliation_required' })
         .where(eq(schema.externalOperation.id, row.id));
-      return { kind: 'reconcile', operationId: row.id };
+      return {
+        kind: 'reconcile',
+        operationId: row.id,
+        restore: { status: 'pending', errorMessage: row.errorMessage },
+      };
     }
 
     if (row.status === 'reconciliation_required') {
+      await assertRecordedConnectionUsable(row);
       return { kind: 'reconcile', operationId: row.id };
     }
 
@@ -379,11 +451,16 @@ async function decideExisting(opts: RunOperationOptions): Promise<ExistingDecisi
     // successful retry, so a `completed` operation kept reading "GitHub
     // refused to create the repository (403...)". A retry that fails again
     // (or definitively) writes its own message.
+    await assertRecordedConnectionUsable(row);
     await tx
       .update(schema.externalOperation)
       .set({ status: 'pending', errorMessage: null })
       .where(eq(schema.externalOperation.id, row.id));
-    return { kind: 'retry', operationId: row.id };
+    return {
+      kind: 'retry',
+      operationId: row.id,
+      restore: { status: 'failed', errorMessage: row.errorMessage },
+    };
   });
 }
 
@@ -398,11 +475,16 @@ async function decideExisting(opts: RunOperationOptions): Promise<ExistingDecisi
 async function sendAndFinalize(
   operationId: string,
   opts: RunOperationOptions,
+  restore?: PriorState,
 ): Promise<RunOperationResult> {
   let result: SendResult;
   try {
-    result = await opts.send();
+    result = await opts.send({ operationId });
   } catch (error) {
+    if (error instanceof ReconnectRequiredError) {
+      await restorePriorState(operationId, restore);
+      throw error;
+    }
     if (error instanceof DefinitiveProviderError) {
       await db
         .update(schema.externalOperation)
@@ -418,6 +500,22 @@ async function sendAndFinalize(
 }
 
 /**
+ * A `ReconnectRequiredError` raised by the closure itself (e.g. a Jira refresh
+ * rejected while resolving the credential) is not an outcome of the operation
+ * (ERD 7.6, T49): rethrown without `failed`, without `reconciliation_required`,
+ * no `external_ref`. If `decideExisting` had already moved the row to a
+ * transient status for this attempt, it is put back to the exact status and
+ * message it had. (`updated_at` is touched by the trigger - unavoidable.)
+ */
+async function restorePriorState(operationId: string, restore?: PriorState): Promise<void> {
+  if (!restore) return;
+  await db
+    .update(schema.externalOperation)
+    .set({ status: restore.status, errorMessage: restore.errorMessage })
+    .where(eq(schema.externalOperation.id, operationId));
+}
+
+/**
  * Calls `opts.reconcile()` with no lock/tx held (the operation row was
  * already committed as `reconciliation_required` by `decideExisting`).
  * `found: false` leaves the row as-is - a further retry is user-initiated
@@ -426,11 +524,16 @@ async function sendAndFinalize(
 async function reconcileAndFinalize(
   operationId: string,
   opts: RunOperationOptions,
+  restore?: PriorState,
 ): Promise<RunOperationResult> {
   let result: ReconcileResult;
   try {
-    result = await opts.reconcile();
+    result = await opts.reconcile({ operationId });
   } catch (error) {
+    if (error instanceof ReconnectRequiredError) {
+      await restorePriorState(operationId, restore);
+      throw error;
+    }
     // Same finalization as `sendAndFinalize`: a definitive rejection thrown
     // from reconcile() means `failed`. Anything else propagates unchanged and
     // the row stays `reconciliation_required`.
@@ -573,18 +676,37 @@ export async function getRefById(refId: string): Promise<ExternalRef | null> {
 export async function getRefsForLogicalItem(
   logicalItemId: string,
   provider: ExternalProvider,
+  jiraTarget?: { cloudId: string; projectKey: string },
 ): Promise<ExternalRef[]> {
-  return db
+  // Round 14 (ERD 7.4, TR FR-074): for Jira the caller passes the project's
+  // chosen target and only refs whose OPERATION snapshotted that cloudId +
+  // projectKey count, so a ref made in another site or project is never "already
+  // exported here". Ignored for github/stitch.
+  const scopeToTarget = provider === 'jira' && jiraTarget !== undefined;
+  const query = db
     .select(getTableColumns(schema.externalRef))
     .from(schema.externalRef)
     .innerJoin(
       schema.itemVersion,
       eq(schema.itemVersion.id, schema.externalRef.sourceItemVersionId),
-    )
+    );
+  const scoped = scopeToTarget
+    ? query.innerJoin(
+        schema.externalOperation,
+        eq(schema.externalOperation.id, schema.externalRef.externalOperationId),
+      )
+    : query;
+  return scoped
     .where(
       and(
         eq(schema.itemVersion.logicalItemId, logicalItemId),
         eq(schema.externalRef.provider, provider),
+        ...(scopeToTarget
+          ? [
+              sql`${schema.externalOperation.targetDescriptor}->>'cloudId' = ${jiraTarget.cloudId}`,
+              sql`${schema.externalOperation.targetDescriptor}->>'projectKey' = ${jiraTarget.projectKey}`,
+            ]
+          : []),
       ),
     )
     .orderBy(desc(schema.externalRef.createdAt));
@@ -640,6 +762,139 @@ export async function getOperationById(operationId: string): Promise<ExternalOpe
     .where(eq(schema.externalOperation.id, operationId))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * Round 14 (D2, Module Boundaries 4.5): true when the project has ANY operation
+ * of `provider` whose status is not `failed` (`pending`,
+ * `reconciliation_required`, `completed`). Read-only; `PATCH .../targets` uses
+ * it for `TARGET_LOCKED` (a GitHub owner change).
+ */
+export async function hasOperationsFor(
+  projectId: string,
+  provider: ExternalProvider,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: schema.externalOperation.id })
+    .from(schema.externalOperation)
+    .where(
+      and(
+        eq(schema.externalOperation.projectId, projectId),
+        eq(schema.externalOperation.provider, provider),
+        ne(schema.externalOperation.status, 'failed'),
+      ),
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
+/**
+ * Round 16 (UC-S10, TR FR-091, ERD 7.7): thrown by `unlinkGithubRepository`
+ * while a GitHub operation of the project is `pending` or
+ * `reconciliation_required` - the outcome of that write is not yet known, so
+ * the link cannot be dropped. Nothing was changed.
+ */
+export class UnlinkBlockedError extends Error {
+  constructor() {
+    super('A GitHub operation for this project is still in progress.');
+    this.name = 'UnlinkBlockedError';
+  }
+}
+
+/**
+ * Round 16 (UC-S10, ERD 7.7): removes the project's GitHub repository RECORD -
+ * its `external_ref` and the `completed` operation that produced it. It never
+ * calls GitHub and never touches the repository there; `failed` operations,
+ * other providers' rows, other projects and every lineage table are left alone.
+ *
+ * One transaction under the SAME per-project GitHub advisory lock
+ * `insertOperationRow` takes (same key, same salt), so it cannot interleave
+ * with a new GitHub operation being inserted. The ref goes first because
+ * `external_ref.external_operation_id` is `ON DELETE RESTRICT`.
+ *
+ * Returns the removed repository's `{ name, url }` (both null-able: a ref
+ * adopted through reconciliation may have no stored URL), or `null` when the
+ * project has no GitHub ref. Throws `UnlinkBlockedError` while a GitHub
+ * operation is `pending`/`reconciliation_required`.
+ */
+export async function unlinkGithubRepository(
+  projectId: string,
+): Promise<{ name: string | null; url: string | null } | null> {
+  return withTx(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${projectId} || ':external:github', 1))`,
+    );
+
+    const [inFlight] = await tx
+      .select({ id: schema.externalOperation.id })
+      .from(schema.externalOperation)
+      .where(
+        and(
+          eq(schema.externalOperation.projectId, projectId),
+          eq(schema.externalOperation.provider, 'github'),
+          inArray(schema.externalOperation.status, ['pending', 'reconciliation_required']),
+        ),
+      )
+      .limit(1);
+    if (inFlight) throw new UnlinkBlockedError(); // rolls the (empty) transaction back
+
+    const removedRefs = await tx
+      .delete(schema.externalRef)
+      .where(
+        and(eq(schema.externalRef.projectId, projectId), eq(schema.externalRef.provider, 'github')),
+      )
+      .returning({
+        externalKey: schema.externalRef.externalKey,
+        externalUrl: schema.externalRef.externalUrl,
+        externalOperationId: schema.externalRef.externalOperationId,
+      });
+    if (removedRefs.length === 0) return null;
+
+    await tx.delete(schema.externalOperation).where(
+      and(
+        eq(schema.externalOperation.projectId, projectId),
+        eq(schema.externalOperation.provider, 'github'),
+        eq(schema.externalOperation.status, 'completed'),
+        inArray(
+          schema.externalOperation.id,
+          removedRefs.map((ref) => ref.externalOperationId),
+        ),
+      ),
+    );
+
+    const [removed] = removedRefs;
+    return { name: removed?.externalKey ?? null, url: removed?.externalUrl ?? null };
+  });
+}
+
+export type OperationDTOConnection = OperationConnectionStatus | 'legacy_credential_missing';
+
+/**
+ * Round 14 (FR-090): the operation plus the state of the connection recorded on
+ * it, for `ExternalOperationDTO.needsReconnect`. The `connection` part comes
+ * from `connections.getConnectionStatusForOperation` - status only, it never
+ * decrypts and never refreshes - so a GET poll cannot trigger a token refresh.
+ * `null` when there is no such operation.
+ *
+ * A legacy operation (`connection` = `'legacy'`) whose optional environment
+ * credential is no longer configured reads `'legacy_credential_missing'`
+ * (`needsReconnect.reason`, FR-090). The environment is asked through the pure,
+ * env-only `legacyCredentialAvailable` (src/lib) - this layer sits below the
+ * provider modules that own the env readers and cannot call them, and the
+ * `connections` module must not read those variables (Module Boundaries 4.9
+ * rule 6). Presence only; no value is read into the result.
+ */
+export async function getOperationDTOState(
+  operationId: string,
+): Promise<(ExternalOperation & { connection: OperationDTOConnection }) | null> {
+  const operation = await getOperationById(operationId);
+  if (!operation) return null;
+  const status = await getConnectionStatusForOperation(operationId);
+  const connection: OperationDTOConnection =
+    status === 'legacy' && !legacyCredentialAvailable(operation.provider as ExternalProvider)
+      ? 'legacy_credential_missing'
+      : status;
+  return { ...operation, connection };
 }
 
 /**

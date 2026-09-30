@@ -26,6 +26,10 @@ vi.mock('@/external/stitch', () => ({
   checkDrift: vi.fn(),
   UiRequirementsVersionNotApprovedError: FakeUiRequirementsVersionNotApprovedError,
 }));
+vi.mock('@/connections', () => ({
+  ConnectionRequiredError: class extends Error {},
+  ReconnectRequiredError: class extends Error {},
+}));
 vi.mock('@/external/github', () => ({ checkDrift: vi.fn() }));
 vi.mock('@/external/jira', () => ({ checkDrift: vi.fn() }));
 
@@ -55,6 +59,9 @@ function baseProject(uiApproved: string | null = 'ui-v1') {
     name: 'x',
     brief: 'y',
     inputContext: null,
+    githubOwner: null,
+    jiraCloudId: null,
+    jiraProjectKey: null,
     createdAt: now,
     updatedAt: now,
     artifacts,
@@ -122,13 +129,21 @@ describe('GET /api/projects/:projectId/stitch/preview', () => {
 
   it('returns 200 with prompt and impact on success', async () => {
     mockedGetProjectById.mockResolvedValue(baseProject());
-    mockedPreviewPrompt.mockResolvedValue({ prompt: 'Generate...', impact: [] });
+    mockedPreviewPrompt.mockResolvedValue({
+      prompt: 'Generate...',
+      impact: [],
+      connection: { status: 'none', targetReady: true, accountName: null },
+    });
 
     const response = await GET(request(), paramsFor('project-1'));
 
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body).toEqual({ prompt: 'Generate...', impact: [] });
-    expect(mockedPreviewPrompt).toHaveBeenCalledWith('ui-v1');
+    expect(body).toEqual({
+      prompt: 'Generate...',
+      impact: [],
+      connection: { status: 'none', targetReady: true, accountName: null },
+    });
+    expect(mockedPreviewPrompt).toHaveBeenCalledWith('ui-v1', { userId: 'user-1' });
   });
 });

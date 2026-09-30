@@ -1,4 +1,4 @@
-// FR-088: document source-currentness is separate from item impact.
+// FR-095: document source-currentness is separate from item impact.
 import { eq, inArray } from 'drizzle-orm';
 import { db, schema, type Tx } from '@/db';
 

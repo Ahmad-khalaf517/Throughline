@@ -2,10 +2,39 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Route-handler wiring test for POST /api/projects/:projectId/github/check-name
 // (API Contracts section 8).
-const { FakeGithubLookupRejectedError } = vi.hoisted(() => {
+const {
+  FakeGithubLookupRejectedError,
+  FakeGithubTargetRequiredError,
+  FakeConnectionRequiredError,
+  FakeReconnectRequiredError,
+} = vi.hoisted(() => {
   class FakeGithubLookupRejectedError extends Error {}
-  return { FakeGithubLookupRejectedError };
+  class FakeGithubTargetRequiredError extends Error {
+    readonly target = 'githubOwner';
+  }
+  class FakeConnectionRequiredError extends Error {
+    provider = 'github';
+  }
+  class FakeReconnectRequiredError extends Error {
+    provider = 'github';
+    reason = 'needs_reauth';
+  }
+  return {
+    FakeGithubLookupRejectedError,
+    FakeGithubTargetRequiredError,
+    FakeConnectionRequiredError,
+    FakeReconnectRequiredError,
+  };
 });
+
+// The route's error translation imports `@/connections` (layer 3b), which is
+// built on `@/db`/`@/lib/env`; stand-in error classes are enough for `instanceof`.
+vi.mock('@/connections', () => ({
+  ConnectionRequiredError: FakeConnectionRequiredError,
+  ReconnectRequiredError: FakeReconnectRequiredError,
+}));
+
+vi.mock('@/artifact-lifecycle', () => ({ getProjectById: vi.fn() }));
 
 vi.mock('@/auth', () => ({
   getVerifiedUser: vi.fn(),
@@ -15,9 +44,11 @@ vi.mock('@/auth', () => ({
 vi.mock('@/external/github', () => ({
   checkRepoName: vi.fn(),
   GithubLookupRejectedError: FakeGithubLookupRejectedError,
+  GithubTargetRequiredError: FakeGithubTargetRequiredError,
 }));
 
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
+import { getProjectById } from '@/artifact-lifecycle';
 import { checkRepoName } from '@/external/github';
 import { POST } from '@/app/api/projects/[projectId]/github/check-name/route';
 import { ApiError } from '@/lib/errors';
@@ -25,6 +56,7 @@ import { ApiError } from '@/lib/errors';
 const mockedGetVerifiedUser = vi.mocked(getVerifiedUser);
 const mockedRequireProjectOwner = vi.mocked(requireProjectOwner);
 const mockedCheckRepoName = vi.mocked(checkRepoName);
+const mockedGetProjectById = vi.mocked(getProjectById);
 
 const user = { id: 'user-1', email: 'a@b.com', displayName: null };
 
@@ -45,6 +77,7 @@ describe('POST /api/projects/:projectId/github/check-name', () => {
     mockedGetVerifiedUser.mockReset().mockResolvedValue(user);
     mockedRequireProjectOwner.mockReset().mockResolvedValue(undefined);
     mockedCheckRepoName.mockReset();
+    mockedGetProjectById.mockReset().mockResolvedValue({ githubOwner: 'acme' } as never);
   });
 
   it('returns 401 UNAUTHENTICATED when there is no verified user, without touching GitHub', async () => {
@@ -89,7 +122,10 @@ describe('POST /api/projects/:projectId/github/check-name', () => {
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ repoName: 'my-repo', status });
-      expect(mockedCheckRepoName).toHaveBeenCalledWith('My Repo');
+      expect(mockedCheckRepoName).toHaveBeenCalledWith('My Repo', {
+        userId: 'user-1',
+        githubOwner: 'acme',
+      });
     },
   );
 
@@ -102,6 +138,29 @@ describe('POST /api/projects/:projectId/github/check-name', () => {
     expect(response.status).toBe(502);
     const body = await response.json();
     expect(body.error).toEqual({ code: 'GITHUB_REQUEST_REJECTED', message: reason });
+  });
+
+  it('returns 409 TARGET_REQUIRED when the project has no GitHub owner', async () => {
+    mockedCheckRepoName.mockRejectedValue(new FakeGithubTargetRequiredError('no owner'));
+
+    const response = await POST(postRequest({ repoName: 'x' }), paramsFor('project-1'));
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error.code).toBe('TARGET_REQUIRED');
+    expect(body.error.details).toEqual({ target: 'githubOwner' });
+  });
+
+  it('returns 409 CONNECTION_REQUIRED / RECONNECT_REQUIRED from the caller connection', async () => {
+    mockedCheckRepoName.mockRejectedValueOnce(new FakeConnectionRequiredError('none'));
+    const missing = await POST(postRequest({ repoName: 'x' }), paramsFor('project-1'));
+    expect(missing.status).toBe(409);
+    expect((await missing.json()).error.code).toBe('CONNECTION_REQUIRED');
+
+    mockedCheckRepoName.mockRejectedValueOnce(new FakeReconnectRequiredError('lapsed'));
+    const lapsed = await POST(postRequest({ repoName: 'x' }), paramsFor('project-1'));
+    expect(lapsed.status).toBe(409);
+    expect((await lapsed.json()).error.code).toBe('RECONNECT_REQUIRED');
   });
 
   it('returns the generic 500 INTERNAL_ERROR for anything unexpected, never leaking the cause', async () => {

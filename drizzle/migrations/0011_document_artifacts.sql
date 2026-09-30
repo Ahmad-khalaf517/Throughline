@@ -1,4 +1,4 @@
--- FR-086..088 / T45: add terminal BRD and ERD artifact slots.
+-- FR-093..095 / T55: add terminal BRD and ERD artifact slots.
 ALTER TABLE artifact DROP CONSTRAINT artifact_type_check;
 ALTER TABLE artifact ADD CONSTRAINT artifact_type_check
   CHECK (type IN ('requirements','architecture','ui_requirements','backlog','brd','erd'));

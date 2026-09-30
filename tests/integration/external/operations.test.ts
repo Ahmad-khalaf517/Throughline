@@ -121,6 +121,7 @@ describe('runOperation', () => {
       requestHash: 'hash-winner',
       targetDescriptor: {},
       sourceArtifactVersionId: versionId,
+      connectionId: null,
       send,
       reconcile,
     });
@@ -170,6 +171,7 @@ describe('runOperation', () => {
       requestHash,
       targetDescriptor: {},
       sourceArtifactVersionId: versionId,
+      connectionId: null,
       send,
       reconcile,
     });
@@ -213,6 +215,7 @@ describe('runOperation', () => {
       requestHash: 'hash-reconfigured', // e.g. a reconfigured Jira project (R11)
       targetDescriptor: {},
       sourceArtifactVersionId: versionId,
+      connectionId: null,
       sourceItemVersionId: itemVersionId,
       send,
       reconcile,
@@ -246,6 +249,7 @@ describe('runOperation', () => {
       requestHash,
       targetDescriptor: {},
       sourceArtifactVersionId: versionId,
+      connectionId: null,
       send,
       reconcile,
     });
@@ -297,6 +301,7 @@ describe('runOperation', () => {
           requestHash,
           targetDescriptor: {},
           sourceArtifactVersionId: versionId,
+          connectionId: null,
           send,
           reconcile,
         }),
@@ -334,6 +339,7 @@ describe('runOperation', () => {
           requestHash,
           targetDescriptor: {},
           sourceArtifactVersionId: versionId,
+          connectionId: null,
           send,
           reconcile,
         }),
@@ -376,6 +382,7 @@ describe('runOperation', () => {
       requestHash,
       targetDescriptor: {},
       sourceArtifactVersionId: versionId,
+      connectionId: null,
       sourceItemVersionId: itemVersionId,
       send,
       reconcile,
@@ -412,6 +419,7 @@ describe('runOperation', () => {
       requestHash,
       targetDescriptor: {},
       sourceArtifactVersionId: versionId,
+      connectionId: null,
       send,
       reconcile,
     });
@@ -448,6 +456,7 @@ describe('runOperation', () => {
         requestHash,
         targetDescriptor: {},
         sourceArtifactVersionId: versionId,
+        connectionId: null,
         send: vi.fn(),
         reconcile,
       }),
@@ -479,6 +488,7 @@ describe('runOperation', () => {
       requestHash,
       targetDescriptor: {},
       sourceArtifactVersionId: versionId,
+      connectionId: null,
       send,
       reconcile,
     });
@@ -505,6 +515,7 @@ describe('runOperation', () => {
       requestHash: 'hash-definitive',
       targetDescriptor: {},
       sourceArtifactVersionId: versionId,
+      connectionId: null,
       send,
       reconcile,
     });
@@ -532,6 +543,7 @@ describe('runOperation', () => {
         requestHash: 'hash-ambiguous',
         targetDescriptor: {},
         sourceArtifactVersionId: versionId,
+        connectionId: null,
         send,
         reconcile,
       }),
@@ -557,6 +569,7 @@ describe('GitHub project-exclusivity (ERD 4.15 line ~515)', () => {
       requestHash: 'hash-a',
       targetDescriptor: {},
       sourceArtifactVersionId: versionId,
+      connectionId: null,
       send: vi.fn(async () => ({ externalId: 'repo-a' })),
       reconcile: vi.fn(),
     });
@@ -572,6 +585,7 @@ describe('GitHub project-exclusivity (ERD 4.15 line ~515)', () => {
       requestHash: 'hash-b',
       targetDescriptor: {},
       sourceArtifactVersionId: versionId,
+      connectionId: null,
       send: send2,
       reconcile: vi.fn(),
     });
@@ -598,6 +612,7 @@ describe('GitHub project-exclusivity (ERD 4.15 line ~515)', () => {
       requestHash: 'hash-c',
       targetDescriptor: {},
       sourceArtifactVersionId: versionId,
+      connectionId: null,
       send: vi.fn(async () => ({ externalId: 'repo-c' })),
       reconcile: vi.fn(),
     });
@@ -613,6 +628,7 @@ describe('GitHub project-exclusivity (ERD 4.15 line ~515)', () => {
       requestHash: 'hash-d',
       targetDescriptor: {},
       sourceArtifactVersionId: stitchVersionId,
+      connectionId: null,
       send: stitchSend,
       reconcile: vi.fn(),
     });
@@ -631,6 +647,7 @@ describe('GitHub project-exclusivity (ERD 4.15 line ~515)', () => {
       requestHash: 'hash-e',
       targetDescriptor: {},
       sourceArtifactVersionId: versionId,
+      connectionId: null,
       send: vi.fn(async () => {
         throw new DefinitiveProviderError('name_taken_by_other');
       }),
@@ -647,6 +664,7 @@ describe('GitHub project-exclusivity (ERD 4.15 line ~515)', () => {
       requestHash: 'hash-f',
       targetDescriptor: {},
       sourceArtifactVersionId: versionId,
+      connectionId: null,
       send: send2,
       reconcile: vi.fn(),
     });

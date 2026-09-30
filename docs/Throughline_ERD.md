@@ -1,9 +1,9 @@
 # Throughline - ERD / Data Model
 
-**Document version:** 1.11 - **FROZEN for implementation** (see section 14 for what may still change)
-**Post-P0 extension (2026-09-30):** BR-012/FR-086..088 add two terminal document artifact types, `brd` and `erd`, at the user's explicit request. This reopens only the `artifact.type` check and the set of artifact rows created per project; the five dependable item types, immutable edges, and `impact()` remain unchanged. The generated document payload is non-dependable. Its exact source versions are recorded by `generation_context_ref`, and source-currentness is checked on read and again before approval. The pre-existing PostgreSQL 15/17 verification statement below applies to v1.10; the new migration requires separate execution evidence.
-**Status:** Derived from Throughline BRD v2.2 and Technical Requirements & Lineage Invariants v1.4, after thirteen review rounds (round 13: whole-project deletion - the original decision that "project deletion is out of scope" is reopened at the project owner's request (section 4.2, Appendix B round 13); a new `delete_project()` function (migration `0008`, Appendix A.4) is the one sanctioned way to remove a project and all its rows, `forbid_mutation` and `membership_draft_only` now let a DELETE through only while it runs, every FK stays `ON DELETE RESTRICT`, T44 added, no table or column changed; round 12: section 7.4's Jira marker mechanism, previously "validate in Spike C", is now confirmed final by Spike C - label `tl-<item_version_id>` plus description-footer backup, both requiring a complete-marker-string match, validated live against project SCRUM issue SCRUM-75 and `scripts/spike-jira-reconciliation.ts` - reopened per TR 30.2's own "must be validated during the spike" and this document's own line ~1035 ("Spike C... can change only the content of the marker, not any table"); no table changed; round 11: auth email templates switched to the `token_hash` link pattern - no schema change, a real production PKCE/cross-browser gap found while building forgot-password; round 10: pinned `SET search_path = public` on all 7 Appendix A.2/6.3 functions; all 16 tables, every trigger and `impact()` are applied and verified against the live Supabase project, Project Setup section 13). Parent of Modules -> Project Setup -> API Contracts -> Jira Plan -> Implementation.
-**Target engine:** PostgreSQL 15+ (`NULLS NOT DISTINCT` needs 15). **Verified:** the complete Appendix A DDL, all triggers, `impact()` and the Supabase hardening apply cleanly and pass the behaviour suite (Appendix C) on **PostgreSQL 15 and 17** (the versions Supabase runs), as a non-superuser table owner with Supabase's roles and default grants reproduced.
+**Document version:** 1.16 - **FROZEN for implementation** (see section 14 for what may still change)
+**Status:** Derived from Throughline BRD v2.6 and Technical Requirements & Lineage Invariants v1.12, after seventeen review rounds (round 17: UC-S11 - creating a Jira project from Throughline is a provider setup action (new section 7.8, TR FR-092, acceptance test T54 as an application test); the Jira OAuth scope set gains `manage:jira-project` (sections 4.17, 7.6, 7.8); no table, column, constraint or migration change, no `external_operation`/`external_ref` row for it, Appendix B round 17; round 16: UC-S10 - a project's GitHub repository link (its `external_ref` plus the completed `external_operation`) can be removed by an application-level delete so a new repository can be created; new section 7.7 and acceptance test T53 (application test, not implemented in SQL; corrected in v1.14: the ownership marker is identical for the same project and name across an unlink, so the same name is reusable only after the old repository is deleted on GitHub, and the in-flight check runs before the nothing-linked lookup); nothing is ever deleted on GitHub; no DDL or migration change, Appendix B round 16; also the user-facing name of the Connections screen becomes "Integrations" (no data-model effect); round 15: UC-S9 product feedback - `project.github_owner` is now an explicit nullable OVERRIDE, and NULL means the repository is created under the connected GitHub account's own login (sections 4.2, 7.3, 7.6), and the GitHub repository visibility becomes user-selectable, public by default (section 7.3, recorded in `target_descriptor`); no table, column, constraint or test id changes (`target_descriptor` is jsonb, T18's wording is extended), so nothing needs re-running, Appendix B round 15; round 14: per-user provider connections - the shared-credential model is reversed at the project owner request ("users must act with their own provider accounts; reverses the shared-credential model"): new table #17 `provider_connection` holding each user's own GitHub/Jira/Stitch credentials as AES-256-GCM ciphertext only, three nullable `project` target columns, `external_operation.connection_id`, migrations `0009`/`0010` (Appendix A.5), T45-T52 added; this reopens section 2 "Secrets" and NFR-005's "never a column", section 7.3's "no credentials table" and section 7.4's "one configured Jira project per instance", all recorded in Appendix B round 14; round 13: whole-project deletion - the original decision that "project deletion is out of scope" is reopened at the project owner's request (section 4.2, Appendix B round 13); a new `delete_project()` function (migration `0008`, Appendix A.4) is the one sanctioned way to remove a project and all its rows, `forbid_mutation` and `membership_draft_only` now let a DELETE through only while it runs, every FK stays `ON DELETE RESTRICT`, T44 added, no table or column changed; round 12: section 7.4's Jira marker mechanism, previously "validate in Spike C", is now confirmed final by Spike C - label `tl-<item_version_id>` plus description-footer backup, both requiring a complete-marker-string match, validated live against project SCRUM issue SCRUM-75 and `scripts/spike-jira-reconciliation.ts` - reopened per TR 30.2's own "must be validated during the spike" and this document's own line ~1035 ("Spike C... can change only the content of the marker, not any table"); no table changed; round 11: auth email templates switched to the `token_hash` link pattern - no schema change, a real production PKCE/cross-browser gap found while building forgot-password; round 10: pinned `SET search_path = public` on all 7 Appendix A.2/6.3 functions; all 16 tables, every trigger and `impact()` are applied and verified against the live Supabase project, Project Setup section 13). Parent of Modules -> Project Setup -> API Contracts -> Jira Plan -> Implementation.
+**Target engine:** PostgreSQL 15+ (`NULLS NOT DISTINCT` needs 15). **Verified:** the complete Appendix A DDL, all triggers, `impact()` and the Supabase hardening apply cleanly and pass the behaviour suite (Appendix C) on **PostgreSQL 15 and 17** (the versions Supabase runs), as a non-superuser table owner with Supabase's roles and default grants reproduced. **Round 14 (v1.11):** **round 14 DDL not yet executed** - the `provider_connection` table, the `project` and `external_operation` columns, migrations `0009`/`0010` (Appendix A.5) and the SQL checks in Appendix C.2 were written in this round but no PostgreSQL was available to run them (no `psql`, and the Docker daemon could not be started), so none of them is claimed as verified. Everything else in the Verified statement above (A.1-A.4 and `impact()` on PostgreSQL 15 and 17) is unchanged and still applies to the 16 tables it was run on. Run C.2 after migrations `0000`-`0010` on a scratch PostgreSQL 15 before UC-S3 is called done.
+**Post-P0 extension (2026-09-30):** BR-013/FR-093..095 add two terminal document artifact types, `brd` and `erd`. The `artifact.type` check and project artifact slots expand to six; item types, immutable edges, and `impact()` remain unchanged. Document payloads are non-dependable; exact source versions are recorded by `generation_context_ref` and checked before approval. Migration `0011` was applied to the configured Supabase Postgres on 2026-09-30; all seven existing projects received BRD and ERD slots. T55 CI verification remains pending.
 **Platform:** Supabase Auth + Supabase Postgres (sections 2 and 4.1). **ORM:** Drizzle ORM + drizzle-kit (section 2.1).
 **Primary audience:** Developer, technical reviewers, and AI coding agents.
 
@@ -19,7 +19,7 @@
 
 The model must never: flag unchanged work; let a warning disappear after an unrelated later revision; treat drafts as authoritative; let unselected architecture options into lineage; silently duplicate external objects; let dependency edges mutate underneath an existing ItemVersion.
 
-### 1.2 Tables (16)
+### 1.2 Tables (17)
 
 | # | Table | Role |
 |---|---|---|
@@ -39,8 +39,9 @@ The model must never: flag unchanged work; let a warning disappear after an unre
 | 14 | `external_operation` | Pre-write record, one per external object |
 | 15 | `external_ref` | Provenance link to a real GitHub/Jira/Stitch object |
 | 16 | `stitch_output` | Stitch prompt/mode + stored asset keys |
+| 17 | `provider_connection` | One user's own GitHub / Jira / Stitch credential, encrypted at rest (round 14; mutable, owned by the user, not by a project) |
 
-**Removed from the reviewed draft:** `ArchitectureOptionItem`, `BacklogHierarchy`, `StoredAsset` (18 -> 16 tables). Also removed: `dependencyType`, `replacedByVersionId`, `Project.status`, `ExternalOperation.externalIds[]`, `StitchOutput.status`, `architecture_option.required_skills` (round 5: P1-only and not lineaged; team skills are read from constraint items).
+**Removed from the reviewed draft:** `ArchitectureOptionItem`, `BacklogHierarchy`, `StoredAsset` (18 -> 16 tables). Round 14 adds `provider_connection` (16 -> 17). Also removed: `dependencyType`, `replacedByVersionId`, `Project.status`, `ExternalOperation.externalIds[]`, `StitchOutput.status`, `architecture_option.required_skills` (round 5: P1-only and not lineaged; team skills are read from constraint items).
 
 ### 1.3 Cardinalities
 
@@ -57,6 +58,8 @@ architecture artifact_version 1--{0,1,2} architecture_option    (at most 2 by CH
 artifact_version 0..1--1 architecture_option                      (selected option, approval only)
 artifact_version 1--N approval_event
 external_operation 1--0..1 external_ref
+app_user 1--{0..3} provider_connection      (at most one per provider, UNIQUE (user_id, provider); round 14)
+provider_connection 1--N external_operation  (external_operation.connection_id, nullable: NULL = legacy shared-credential operation)
 ui_requirements artifact_version 1--0..1 stitch_output
 artifact_version 1--N ai_generation_run     (artifact_version_id nullable for failed calls)
 ```
@@ -88,6 +91,8 @@ erDiagram
     STITCH_OUTPUT }o--|| ARTIFACT_VERSION : "ui requirements"
     STITCH_OUTPUT }o--o| EXTERNAL_REF : "api mode"
     PROJECT ||--o{ AI_GENERATION_RUN : cost
+    APP_USER ||--o{ PROVIDER_CONNECTION : "connects (max 1 per provider)"
+    PROVIDER_CONNECTION |o--o{ EXTERNAL_OPERATION : "acts through (NULL = legacy)"
     AI_GENERATION_RUN }o--o| ARTIFACT_VERSION : produced
 ```
 
@@ -104,7 +109,7 @@ erDiagram
 | JSONB | Validated by a schema (e.g. Zod) in the single write path. Never store anything a downstream item can depend on in `artifact_version.payload` - dependable content must be a `logical_item` (section 5.6). |
 | Deletes | Append-only in P0. Every FK is written **explicitly** `ON DELETE RESTRICT` (the PostgreSQL default is `NO ACTION`, which is not identical). The one exception is deleting a whole project, which is done only by `delete_project()` (section 4.2, Appendix A.4): it removes rows leaf-first and switches a transaction-local bypass on for exactly the length of the call, so no FK is ever `CASCADE` and no row of a live project can be deleted any other way. |
 | Platform | **Supabase Auth** for identity and **Supabase Postgres** for the database. The app reads and writes only through its own server (Next.js + Drizzle); the Supabase Data API is never used for data. |
-| Secrets | Provider credentials (GitHub, Jira, Stitch, LLM) and the Supabase **service-role key** are **server-side configuration only**, never a column and never shipped to the browser. The Supabase anon/publishable key is public by design - which is why section A.3 exists. One configured Jira project per instance (technical doc NFR, "API credentials shall remain server-side"). No raw request headers in any column; `metadata` and `target_descriptor` hold whitelisted fields only. |
+| Secrets | **Shared** secrets - the LLM key, the Supabase **service-role key**, `CONNECTION_ENCRYPTION_KEY`, the GitHub/Atlassian OAuth client secrets, and the optional legacy GitHub/Jira/Stitch environment credentials (used only by operations created before round 14) - are **server-side configuration only**, never a column and never shipped to the browser. **Each user's own GitHub, Jira and Stitch credentials** are stored in `provider_connection` (section 4.17) **only as AES-256-GCM ciphertext**, decrypted server-side at the moment of a provider call and never sent to the browser. *Reopened in round 14 - reason: project owner request, users must act with their own provider accounts; this reverses the shared-credential model, under which this row said provider credentials were "never a column" and that there was "one configured Jira project per instance".* The Jira project is now chosen per Throughline project (`project.jira_cloud_id` / `project.jira_project_key`, section 4.2). The Supabase anon/publishable key is public by design - which is why section A.3 exists. No raw request headers or plaintext token in any column; `metadata`, `target_descriptor` and `provider_meta` hold whitelisted fields only (technical doc NFR-005). |
 | Authentication | The session user is the Supabase user id taken from **verified** data on the server (`auth.getUser()` or verified JWT claims), never from `getSession()`, which reads an unverified cookie. Public sign-up is **open**; the access gate is mandatory email verification (Supabase `mailer_autoconfirm` off) rather than a server-side allowlist (round 9 - was invite-only + allowlist through round 8). |
 | Authorization | Every API handler first loads the project by `(id, owner_user_id = session user)`. Only then may it read children, call `impact()` or start a write. `impact()` itself takes a project id and trusts its caller. Actor ids (`actor_user_id`, `acknowledged_by_user_id`) are passed explicitly; SQL never uses `auth.uid()` - the server connects as the table owner, so it would be NULL. |
 | Data API exposure | Supabase publishes the `public` schema to the anon/publishable key and grants its roles access to every new table and function. Appendix A.3 revokes those grants and enables RLS with **no policies** on every table (deny-all), and revokes `EXECUTE` on functions. Every future table or function gets the same treatment in its own migration (T34 catches a miss). No RLS policies are ever written: authorization lives in the server, not in a second policy system. |
@@ -118,7 +123,7 @@ Drizzle ORM + drizzle-kit, pinned to exact versions (`drizzle-orm` and `drizzle-
 
 | Lives in the Drizzle schema (`drizzle-kit generate`) | Lives in hand-written migrations (`drizzle-kit generate --custom`) |
 |---|---|
-| All 16 tables and columns; PKs incl. composite; FKs incl. composite, self-referencing and the architecture cycle (use `(): AnyPgColumn =>` for the cyclic references); UNIQUE constraints; CHECK constraints; partial unique indexes. RLS may be enabled here with `.enableRLS()` or in A.3 - pick one place | All trigger functions and triggers (Appendix A.2); the `impact()` function (section 6.3); the Supabase hardening (A.3) **after** `impact()`; the two `NULLS NOT DISTINCT` acknowledgement indexes **if** drizzle-kit does not render them exactly as Appendix A |
+| All 17 tables and columns; PKs incl. composite; FKs incl. composite, self-referencing and the architecture cycle (use `(): AnyPgColumn =>` for the cyclic references); UNIQUE constraints; CHECK constraints; partial unique indexes. RLS may be enabled here with `.enableRLS()` or in A.3 - pick one place | All trigger functions and triggers (Appendix A.2); the `impact()` function (section 6.3); the Supabase hardening (A.3) **after** `impact()`; the two `NULLS NOT DISTINCT` acknowledgement indexes **if** drizzle-kit does not render them exactly as Appendix A |
 
 Rules:
 1. **Read every generated migration file** and diff it against Appendix A before applying it. Write partial-index predicates as literal SQL (`` sql`status = 'approved'` ``), never as bound parameters.
@@ -245,13 +250,17 @@ Access gate (NFR-005, round 9): public sign-up is open in Supabase; the gate is 
 | `name` | text NN | |
 | `brief` | text NN | Plain-language brief, verbatim (FR-001). The seed of all lineage. |
 | `input_context` | jsonb | Optional creation-time hints (team size/skills, deadline, budget, scale, tech preferences). **Input only**: once Requirements exist, read project context from the current constraint items (section 5.6), never from here. |
+| `github_owner` | text | Round 14; semantics refined in round 15 (UC-S9). An **optional override**: the user or organization login the GitHub repository is created under. **NULL = default to the connected account** - the owner is then the acting user's own connected GitHub login (`provider_connection.display_name` / `provider_meta.login`, resolved by the github module, section 7.3). Replaces env `GITHUB_OWNER` for new operations. Nullable since round 14; no DDL change. |
+| `jira_cloud_id`, `jira_project_key` | text | Round 14. The Jira site (Atlassian `cloudId`) and project key the Backlog is exported to; chosen from the sites/projects the owner's connection can see. Replace env `JIRA_PROJECT_KEY` for new operations. |
 | `created_at`, `updated_at` | timestamptz NN | `updated_at` maintained by trigger |
+
+**Targets (round 14, TR FR-088; round 15 refinement).** A NULL `github_owner` is a complete, valid state, not a missing target: the owner is resolved at operation time (`ctx.githubOwner ?? credential.meta.login`, Module Boundaries 4.6) and the **resolved** owner, not NULL, is what is snapshotted into `target_descriptor` and hashed into `request_hash`, so later changing the connected account or the override never rewrites an existing operation's target. Only the Jira pair still has to be chosen. **[DB]** `project_jira_target_pair`: `(jira_cloud_id IS NULL) = (jira_project_key IS NULL)` - the Jira pair is set together or not at all; `project_target_not_blank`: no target is an empty/blank string. The three columns are **not** covered by `project_seed_frozen` (which freezes `brief` and `input_context` only): a target may change at any time, subject to two **[APP]** rules that the **route** enforces (Module Boundaries 4.7) - a non-null target must be accessible to the caller's connection (checked before any project lock, `TARGET_NOT_ACCESSIBLE`), and the GitHub owner cannot change while a GitHub operation for the project is `pending`, `reconciliation_required` or `completed` (one repository per project, section 4.15; `external-operations.hasOperationsFor`, `TARGET_LOCKED`). A changed Jira target simply starts new operations (section 4.14 keys). Only `artifact-lifecycle.updateProjectTargets` writes the columns; it takes the project lock, reads no other table and calls no provider. The window between the `hasOperationsFor` check and that write is a benign race: every operation snapshots the target into `target_descriptor` at insert, so an operation inserted in the window still reconciles against the target it was created with. A target is not a secret and is stored as plain text.
 
 Creating a project inserts its four `artifact` rows in the same transaction.
 
 **[DB]** `project_seed_frozen` trigger: `brief` and `input_context` are frozen once **any** Requirements `artifact_version` exists (draft, rejected or approved). Requirement items are the graph's roots but were generated from the brief, and nothing outside the item graph can raise a warning - so an edited brief would silently invalidate every provenance claim. To change the brief after generating, create a new project. The UI states this before the first generation.
 
-**Deletion (round 13).** A project can be deleted, together with everything that hangs off it: `artifact`, `artifact_version`, `architecture_option`, `approval_event`, `generation_context_ref`, `logical_item`, `item_version`, membership, `semantic_dependency`, `impact_acknowledgement`, `ai_generation_run`, `external_operation`, `external_ref` and `stitch_output`. The `app_user` row is **not** touched (a user outlives their projects, section 4.1). Why this reopens the original "project deletion is out of scope" decision: the owner needs to be able to remove a project - a demo or test project, or one stuck with a failed external operation, could otherwise never leave the database - and nothing in the lineage model needs a deleted project's history to survive, because every row of it is scoped to that one project.
+**Deletion (round 13).** A project can be deleted, together with everything that hangs off it: `artifact`, `artifact_version`, `architecture_option`, `approval_event`, `generation_context_ref`, `logical_item`, `item_version`, membership, `semantic_dependency`, `impact_acknowledgement`, `ai_generation_run`, `external_operation`, `external_ref` and `stitch_output`. The `app_user` row is **not** touched (a user outlives their projects, section 4.1), and neither are the owner's `provider_connection` rows: a connection belongs to a user, not to a project (section 4.17), so `delete_project()` (Appendix A.4) needs no change - it removes the project's `external_operation` rows, which are the only rows that point at a connection, and the connection stays. Why this reopens the original "project deletion is out of scope" decision: the owner needs to be able to remove a project - a demo or test project, or one stuck with a failed external operation, could otherwise never leave the database - and nothing in the lineage model needs a deleted project's history to survive, because every row of it is scoped to that one project.
 
 - **[DB]** The only way to do it is `SELECT delete_project(p_project_id uuid) -> boolean` (Appendix A.4; `false` and no effect when the project does not exist). It deletes leaf-first in one call, and the caller runs it in one transaction under the project lock (section 3.2), so a failure leaves the whole project in place.
 - **[DB]** `forbid_mutation` and `membership_draft_only` still refuse every `UPDATE` and every `DELETE` - except that they let a **`DELETE`** through while the transaction-local setting `throughline.project_deletion` is `'on'`. Only `delete_project()` sets it, and it sets it back to `'off'` before returning, so a later statement in the same transaction is refused as before. `UPDATE` has no bypass at all.
@@ -481,12 +490,13 @@ Indexes: `(artifact_version_id)`, `(project_id)`. One ArtifactVersion has many r
 | `project_id` | uuid NN FK | |
 | `provider` | text NN | CHECK in (`github`,`jira`,`stitch`) |
 | `operation_type` | text NN | e.g. `create_repo`, `create_issue`, `generate_ui` |
-| `operation_key` | text NN | **UNIQUE**. Deterministic and **target-specific** for every provider whose target the user or configuration chooses: `github:create_repo:<project_id>:<normalized_repo_name>`, `jira:create_issue:<jira_project_key>:<item_version_id>`, `stitch:generate:<ui_version_id>` (Stitch has no chosen target). Changing the target (a new repo name, a reconfigured Jira project) is therefore a new operation, never a silent reuse of an object in the old target. |
+| `operation_key` | text NN | **UNIQUE**. Deterministic and **target-specific** for every provider whose target the user or configuration chooses: `github:create_repo:<project_id>:<normalized_repo_name>`, `jira:create_issue:<jira_project_key>:<item_version_id>`, `stitch:generate:<ui_version_id>` (Stitch has no chosen target). Changing the target (a new repo name, a different Jira project) is therefore a new operation, never a silent reuse of an object in the old target. **Round 14: the keys are unchanged.** The GitHub key deliberately omits the owner because there is one repository per project and the owner is locked while a non-failed GitHub operation exists (section 4.2); the owner and the connection's account are in `request_hash` and `target_descriptor`, so a request that differs only in owner is a hash conflict (section 7.2 step 3a), never a silent reuse. The Jira key already contains the Jira project key; the `cloud_id` is in the hash, so the same project key on a **different site** for the same ItemVersion is a conflict rather than a reuse (known limitation 16). |
 | `status` | text NN | CHECK in (`pending`,`completed`,`failed`,`reconciliation_required`) |
 | `request_hash` | text NN | sha256 of the canonical request (includes the target). Compared **before** any status decision (section 7.2): same key with a different hash is a conflict, never a resend and never a silent reuse |
 | `source_artifact_version_id` | uuid NN FK `artifact_version` | Every operation has one: GitHub -> the Architecture version, Stitch -> the UI Requirements version, Jira -> the Backlog version |
 | `source_item_version_id` | uuid | Jira only: the exact Epic/Story ItemVersion |
-| `target_descriptor` | jsonb NN default `{}` | Whitelisted fields only (repo name, Jira project key, marker). No headers/tokens. |
+| `connection_id` | uuid FK `provider_connection` | Round 14. The connection this operation was created with; **NULL = legacy operation** made with the shared environment credential before round 14, which keeps working with that credential and only with it. New operations always have one (the acting user's active connection for `provider`, else the API refuses with `CONNECTION_REQUIRED` before step 1). Never re-pointed after insert. |
+| `target_descriptor` | jsonb NN default `{}` | Whitelisted fields only (repo name, GitHub owner, Jira cloud id + project key, marker, GitHub `visibility` (`public`|`private`, round 15), and since round 14 `account_id` - the provider's id for the connected account at insert time, used to detect a later switch to a different account, section 7.6). No headers/tokens. |
 | `external_id` | text | |
 | `error_message` | text | |
 | `created_at`, `updated_at` | timestamptz NN | `updated_at` is refreshed **by trigger on every update**; callers never set it |
@@ -494,9 +504,10 @@ Indexes: `(artifact_version_id)`, `(project_id)`. One ArtifactVersion has many r
 **[DB]**:
 - `UNIQUE (operation_key)`; `CHECK (status <> 'completed' OR external_id IS NOT NULL)`
 - `CHECK ((provider = 'jira') = (source_item_version_id IS NOT NULL))` and FK `(source_artifact_version_id, source_item_version_id) -> membership (artifact_version_id, item_version_id)` - the **same provenance rules as `external_ref`**. Without them a malformed operation passes step 1, the provider creates the object, and only the `external_ref` insert at step 4 fails - leaving an orphan in Jira. With them it fails at step 1, before any side effect (T39).
+- **Round 14:** `FOREIGN KEY (connection_id, provider) REFERENCES provider_connection (id, provider) ON DELETE RESTRICT` (MATCH SIMPLE: skipped when `connection_id` is NULL, so legacy rows pass) - a connection can back only an operation of its own provider, and a connection that history references cannot be deleted (it is tombstoned instead, section 4.17). Partial index `external_operation_connection (connection_id) WHERE connection_id IS NOT NULL`.
 - `touch_updated_at` trigger. The stale-`pending` rule (section 7.2) reads `updated_at`; a retry path that forgot to refresh it would make a freshly re-sent operation look instantly stale and send it to reconciliation while the request is in flight (T38).
 
-`created_at`/`updated_at` are enough for P0 (no `attemptCount`: retries are user-initiated, not automatic). `external_ref` copies its source columns from its operation **[APP]**.
+`created_at`/`updated_at` are enough for P0 (no `attemptCount`: retries are user-initiated, not automatic). `external_ref` copies its source columns from its operation **[APP]**. **[APP]** (T16-style, not worth denormalizing): the connection's `user_id` equals the project's `owner_user_id`.
 
 One row per external **object** (13 Stories = 13 rows). Protocol: section 7.
 
@@ -541,6 +552,43 @@ One row per external **object** (13 Stories = 13 rows). Protocol: section 7.
 **[DB]** `CHECK ((mode = 'api') = (external_ref_id IS NOT NULL))` - `api` always has a ref, `manual_fallback` never does (T37); `CHECK ((html_storage_key IS NULL) = (html_checksum IS NULL))` and the same for the screenshot. API-operation outcome lives on `external_operation.status`, not here. `stitch_output` is not append-only: a later successful API retry for the same UI Requirements version **updates** the existing `manual_fallback` row to `mode='api'` (the UNIQUE on the source version forbids a second row).
 
 Two assets always, so no separate asset table. Bytes live in object storage - a **private Supabase Storage bucket**, written with the service-role key on the server and read through short-lived signed URLs; the storage key is the bucket path. HTML renders only in a sandboxed iframe without `allow-same-origin`. Verify how Supabase Storage serves `text/html`; if it is not served as HTML, fetch it on the server and render it via `srcdoc` in the same sandboxed iframe. Stitch is a leaf: nothing in `semantic_dependency` may reference it.
+
+### 4.17 `provider_connection`
+
+Added in round 14 (TR FR-086..FR-090, BR-012). One row per (user, provider): the user's **own** GitHub, Jira or Stitch credential. It belongs to a user, not to a project, and it is **mutable** (tokens are refreshed, status changes).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `user_id` | uuid NN FK `app_user` | `ON DELETE RESTRICT`. The project owner - every external write is made by the owner (section 2, Authorization) |
+| `provider` | text NN | CHECK in (`github`,`jira`,`stitch`) |
+| `external_account_id` | text NN | The provider's stable id for the account (GitHub numeric user id, Atlassian `account_id`, a Stitch key label). Not a secret |
+| `display_name` | text NN | Shown on the Integrations screen (route `/connections`; GitHub login, Atlassian name, key label) |
+| `access_token_enc` | text NN | `v1:<iv>:<tag>:<ciphertext>`, base64url, AES-256-GCM, or the tombstone `revoked`. **Never plaintext** |
+| `refresh_token_enc` | text | Same format; Jira (`offline_access`) only in practice; NULL otherwise |
+| `expires_at` | timestamptz | Access-token expiry when the provider reports one |
+| `scopes` | text NN default `''` | Space-separated scopes as granted. Informational for GitHub; for Jira (round 17) the app also reads it to detect a connection made before `manage:jira-project` was requested: creating a Jira project (section 7.8) on such a connection is reconnect required with reason `missing_scope`. No column change |
+| `provider_meta` | jsonb NN default `{}` | Whitelisted, non-secret: GitHub `login`; Jira `cloudId`, `siteUrl`, `siteName` of the default site at connect time (the per-project site is chosen from the live `/sites` list, section 4.2) |
+| `status` | text NN default `active` | CHECK in (`active`,`needs_reauth`,`revoked`) |
+| `key_version` | int NN default 1 | Which `CONNECTION_ENCRYPTION_KEY` generation wrote the ciphertext. The leading `v<n>` of the ciphertext string must equal it |
+| `created_at`, `updated_at` | timestamptz NN | `updated_at` maintained by trigger |
+
+**[DB]**
+- `UNIQUE (user_id, provider)` - at most one connection per provider per user; `UNIQUE (id, provider)` - the target of `external_operation`'s composite FK.
+- Ciphertext-shaped values only: for every row that is not `revoked`, `access_token_enc` (and `refresh_token_enc` when present) must match `^v<n>:<b64url>:<b64url>:<b64url>$` with `<n> = key_version`. A raw `ghp_...` token, an Atlassian token or a pasted Stitch key does not match, so a code path that forgot to encrypt fails at INSERT/UPDATE instead of persisting a secret (T45). This is a **shape** check, not proof of encryption; the encryption itself is [APP].
+- `revoked` is a tombstone: `access_token_enc = 'revoked'`, `refresh_token_enc` and `expires_at` NULL. No secret material remains.
+- `provider_meta` must be a JSON object and must not contain a **top-level** token-like key (`access_token`, `refresh_token`, `token`, `api_key`, `apiKey`, `secret`, `client_secret`, `password`). Nested keys are not inspected by the database; the application whitelist (github `login`; jira `cloudId`, `siteUrl`, `siteName`) is the real control.
+- Every FK is `ON DELETE RESTRICT`, as everywhere.
+- **Triggers:** only `touch_updated_at` (Appendix A.5, migration `0010`). `forbid_mutation` (append-only), `membership_draft_only`, `artifact_version_guard`/`_insert_guard` and `project_seed_frozen` do **not** apply: this table is deliberately mutable and outside the lineage graph. `impact()` never reads it (T49).
+- **Data API:** deny-all exactly like the other 16 tables - grants revoked and RLS enabled with no policies (A.5 / `0010`; T34 extended).
+
+**[APP]** - `connections` is the **sole writer** (Module Boundaries section 5):
+- **Encryption.** AES-256-GCM, a fresh random 96-bit IV per write, key from env `CONNECTION_ENCRYPTION_KEY` (32 bytes, base64). The additional authenticated data is `<user_id>:<provider>`, so ciphertext copied to another row fails authentication. The plaintext exists only in memory for the length of one provider call. It is never logged, never returned by any API (`listConnections` returns status and identity only), and never written to `provider_meta`, `target_descriptor`, `metadata` or `error_message`.
+- **Status machine.** `active -> needs_reauth` when a refresh fails or the provider rejects the credential as invalid; `needs_reauth`/`revoked -> active` when the user reconnects (an upsert on `(user_id, provider)`, so the same row and the same `id` come back); any state `-> revoked` on disconnect. `needs_reauth` and `revoked` are **only** a connection state: they never change an `external_operation`, an `external_ref` or any warning (section 7.6, T49).
+- **Disconnect.** Revoke at the provider where an API exists (GitHub: delete the OAuth grant; Atlassian: revoke the refresh token; Stitch: none), then: if no `external_operation` references the row, **DELETE** it; otherwise write the **tombstone** (`status='revoked'`, `access_token_enc='revoked'`, `refresh_token_enc`/`expires_at` NULL). The FK is `RESTRICT`, so a referenced row cannot be deleted; the tombstone keeps `id`, `provider`, `external_account_id` and `display_name` (no secrets) so history stays readable and a later reconnect can revive the same row.
+- **Refresh with rotation** (Jira only; GitHub OAuth-App tokens and Stitch keys do not expire): section 7.6.
+- **User deletion.** There is no path that deletes an `app_user` (section 4.1: the row outlives the Supabase user, and `RESTRICT` would refuse anyway). A user removed in Supabase therefore leaves their `provider_connection` rows behind, still encrypted; they are unusable (nobody can authenticate as that user) and are cleaned up by an operator running the tombstone `UPDATE` (known limitation 15).
+- **Same-owner rule** (section 4.14): a connection may back an operation only when `provider_connection.user_id = project.owner_user_id`.
 
 ---
 
@@ -616,7 +664,7 @@ Order inside one transaction (section 3.2 lock held): bind -> hash -> insert `it
 
 **Dependency edge rules [APP]:** edges point strictly to an earlier artifact in the order requirements < architecture < ui_requirements < backlog, which makes the graph acyclic by construction. Allowed (downstream -> upstream): ADR -> requirement; UI requirement -> requirement | ADR; story -> requirement | ADR | UI requirement. Epics have no upstream edges. Source and target must be in the same project: **[DB]** through the `semantic_dependency` composite FKs (section 4.11).
 
-The post-P0 BRD and ERD documents are terminal artifact versions outside this item-edge order. They contain no `logical_item` rows and therefore add no `semantic_dependency` edge type. `generation_context_ref` records approved Requirements as the BRD source and approved Requirements plus Architecture as the ERD sources (FR-088).
+The post-P0 BRD and ERD documents are terminal artifact versions outside this item-edge order. They contain no `logical_item` rows and therefore add no `semantic_dependency` edge type. `generation_context_ref` records approved Requirements as the BRD source and approved Requirements plus Architecture as the ERD sources (FR-095).
 
 ### 5.6 What lives in `payload` versus items
 
@@ -773,7 +821,11 @@ Currentness is re-evaluated against the live approved state on every read; nothi
 ### 7.2 Insert-first, lock, decide
 
 ```text
-1. INSERT external_operation(status='pending', operation_key, request_hash, ...)
+0. (round 14) Resolve the acting user's connection for the provider: connections.getCredential(user, provider).
+   None -> ConnectionRequiredError, and NO operation row is written. The credential is decrypted in memory only.
+   (getCredential may refresh a Jira token, which takes its own short row lock - section 7.6. Step 0 runs
+   outside any transaction and never inside withProjectLock.)
+1. INSERT external_operation(status='pending', operation_key, request_hash, connection_id, ...)
    ON CONFLICT (operation_key) DO NOTHING RETURNING id;
    COMMIT.                            <- step 1 is its own transaction and MUST commit
                                          before any network call
@@ -790,6 +842,8 @@ Currentness is re-evaluated against the live approved state on every read; nothi
 4. After the response: in one transaction insert external_ref and set status='completed'.
 ```
 
+Steps 3 and 4 and every later retry or reconcile of an **existing** operation take their credential from `getCredentialForOperation(operation_id)`, i.e. from the connection recorded on the row, never from whatever the user has connected today (`connection_id IS NULL` -> the legacy environment credential). If that connection is `needs_reauth` or `revoked`, or its provider account is no longer the one recorded in `target_descriptor.account_id`, the call throws `ReconnectRequiredError` **before any network call and before any status decision**: the row keeps its status (`pending`, `reconciliation_required` or `completed`), it is **not** set to `failed`, and no `external_ref` or warning is touched (section 7.6, T49, T51). The API surfaces it as `RECONNECT_REQUIRED`; once the user reconnects, the operation resumes from the same row.
+
 **Why step 1 must commit first:** if the pending row is still uncommitted when the request goes out and the process dies, the insert rolls back, no record survives that a request was sent, and the retry creates a duplicate - the exact failure this protocol exists to prevent.
 
 **`updated_at` is the clock of this protocol** and is refreshed by the database on every update of the row (trigger); application code never writes it. "Within T" / "older than T" always compare it with `now()`.
@@ -803,20 +857,79 @@ Currentness is re-evaluated against the live approved state on every read; nothi
 - Deterministic repository name plus an **ownership marker** written atomically at creation: the repository description carries a short token `HMAC-SHA256(server_secret, operation_key)`, truncated. The key includes the name, so one attempt can never adopt another attempt's repository; the server secret means a dev and a prod instance sharing a project id cannot adopt each other's repositories. `docs/architecture/lineage.json` repeats it as a durable second marker.
 - Reconcile: `GET owner/repo`; adopt only if it exists **and** the marker matches. Existing repo without our marker -> that operation ends `failed` (`name_taken_by_other`, a definitive outcome); the user picks another name, which starts a new operation with a new key. Never adopt an unrelated repository.
 - `external_ref`: `source_artifact_version_id` = the selected Architecture version, `source_item_version_id` NULL, `metadata.mode` = `scaffold` | `docs-only`.
-- **Credential:** the server-side GitHub credential from configuration. If users sign in with GitHub through Supabase, do **not** reuse that login's `provider_token` to create repositories: Supabase neither stores nor refreshes it, so using it would require a new encrypted credentials table that this model deliberately does not have.
+- **Visibility (round 15, UC-S9):** the create request carries `visibility` (`'public'` | `'private'`, default `'public'`; TR FR-030's "visibility if configurable"). It is recorded in `external_operation.target_descriptor` (the whitelist gains `visibility`) and enters the **request hash only when it is `'private'`**, so every existing or default-public operation keeps exactly the hash it had. Consequently the same operation key with a different visibility is a hash conflict (`REQUEST_CONFLICT`), like a changed repository name (section 7.2 step 2a). A retry reuses the visibility recorded on the operation; legacy operations (`connection_id IS NULL`, environment credential) stay public. Visibility does not affect the ownership marker.
+- **Owner (round 15, UC-S9):** the repository is created under `project.github_owner` when that override is set, otherwise under the connected GitHub account's own login (`provider_meta.login` of the acting user's active connection). The resolved owner is snapshotted into `target_descriptor`. API `TARGET_REQUIRED` for GitHub is therefore defensive only: it can occur only if there is neither an override nor a connection login, and in practice the missing connection fails first with `CONNECTION_REQUIRED`.
+- **Credential (round 14):** the acting user's own GitHub connection (OAuth App web flow, scopes `repo read:org` (`read:org` so org membership and the owner picker work; amended in UC-S4)), through `connections`. The repository is created under `project.github_owner`. The **ownership marker is unchanged** - `HMAC-SHA256(server_secret, operation_key)`: it is a property of the operation, not of the account, so it verifies the same whichever connection performs the reconcile `GET`. *Reopens the earlier text here, which said a credentials table is deliberately absent - reason: project owner request, users must act with their own provider accounts.* It is still true that a Supabase GitHub login's `provider_token` is **not** reused: Supabase neither stores nor refreshes it, and the OAuth-App connection is a separate, explicit grant. A GitHub App is a documented later hardening step (finer permissions, expiring tokens), not P0.
 
 ### 7.4 Jira
 
-- Each Epic/Story is its own operation, keyed `jira:create_issue:<jira_project_key>:<item_version_id>`. Marker: a label `tl-<item_version_id>` (JQL-queryable without custom-field setup), searched **within the configured Jira project**; repeat it in the description footer as a backup. **Confirmed final by Spike C** (Jira Plan E4-T2, `scripts/spike-jira-reconciliation.ts`), validated live against a real Jira Cloud project (project SCRUM, issue SCRUM-75): both the label and description-footer paths must match the **complete** marker string - a partial/truncated marker matches zero results on either path, so reconcile logic never searches on a substring. Create Stories with `parent` pointing at the Epic's Jira key, so export Epics before their Stories. **Parent resolution by LogicalItem:** take `parent_logical_item_id`; use the Jira ref of that Epic's current ItemVersion if it has one, otherwise the most recent Jira ref of any ItemVersion of that Epic LogicalItem in the configured project (the case where the user chose Skip for a changed Epic). A Story whose Epic has no Jira ref at all is not exported and is listed in the preview. Resolving through the Epic's *current* membership row alone would fail exactly when the Epic changed and was skipped.
+- **Credential and site (round 14):** the acting user's Atlassian 3LO connection. Every call goes to `https://api.atlassian.com/ex/jira/<cloudId>/rest/api/3/...` with `Authorization: Bearer <access token>`, where `<cloudId>` is `project.jira_cloud_id`. Reconcile searches use the connection recorded on the operation. *Reopens the earlier "one configured Jira project per instance" - reason: project owner request.*
+- Each Epic/Story is its own operation, keyed `jira:create_issue:<jira_project_key>:<item_version_id>`. Marker: a label `tl-<item_version_id>` (JQL-queryable without custom-field setup), searched **within the operation's Jira project** (`project.jira_project_key` on `project.jira_cloud_id`, as recorded in `target_descriptor`); repeat it in the description footer as a backup. **Confirmed final by Spike C** (Jira Plan E4-T2, `scripts/spike-jira-reconciliation.ts`), validated live against a real Jira Cloud project (project SCRUM, issue SCRUM-75): both the label and description-footer paths must match the **complete** marker string - a partial/truncated marker matches zero results on either path, so reconcile logic never searches on a substring. Create Stories with `parent` pointing at the Epic's Jira key, so export Epics before their Stories. **Parent resolution by LogicalItem:** take `parent_logical_item_id`; use the Jira ref of that Epic's current ItemVersion if it has one, otherwise the most recent Jira ref of any ItemVersion of that Epic LogicalItem in the chosen Jira project (`getRefsForLogicalItem(logicalItemId, 'jira', { cloudId, projectKey })`, which keeps only refs whose operation's `target_descriptor` has that site and project, so a ref made elsewhere never counts) (the case where the user chose Skip for a changed Epic). A Story whose Epic has no Jira ref at all is not exported and is listed in the preview. Resolving through the Epic's *current* membership row alone would fail exactly when the Epic changed and was skipped.
 - **Capture the Backlog version once** at export start and build every operation from that version's members. A Backlog re-approval during a long export then cannot mix versions within one export run.
 - Reconcile: search by label; Jira search can lag, so re-query briefly (a few attempts over ~10s) before concluding "not found". After a confident not-found, the user confirms "create again". Found -> insert `external_ref`, mark `completed`.
 - `external_ref`: `source_artifact_version_id` = the exported Backlog version, `source_item_version_id` = the exact Epic/Story ItemVersion, validated by the membership composite FK.
-- **FR-074:** for each **Epic and Story** member of the approved Backlog, if its LogicalItem already has a Jira ref (in the configured Jira project) from a different ItemVersion and the current ItemVersion has none there -> prompt **Skip / Create New Jira Issue**. Epics are included because editing an Epic's title creates a new Epic ItemVersion, and its target-specific operation key would otherwise create a second Jira Epic silently. Never update the existing issue, never silently duplicate, never silently skip. The same predicate marks the old ref as impacted (section 6.2).
+- **FR-074:** for each **Epic and Story** member of the approved Backlog, if its LogicalItem already has a Jira ref (in the project's chosen Jira project - same `target_descriptor` cloud id and project key) from a different ItemVersion and the current ItemVersion has none there -> prompt **Skip / Create New Jira Issue**. Epics are included because editing an Epic's title creates a new Epic ItemVersion, and its target-specific operation key would otherwise create a second Jira Epic silently. Never update the existing issue, never silently duplicate, never silently skip. The same predicate marks the old ref as impacted (section 6.2).
 
 ### 7.5 Stitch
 
 - `external_operation(provider='stitch')` owns the API outcome. Success -> `external_ref` + `stitch_output(mode='api')` + asset keys. Failure -> `stitch_output(mode='manual_fallback')` with the preserved prompt; the planning workflow continues.
 - Persist the useful output to object storage; never depend on remote URLs (FR-052). Serve stored HTML only inside a sandboxed iframe from a separate origin.
+
+### 7.6 Connections in the write protocol (round 14)
+
+*Round 17 (UC-S11):* the Jira authorize scope set is now `read:jira-work write:jira-work manage:jira-project offline_access read:me`. `provider_connection.scopes` stores what was granted, so a connection from before the change lacks `manage:jira-project` and must reconnect once before a Jira project can be created (section 7.8); every other Jira operation is unaffected by the missing scope.
+
+**Which credential.** New operation: the acting user's active connection (step 0 of 7.2); none -> `ConnectionRequiredError` (API `CONNECTION_REQUIRED` 409), no row written. Existing operation (retry, reconcile, drift): the connection recorded on the row (`getCredentialForOperation`); `connection_id IS NULL` -> the legacy environment credential, which is used for **nothing else** - a new operation never falls back to it, and a user with no connection is not silently served by it.
+
+**Reconnect required is not failure.** `ReconnectRequiredError` (connection `needs_reauth`/`revoked`, refresh rejected, a `401`/invalid-credential answer from the provider, or the connected account no longer matching `target_descriptor.account_id`) has exactly one effect: the request stops and the UI/API show the distinct reconnect-required state. It never sets `failed` (that stays reserved for definitive provider rejections of the *request*, section 7.2), never touches `external_ref`, never raises an impact warning and never marks anything stale - a lapsed credential says nothing about whether any planning work changed (section 1.1, T49). The operation is left exactly as it was. The account-mismatch rule exists because reconciling GitHub with a different account would answer "404 not found" for a repository the first account created, which a reconcile could misread as "safe to create again".
+
+**Refresh-token rotation (Jira).** Atlassian rotates the refresh token on every use, so two concurrent refreshes would leave one caller holding an already-used token and the connection dead. `connections` therefore refreshes inside one short transaction:
+
+```text
+BEGIN;
+  SELECT ... FROM provider_connection WHERE id = :id FOR UPDATE;    -- a ROW lock, on this connection only
+  if access token still valid (expires_at - skew > now())  -> use it            -- a concurrent caller already refreshed
+  else POST https://auth.atlassian.com/oauth/token (grant_type=refresh_token)
+       success -> UPDATE access_token_enc, refresh_token_enc (the NEW rotated one), expires_at, key_version
+       invalid_grant/401 -> UPDATE status = 'needs_reauth'; COMMIT; throw ReconnectRequiredError
+COMMIT;
+```
+
+This is the **one deliberate exception** to "do not hold any DB lock across the provider call" (section 7.2): the lock is held across the Atlassian *token endpoint* call - a single bounded request with its own hard timeout - and never across a Jira API call or an LLM call. It is what makes rotation safe.
+
+**How this lock differs from and orders against the project lock.** The project lock (section 3.2) is a transaction-scoped *advisory* lock keyed by `hashtextextended(project_id)`; the refresh lock is a *row* lock on one `provider_connection` row. They are different lock kinds over different keys, so they cannot collide with each other. Order rule, to keep it that way: **the connection row lock is only ever taken by `connections`, in its own transaction, and no code that holds the project advisory lock may call a refresh** (the project lock is held only by short persist/approval/delete transactions that make no provider call, sections 3.2 and 7.2, so this is already the case). If a project-lock holder ever needed to *read* a connection row it does so without `FOR UPDATE`. Because `connections` never acquires the project lock, no cycle exists: there is no path that takes the row lock and then the advisory lock, and none that takes the advisory lock and then waits for the row lock. Two concurrent operations for the same user serialize on the row lock for at most one token-endpoint round trip, and the second finds a fresh token and does not call Atlassian (R14, T52).
+
+**Where credentials are resolved.** Provider modules cannot read `project` or resolve users; the layer-6 route reads the project and passes a `ctx` (`userId`, `githubOwner` (nullable override; NULL = the connected account's login, round 15) / `jiraCloudId` + `jiraProjectKey`) - Module Boundaries 4.6. `getCredential` and `getCredentialForOperation` are never called while the project lock is held (so `artifact-lifecycle.updateProjectTargets`, which takes that lock, makes no provider call: the route validates a target against the provider first, then asks `external-operations.hasOperationsFor`, then writes). The `needsReconnect` shown on a plain `GET` of an operation comes from `connections.getConnectionStatusForOperation`, which reads status only - it never decrypts and never refreshes, so polling cannot rotate a token.
+
+**Disconnect while an operation is in flight** (R15): the in-flight request already holds its decrypted token in memory and finishes; the disconnect tombstones the row (the operation references it). The operation's later retries then resolve as reconnect-required.
+
+### 7.7 Removing a GitHub repository link (round 16, UC-S10, TR FR-091)
+
+**Purpose.** Let the owner drop the project's GitHub repository *record* so a new repository can be created (section 4.15's one-repository rule otherwise makes the link permanent). **Throughline never deletes or changes anything on GitHub and makes no GitHub call here**; the user deletes the repository on GitHub themselves (its settings page, Danger Zone). The UI states this before and after.
+
+**No schema change.** `external_ref` and `external_operation` are not append-only - the append-only tables are `item_version`, `semantic_dependency`, `generation_context_ref`, `approval_event`, `impact_acknowledgement` and `architecture_option` - so this is an ordinary application-level `DELETE`. Owner: `external-operations` (it already owns every write to both tables); export `unlinkGithubRepository(projectId)` (Module Boundaries 4.5).
+
+```text
+BEGIN;
+  take the per-project GitHub advisory lock that runOperation uses (differently keyed from withProjectLock, section 7.2);
+  if any provider='github' operation of the project is 'pending' or 'reconciliation_required' -> ROLLBACK, UnlinkBlockedError
+                                    -- this check runs BEFORE the 'nothing linked' lookup: a pending operation with no ref yet is 409, not 404
+  refs := DELETE FROM external_ref WHERE project_id = :p AND provider = 'github' RETURNING ...   -- FIRST: external_ref -> external_operation is ON DELETE RESTRICT
+  DELETE FROM external_operation WHERE project_id = :p AND provider = 'github' AND status = 'completed' AND id IN (operations of those refs);
+  none deleted -> return null (API 404); otherwise return { name, url } of the removed repository
+COMMIT;
+```
+
+`failed` operation rows stay as history (they have no ref). **Effects:** the repository's `impact()` rows disappear with its `external_ref` (correct - the link no longer exists; INV-025 is about warnings on links that exist); `one_github_ref_per_project` and the "at most one non-failed GitHub operation per project" rule (section 4.15) are free again; the completed operation, and with it that `operation_key`, is gone, so a new operation can be created. **The ownership marker is not gone:** it is `HMAC(GITHUB_MARKER_SECRET, operation_key)` with `operation_key = github:create_repo:<project_id>:<normalized_name>`, so it is **identical** for the same project and name before and after an unlink. Consequences: (a) **same name while the old repository still exists on GitHub** - the GitHub screen's name check reports it as taken and blocks Submit; a create submitted anyway gets `422` from `POST /user/repos`, a definitive `name_taken_by_other`: the operation ends `failed`, the API answers `409 NAME_TAKEN_BY_OTHER`, and reconcile is **not** called, so nothing is adopted. The only path to re-adopting the old repository is an *ambiguous* create outcome (timeout, 5xx, lost response) followed by reconciliation: the marker matches, and a ref pointing at the old repository is inserted (no files are rewritten) - unless the description was edited, in which case it is foreign and the answer is `409`. (b) **A different name** - a new key and marker; the old repository is never looked up; creation succeeds if the name is free. So a fresh init with the *same* name succeeds only once the old repository has been deleted on GitHub; the user-facing guidance is: a new repository cannot reuse the old name while the old one still exists on GitHub - use another name or delete the old repository first.
+
+### 7.8 Creating a Jira project (round 17, UC-S11, TR FR-092)
+
+A provider **setup action**, not an external write of an artifact output: it goes **outside** the write protocol of 7.2 - **no `external_operation`, no `external_ref`, no `target_descriptor`**, nothing in the lineage tables, and it is not part of the FR-074 re-export rules. It is idempotent by Jira's own key uniqueness: a repeated submit answers `PROJECT_KEY_TAKEN`. **No schema change.**
+
+- **Flow.** The route reads nothing from `project`; it takes `{cloudId, name, key, template}`. `jira.validateProjectKey` first (Jira's project-key validation endpoint, e.g. `GET /rest/api/3/projectvalidate/validProjectKey?key=...` - path to be verified against Atlassian's documentation at implementation), then `jira.createProject`: `POST https://api.atlassian.com/ex/jira/<cloudId>/rest/api/3/project` with `{key, name, projectTypeKey: 'software', projectTemplateKey, leadAccountId: <the connection's external_account_id>, assigneeType: 'PROJECT_LEAD'}` using the acting user's own credential (section 7.6). Team-managed software templates: `com.pyxis.greenhopper.jira:gh-simplified-agility-scrum` and `...:gh-simplified-agility-kanban` (to be verified at implementation). Both contain the Epic and Story issue types that section 7.4 exports.
+- **Key rules.** Uppercase letters and digits, 2-10 characters, starting with a letter; validated before submit and again server-side.
+- **Scope and errors.** Requires `manage:jira-project` in `provider_connection.scopes` (section 7.6), else reconnect required with reason `missing_scope` before any Jira call. Jira `403` (the account lacks the Administer Jira global permission) -> `JIRA_ADMIN_REQUIRED`; a taken or invalid key -> `PROJECT_KEY_TAKEN`; a `cloudId` the connection cannot reach -> `TARGET_NOT_ACCESSIBLE`. No lock is needed: nothing project-scoped is written. The UI then sets the new project as the target through the existing `PATCH .../targets` (4.2).
+- **Site display.** The connected site (`provider_meta.siteName`, `siteUrl`) is non-secret and shown on the Integrations screen; no new `provider_meta` key.
 
 ---
 
@@ -827,10 +940,15 @@ Currentness is re-evaluated against the live approved state on every read; nothi
 | One approved / one draft per artifact (INV-001, INV-005) | **DB** partial unique indexes (+ project lock) |
 | Versions born only as draft, or as rejected only for a stale generation | **DB** `artifact_version_insert_guard` trigger |
 | Legal status transitions, frozen once non-draft, identity columns immutable; `draft -> rejected` never claims a stale generation | **DB** `artifact_version_guard` trigger |
-| `updated_at` always current (the section 7.2 staleness clock) | **DB** `touch_updated_at` trigger on `project`, `artifact_version`, `external_operation` |
+| `updated_at` always current (the section 7.2 staleness clock) | **DB** `touch_updated_at` trigger on `project`, `artifact_version`, `external_operation`, `provider_connection` (round 14) |
 | Stitch `api` has a ref and `manual_fallback` never does | **DB** CHECK |
 | An external operation's provenance is valid **before** the provider call (source version always; Jira item that is a real membership row) | **DB** NOT NULL + CHECK + composite FK |
-| Supabase Data API cannot read, write or execute anything | **DB** grants revoked + RLS enabled with no policies (A.3); T34 |
+| Supabase Data API cannot read, write or execute anything | **DB** grants revoked + RLS enabled with no policies (A.3; `provider_connection` in A.5 / `0010`); T34 |
+| **(round 14)** No plaintext provider token in any column: `provider_connection` holds ciphertext-shaped values or the `revoked` tombstone only; `provider_meta` cannot carry a top-level token-like key | **DB** CHECKs (shape) + **APP** AES-256-GCM in `connections` + secret scan; T45 |
+| **(round 14)** One connection per (user, provider); a connection backs only operations of its own provider; a referenced connection cannot be deleted | **DB** `UNIQUE (user_id, provider)`, composite FK `(connection_id, provider)`, `ON DELETE RESTRICT`; T46, T47 |
+| **(round 14)** Jira target is a pair; targets are not blank | **DB** CHECKs `project_jira_target_pair`, `project_target_not_blank`; T48 |
+| **(round 14)** A lapsed connection never fails an operation, never raises a warning; a token refresh is race-free; reconcile never runs on the wrong account | **APP** `connections` + `external-operations` + integration tests (T49 has a DB half, T51, T52); `impact()` reads no connection table |
+| **(round 14)** The connection's user is the project's owner | **APP** single write path (T16 style) |
 | Brief and input context frozen once Requirements generation has run | **DB** `project_seed_frozen` trigger |
 | Raw model output only on stale-generation rejections | **DB** CHECK |
 | Architecture approval requires exactly one selected option that belongs to the version, and exactly 2 options exist | **DB** composite FK + guard trigger |
@@ -876,6 +994,8 @@ Currentness is re-evaluated against the live approved state on every read; nothi
 | R11 | Same operation key, different request (e.g. a reconfigured Jira project) | Target-specific keys make it a new operation; any remaining hash mismatch is a conflict checked before the status dispatch, including for `completed` |
 | R12 | Backlog re-approved during a long Jira export | The export captures one Backlog version at start; every ref records its exact source version, so any later drift is reported by `impact()` |
 | R13 | Two tabs export to Jira at once | Per-operation in-flight rejection (R5); the UI groups the loser's per-issue errors into one message |
+| R14 | Two calls refresh the same rotating Jira refresh token at once (round 14) | `SELECT ... FOR UPDATE` on the `provider_connection` row; the loser re-reads a fresh token and does not call Atlassian (section 7.6, T52). A different lock from the project advisory lock |
+| R15 | The user disconnects a provider while one of its operations is in flight (round 14) | The in-flight call keeps its in-memory token; the row is tombstoned (not deleted) because the operation references it; later retries resolve as reconnect-required, never `failed` |
 
 ---
 
@@ -904,7 +1024,7 @@ Each is an integration test against a real PostgreSQL instance. T1 is the core p
 | T15 | Revert R-07 A -> D -> E (E hash equals A). | E is a new revision; S-12@C (on A) stays flagged until regenerated or acknowledged. |
 | T16 | Attempt each cross-project reference (edge, context ref, external ref, operation, acknowledgement, Stitch output). | Edge and ItemVersion rejected **by the database**; the rest rejected by the service layer. |
 | T17 | GitHub repo embeds ADR-01/02/03, all tracing to obsolete R-07@A. | One `impact()` row for the ref with root `R-07@A` (not one per ADR); direct beats transitive. |
-| T18 | Name collision on repo creation, then a different name. | First operation `failed` (`name_taken_by_other`); second is a new operation with a new key; a second concurrent GitHub operation is refused. |
+| T18 | Name collision on repo creation, then a different name; and (round 15) a retry of the same operation key with a different `visibility`. | First operation `failed` (`name_taken_by_other`); second is a new operation with a new key; a second concurrent GitHub operation is refused; the visibility change is a hash conflict (a `'public'` request hashes exactly as before round 15, only `'private'` alters the hash). |
 | T19 | Change `expectedScale` (a constraint item) with ADRs citing it and one that does not. | Only the citing ADRs (and their descendants) are flagged. |
 | T20 | Matcher meets a base ItemVersion with a different `semantic_hash_version`. | Throws; nothing is marked modified. |
 | **T21** | **Regenerate an artifact with no user change** (real LLM round trip). | **Zero new ItemVersions, zero new warnings.** The most important test in the suite: if re-wording or `upstreamRefs` jitter creates revisions, every downstream item is flagged for nothing. Write it first. |
@@ -912,7 +1032,7 @@ Each is an integration test against a real PostgreSQL instance. T1 is the core p
 | T23 | During that gate, an acknowledgement recorded against the currently-approved version of the root. | `acknowledged = false`: the candidate supersedes that version, so the acknowledgement stops matching. |
 | T24 | Manually edit a draft Story that is bound to an obsolete upstream version; confirm the shown rebinding. | New ItemVersion with `proposed_by='user'` edges to the current upstream; no longer flagged; without confirmation, nothing is saved. |
 | T25 | Insert a dependency cycle directly (bypassing the app) and call `impact()`. | Terminates; each node reported once. |
-| T26 | Export the same Backlog twice with a different configured Jira project in between. | Second export creates new operations (target-specific keys); no `completed` operation is reused for the new target. |
+| T26 | Export the same Backlog twice with a different Jira project chosen for the project (`project.jira_*`) in between. | Second export creates new operations (target-specific keys); no `completed` operation is reused for the new target. |
 | T27 | UPDATE an `architecture_option` after approval. | Raises. |
 | T28 | INSERT an `artifact_version` with `status='approved'`. | Raises. |
 | T29 | Move a Story to a different Epic in a new Backlog version. | No lineage signal - characterization of the accepted limitation (section 11). |
@@ -931,7 +1051,17 @@ Each is an integration test against a real PostgreSQL instance. T1 is the core p
 | T42 | Preview a Jira export whose Stories include a flagged Story. | The preview lists the impact rows and requires an explicit confirmation; the resulting ref is flagged immediately. |
 | T43 | Try to generate UI Requirements before Architecture is approved, and a Backlog before UI Requirements is approved. | Both refused (TR FR-080). |
 | T44 | Delete a project that has a row in every project-scoped table (approved Architecture with its selected option, an Epic with a child Story, GitHub/Jira/Stitch refs, acknowledgements against an item version and an external ref) via `delete_project()`, alongside a second identical project. Also: delete without the function; a forbidden delete or update after it in the same transaction; roll back after it; call it as `anon`; an unknown project id. | The first project has zero rows in all 15 project-scoped tables and the second is untouched; the owner's `app_user` row remains. Without the function every delete stays refused (`append-only`, `frozen`, FK `RESTRICT`); after it returns, and for any `UPDATE`, the guards are back in force; a rollback leaves the whole project in place; `anon` is denied `EXECUTE` (T34); an unknown id returns `false` and deletes nothing. |
-| T45 | Create BRD and ERD artifact rows for a project, then generate and approve versions against their required approved source versions. Change an approved source after a document draft or approved document exists. | The type CHECK accepts only the six declared values; each project has exactly one of each. Generation refuses missing prerequisites and captures the exact source versions. A source change before approval blocks document approval; a source change after approval leaves its status approved but marks its source-currentness as needing regeneration. No logical item or semantic dependency is minted for either document (FR-086..088). |
+| T45 | **Extends T34's secret-free scan.** Insert connections through the real connect flows with sentinel tokens; try INSERT/UPDATE of a plaintext token, a plaintext refresh token, a ciphertext whose `v<n>` disagrees with `key_version`, a token-named key in `provider_meta`, and a non-tombstone `revoked` row; then scan **every** text/jsonb/array column of **all 17 tables** (and the API responses and log output of the flows) for the sentinel strings. | Every bad write raises; the scan finds the sentinel **nowhere** - not in `provider_connection`, `provider_meta`, `target_descriptor`, `external_ref.metadata`, `error_message`, a log line or a response body. SQL half: Appendix C.2; the flows/log/response half is an integration test. |
+| T46 | A second GitHub connection for one user; an unknown provider; an unknown status; an unknown user; then another user connecting the same provider and one user connecting all three. | The first four raise (`UNIQUE (user_id, provider)`, CHECKs, FK); the last two succeed. |
+| T47 | A connection referenced by an operation: delete it; back a Stitch operation with a GitHub connection; leave `connection_id` NULL (legacy); run `delete_project()` for the project that owns the referencing operation. | Delete refused (`RESTRICT`); wrong-provider refused (composite FK); NULL accepted; `delete_project()` removes the project and its operation but leaves **every** `provider_connection` row and the other project's legacy operation; the now-unreferenced connection can then be deleted. |
+| T48 | Set only `jira_cloud_id`; only `jira_project_key`; a blank `github_owner`; then owner alone (a NULL `github_owner` is valid: it means the connected account's login, round 15), the pair, and clear the pair; and change a target after Requirements exist. | The first three raise; the rest succeed; the brief-freeze trigger (T33) does not fire for target columns. |
+| T49 | Set a connection to `needs_reauth`, then to the `revoked` tombstone, while a `completed` operation (and a `pending` one) references it and a Jira ref exists. | **DB half (Appendix C.2):** the operation row, `external_ref` rows and `impact()` output are byte-for-byte unchanged, `impact()`'s source does not mention `provider_connection`, and the only trigger on `provider_connection` is `touch_updated_at`. **APP half:** reconcile/retry/drift return the reconnect-required state - never `failed`, never a new warning, never a stale mark. |
+| T50 | A legacy operation (`connection_id` NULL) is retried and reconciled with the optional environment credential; a **new** operation with no environment credential and no user connection. | The legacy operation follows the unchanged state machine (SQL half: Appendix C.2); the new operation is refused with `CONNECTION_REQUIRED` and writes **no** row - the legacy credential is never used for it, even when configured. |
+| T51 | Reconnect GitHub as a **different** GitHub account, then retry/reconcile an operation created under the first account. | `ReconnectRequiredError` (`target_descriptor.account_id` mismatch) before any network call; no `404`-driven "safe to re-create"; reconnecting the original account resumes the operation. |
+| T54 | **Application test (not yet implemented in SQL; `tests/integration/`).** With the acting user's Jira connection: create a project (Scrum) with a free key; repeat the same submit; submit a key Jira rejects as taken/invalid; a Jira `403`; a `cloudId` the connection cannot reach; and a connection whose stored `scopes` lack `manage:jira-project`. Count Jira calls and rows in `external_operation`, `external_ref` and every lineage table before and after. | The first returns the new `{id, key, name}` and the request body carries `leadAccountId` = the connection's `external_account_id`, the template key and `projectTypeKey: 'software'`; the repeat is `PROJECT_KEY_TAKEN`; the bad key is `PROJECT_KEY_TAKEN` with no create call; the `403` is `JIRA_ADMIN_REQUIRED`; the unreachable site is `TARGET_NOT_ACCESSIBLE`; the missing scope is reconnect required (`missing_scope`) with **zero** Jira calls; no `external_operation`, `external_ref` or lineage row is ever written and no credential appears in any response. |
+| T53 | **Application test (not yet implemented in SQL; `tests/integration/`).** Project A has a `completed` GitHub operation with its `external_ref`, a `failed` GitHub operation, a Jira ref and a Stitch ref; project B has its own GitHub ref. Call `unlinkGithubRepository(A)`; then again; then with a `pending` GitHub operation; then run a fresh GitHub init with a different repository name, and with the same name (a) while the old repository still exists on GitHub and (b) after it was deleted there. Count GitHub calls throughout. | The first call deletes A's GitHub ref and its `completed` operation and returns `{ name, url }`; the `failed` operation, A's Jira and Stitch refs, project B's rows and every lineage table are unchanged; `impact()` no longer returns a row for the removed ref; the second call returns `null` (API 404); the call with a `pending` operation raises `UnlinkBlockedError` and deletes nothing; the call with a `pending` operation and no ref also raises `UnlinkBlockedError` (409, not 404); the fresh init with a different name succeeds; with the same name while the old repository exists, the name check reports taken and a submitted create fails definitively (`name_taken_by_other`, API `409 NAME_TAKEN_BY_OTHER`, reconcile not called, nothing adopted); with the same name after the old repository was deleted on GitHub it succeeds; **zero** GitHub calls are made by the unlink. |
+| T52 | Two concurrent calls need a Jira access token that has expired; the refresh token rotates on use. | Exactly one call reaches Atlassian's token endpoint, the other reads the fresh token after the row lock; the stored refresh token is the rotated one; no `needs_reauth`. Also: a refresh answered `invalid_grant` sets `needs_reauth` and throws `ReconnectRequiredError`. |
+| T55 | Create BRD and ERD artifact rows for a project, then generate and approve versions against their required approved source versions. Change an approved source after a document draft or approved document exists. | The type CHECK accepts only the six declared values; each project has exactly one of each. Generation refuses missing prerequisites and captures the exact source versions. A source change before approval blocks document approval; a source change after approval leaves its status approved but marks its source-currentness as needing regeneration. No logical item or semantic dependency is minted for either document (FR-093..095). |
 
 ---
 
@@ -951,6 +1081,10 @@ Each is an integration test against a real PostgreSQL instance. T1 is the core p
 12. Manual-fallback Stitch output, once the API later succeeds for the same UI Requirements version, is overwritten in place rather than kept as history.
 13. Architecture has no manual revision path (regeneration only), because its decisions become items only at approval (section 3.6).
 14. **Deleting a project is permanent and local to the database** (round 13). There is no soft delete, no undo and no retention of a deleted project's audit history (`approval_event`, acknowledgements and every version go with it). It does not touch GitHub, Jira or Stitch, and it does not stop an external write already in flight: `external-operations.runOperation` holds no transaction across the provider call (section 7.2), so an operation that finishes after the project is gone finds no row to update - the external object exists with no Throughline record of it.
+15. **Connections of a deleted Supabase user remain (round 14).** No path deletes an `app_user` (section 4.1), so a user removed in Supabase leaves their encrypted `provider_connection` rows. They are unusable but not erased; an operator tombstones them with the `UPDATE` shown in A.5. Not built in P0.
+16. **Same Jira project key on two sites conflicts (round 14).** `jira:create_issue:<key>:<item_version_id>` does not contain the site; `cloud_id` is only in `request_hash`, so exporting one ItemVersion to a same-keyed project on a *different* site is a hash conflict (never a duplicate or a silent reuse), and the user cannot do it from Throughline in P0.
+17. **No key rotation flow (round 14).** `key_version` records which `CONNECTION_ENCRYPTION_KEY` generation wrote a row, but P0 has one key. Changing it makes every stored credential undecryptable: connections move to `needs_reauth` and each user reconnects. GitHub OAuth-App tokens do not expire by default; a GitHub App (documented hardening) would.
+18. **The legacy environment credentials remain a live path (round 14)** for operations with `connection_id IS NULL`. They can be removed from configuration once no such operation is still pending or `reconciliation_required`; until then they are the only way to reconcile those rows.
 
 ---
 
@@ -983,6 +1117,7 @@ Per its section 45.1, behavior the ERD needs must be stated in the Technical Req
 | FR-081 manual revision draft (Requirements, UI Requirements, Backlog) | Without it, BRD 10.3's controlled change test would run through an AI regeneration and measure model noise, not the lineage engine |
 | FR-074 extended to Epics; Story parent resolved by the Epic's LogicalItem | A changed Epic otherwise created a second Jira Epic silently, and a skipped Epic left its Stories unparentable |
 | FR-085 impact shown in every external-write preview, with explicit confirmation | Otherwise Jira issues or a repository could be created from items already known to be stale without the user seeing it |
+| **(round 14)** New BR-012 and FR-086..FR-090: per-user provider connections, Connections screen, project targets, connect-to-continue prompt, reconnect-required state; NFR-005 amended (ciphertext at rest, never logged, minimal scopes, CSRF state + PKCE, revoke on disconnect) | Users must act with their own provider accounts; reverses the shared-credential model. Reopens "credentials never a column", "one configured Jira project" and the settings-screen exclusion (TR v1.7) |
 
 ---
 
@@ -1007,7 +1142,13 @@ Per its section 45.1, behavior the ERD needs must be stated in the Technical Req
 | NFR-002, NFR-003 | Composite FKs, triggers, RESTRICT deletes (a whole-project delete is the one sanctioned exception - section 4.2, `delete_project()`, T44) |
 | Project deletion (owner request, round 13) | Section 4.2, Appendix A.4, T44. No BRD/Technical Requirements id exists for it - see Appendix B round 13 |
 | NFR-004 | `ai_generation_run` |
-| NFR-005 | Supabase Auth (open sign-up, mandatory email verification, verified identity), Data API deny-all (A.3), per-request project ownership check, server-side credentials, private storage bucket + sandboxed HTML, escaped AI text, HMAC repository marker, secret-free columns |
+| NFR-005 | Supabase Auth (open sign-up, mandatory email verification, verified identity), Data API deny-all (A.3, A.5), per-request project ownership check, server-side shared secrets, **per-user credentials as AES-256-GCM ciphertext only (`provider_connection`, section 4.17; T45)**, private storage bucket + sandboxed HTML, escaped AI text, HMAC repository marker, secret-free columns |
+| FR-092 (UC-S11, round 17) | `provider_connection.scopes` (4.17), sections 7.6 and 7.8, T54; no operation or ref row |
+| FR-091 (UC-S10, round 16) | `external_ref`, `external_operation` (sections 4.14, 4.15), section 7.7, T53 |
+| FR-086, FR-087 (BR-012, round 14) | `provider_connection` (section 4.17), `external_operation.connection_id`, sections 7.2 step 0 and 7.6, T45-T47, T51, T52 |
+| FR-088 | `project.github_owner` (nullable override, round 15),  `project.jira_cloud_id`, `project.jira_project_key` (section 4.2), operation keys (section 4.14), T48 |
+| FR-089 | Step 0 of section 7.2 (no operation row without a connection); UI only otherwise; T50 |
+| FR-090 | Section 7.6, `provider_connection.status`, T49, T51 |
 
 ---
 
@@ -1015,10 +1156,10 @@ Per its section 45.1, behavior the ERD needs must be stated in the Technical Req
 
 | Slice | Content | Notes |
 |---|---|---|
-| 1 | Supabase project; Drizzle schema for all 16 tables + the custom migration (triggers, `impact()`, A.3); Supabase Auth with the `app_user` upsert; load the Appendix C suite as the first integration test | Diff the generated SQL against Appendix A; T14, T27, T28, **T34** first |
+| 1 | Supabase project; Drizzle schema for all 16 tables (17 from round 14 - `provider_connection` arrives with migrations `0009`/`0010`, Appendix A.5, story UC-S3) + the custom migration (triggers, `impact()`, A.3); Supabase Auth with the `app_user` upsert; load the Appendix C suite as the first integration test | Diff the generated SQL against Appendix A; T14, T27, T28, **T34** first |
 | 2 | Hashing/matching module (projections, content fallback, reuse), generation persist transaction with prerequisites, manual revision draft | **T21 before anything else**, then T1-T5, T8, T15, T31, T32, T40, T43 - all before any UI |
 | 3 | Approval/gate/override transactions, Architecture materialization + stack guard, draft-item edit rebinding | T6, T7, T9, T10, T22, T23, T24, T30 |
-| 4 | External write protocol (GitHub, Jira, Stitch), previews with impact (FR-085), FR-074 for Epics and Stories | Spike C results decide the Jira marker; T11-T13, T18, T26, T41, T42 |
+| 4 | External write protocol (GitHub, Jira, Stitch), previews with impact (FR-085), FR-074 for Epics and Stories | Spike C results decide the Jira marker; T11-T13, T18, T26, T41, T42. Round 14 (Jira Plan epic UC-E1) then re-plumbs the credential in each provider client and adds T45-T52 |
 
 Highest implementation risks, each with its mitigation:
 1. **The matching and hashing loop**, where the LLM meets deterministic identity. Its failure mode is silent (wrong warnings in a working-looking UI). Build it headless, behind T21 and T31, with low temperature and the base items in the prompt.
@@ -1027,7 +1168,7 @@ Highest implementation risks, each with its mitigation:
 
 Most expensive to change later: upstream ids in the semantic hash - which is why they are frozen.
 
-**Freeze status.** Tables, columns, constraints, triggers and `impact()` are **frozen as of v1.3**. The complete DDL (Appendix A) and `impact()` (section 6.3) have been executed and pass the Appendix C behaviour suite. After this point a change is allowed only for a genuine correctness defect found by a failing test, or for a recorded decision; either way it is recorded as an Appendix B round, and this document is updated in the same step. No database exists yet, so until slice 1 creates it a change is only an edit here; afterwards it is a new migration. The visual ERD is generated from the Drizzle schema once slice 1 lands (the Mermaid diagram in section 1.4 already covers the structure).
+**Freeze status.** Tables, columns, constraints, triggers and `impact()` are **frozen as of v1.3** (round 14 reopened them for `provider_connection` and three `project` columns, at the project owner request, by the explicit process this paragraph describes). The complete DDL (Appendix A) and `impact()` (section 6.3) have been executed and pass the Appendix C behaviour suite. After this point a change is allowed only for a genuine correctness defect found by a failing test, or for a recorded decision; either way it is recorded as an Appendix B round, and this document is updated in the same step. No database exists yet, so until slice 1 creates it a change is only an edit here; afterwards it is a new migration. The visual ERD is generated from the Drizzle schema once slice 1 lands (the Mermaid diagram in section 1.4 already covers the structure).
 
 ---
 
@@ -1049,6 +1190,7 @@ Most expensive to change later: upstream ids in the semantic hash - which is why
 - **UI:** Tailwind CSS + shadcn/ui, components copied into the repo (round 8).
 - **Tests:** Vitest; Appendix C suite against a `postgres:15-alpine` container (round 8).
 - **Hosting/CI:** Vercel + GitHub Actions on every PR; layer boundaries lint-enforced (round 8).
+- **Per-user provider connections (round 14):** GitHub = OAuth App web flow (`repo`), Jira = Atlassian 3LO, Stitch = pasted API key validated before saving; AES-256-GCM in app code with `CONNECTION_ENCRYPTION_KEY`; table `provider_connection` (section 4.17); operations record `connection_id`; NULL = legacy environment credential, used for those operations only; reconnect-required never fails an operation or raises a warning (section 7.6).
 - **Build environment:** the full setup, dependency and migration-order plan is `docs/Throughline_Project_Setup.md` (current version tracked there; v1.1 as of round 8 - it adds house code-hygiene conventions on top of the v1.0 stack decisions, no further schema/DDL impact).
 
 **Still open:** none that affect the schema. Spike C (the Jira marker mechanism) can change only the *content* of the marker, not any table.
@@ -1057,7 +1199,7 @@ Most expensive to change later: upstream ids in the semantic hash - which is why
 
 ## Appendix A - Complete reference DDL (PostgreSQL 15+, executed)
 
-This is the complete schema, not a sketch. It is the exact SQL executed by the Appendix C suite. Apply it in this order: **A.1 -> A.2 -> `impact()` (section 6.3) -> A.3**. The Drizzle schema must generate SQL equivalent to A.1 (read and diff every generated file, section 2.1); A.2, `impact()` and A.3 go verbatim into custom migrations. Constraint names are PostgreSQL's defaults; name them explicitly in Drizzle if you want stable names in error messages.
+This is the complete schema, not a sketch. It is the exact SQL executed by the Appendix C suite. Apply it in this order: **A.1 -> A.2 -> `impact()` (section 6.3) -> A.3 -> A.4 -> A.5** (A.4 is migration `0008`, A.5 is migrations `0009` and `0010`; the 17th table `provider_connection` and the three `project` columns are added by ALTER in A.5 rather than inlined into A.1, because A.1 mirrors migrations `0000`-`0007` that already exist on the live database - a fresh build and the live database then take the identical path). The Drizzle schema must generate SQL equivalent to A.1 (read and diff every generated file, section 2.1); A.2, `impact()` and A.3 go verbatim into custom migrations. Constraint names are PostgreSQL's defaults; name them explicitly in Drizzle if you want stable names in error messages.
 
 ### A.1 Tables, constraints and indexes
 
@@ -1505,6 +1647,7 @@ ALTER TABLE external_ref                      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE impact_acknowledgement            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_generation_run                 ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stitch_output                     ENABLE ROW LEVEL SECURITY;
+-- round 14: provider_connection (table #17) gets the same two layers in its own migration, A.5 / 0010
 ```
 
 Ordering rules the triggers and constraints impose on the write path:
@@ -1514,6 +1657,8 @@ Ordering rules the triggers and constraints impose on the write path:
 - **Operations before refs:** the `external_operation` row (with its provenance) exists and is committed before the provider call; the `external_ref` is inserted with the completion.
 
 ### A.4 Project deletion (custom migration `0008`, after A.3; round 13)
+
+*Round 14 check: `delete_project()` needs no change. `provider_connection` belongs to a user, not a project; the only rows that reference it are the project's own `external_operation` rows, which the function already deletes, so the connection is left in place (T47).*
 
 Executed on PostgreSQL 15 by the T44 suite (`tests/integration/project-deletion.test.ts`), through the real triggers, FKs and A.3 hardening. `forbid_mutation` and `membership_draft_only` (A.2) carry the matching bypass; this is the only function that ever sets it.
 
@@ -1583,6 +1728,97 @@ END $$;
 
 -- A.3 applies to this function too (Supabase grants EXECUTE on every new function to anon by default):
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticated;
+```
+
+### A.5 Per-user provider connections (migrations `0009` and `0010`; round 14)
+
+**What is added.** Table #17 `provider_connection`; `project.github_owner`, `project.jira_cloud_id`, `project.jira_project_key` with two CHECKs; `external_operation.connection_id` with a composite FK and a partial index. **Why ALTER and not inlined into A.1:** the live database already has tables 1-16 (migrations `0000`-`0008` applied), so the change has to be an ALTER there; using the same text for a fresh build keeps one path. `provider_connection` is created **first**, before the two ALTERs that point at it.
+
+**Migration numbering.** `drizzle/migrations` currently ends at `0008_project_deletion.sql`. Round 14 adds two, following the precedent of `0000`/`0001` and `0002`/`0006` (schema first, hardening after):
+- `0009_provider_connection.sql` - **generated** by `drizzle-kit generate` from the updated Drizzle schema (`src/db/schema/provider-connection.ts`, plus the new columns in `project.ts` and `external-operation.ts`), then diffed against the block below (section 2.1 rule 1). Includes the CHECKs, both UNIQUEs, the composite FK and the partial index.
+- `0010_provider_connection_hardening.sql` - **custom** (`drizzle-kit generate --custom`): the `touch_updated_at` trigger, `REVOKE` and `ENABLE ROW LEVEL SECURITY` (A.3 pattern; T34 catches a miss). It runs after `0009` because the table must exist.
+
+Neither touches `impact()`, `forbid_mutation`, or `delete_project()`. As with `0008`, applying them to the live Supabase project is direct SQL in one transaction plus a ledger row in `supabase_migrations.schema_migrations` - **not** `pnpm db:migrate` (the live database has no drizzle ledger). They are **not applied** by this documentation round.
+
+**`0009_provider_connection.sql`**
+
+```sql
+-- ERD Appendix B round 14: per-user provider connections.
+-- Order matters: provider_connection first (it depends only on app_user), then the two ALTERs that point at it.
+
+CREATE TABLE provider_connection (
+  id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id              uuid NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+  provider             text NOT NULL CHECK (provider IN ('github','jira','stitch')),
+  external_account_id  text NOT NULL,                       -- provider's stable id for the account (not a secret)
+  display_name         text NOT NULL,                       -- GitHub login / Atlassian account name / Stitch label
+  access_token_enc     text NOT NULL,                       -- 'v1:<iv>:<tag>:<ciphertext>' (base64url), or the tombstone 'revoked'
+  refresh_token_enc    text,                                -- same format; Jira only in practice; NULL otherwise
+  expires_at           timestamptz,                         -- access-token expiry when the provider reports one
+  scopes               text NOT NULL DEFAULT '',            -- space-separated, as granted (informational)
+  provider_meta        jsonb NOT NULL DEFAULT '{}'::jsonb,  -- whitelisted, non-secret: github login; jira cloudId/siteUrl/siteName
+  status               text NOT NULL DEFAULT 'active' CHECK (status IN ('active','needs_reauth','revoked')),
+  key_version          int  NOT NULL DEFAULT 1 CHECK (key_version > 0),
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  updated_at           timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, provider),
+  UNIQUE (id, provider),                                    -- target of external_operation's (connection_id, provider) FK
+  CHECK (jsonb_typeof(provider_meta) = 'object'),
+  CHECK (NOT (provider_meta ?| ARRAY['access_token','refresh_token','token','api_key','apiKey','secret','client_secret','password'])),
+  CHECK (
+    -- a disconnected row that history still references: tombstone, no secret material at all
+    (status = 'revoked' AND access_token_enc = 'revoked' AND refresh_token_enc IS NULL AND expires_at IS NULL)
+    OR
+    -- every other row: ciphertext-shaped values only, written under the recorded key version
+    (status <> 'revoked'
+     AND access_token_enc ~ '^v[0-9]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$'
+     AND split_part(access_token_enc, ':', 1) = 'v' || key_version::text
+     AND (refresh_token_enc IS NULL
+          OR (refresh_token_enc ~ '^v[0-9]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$'
+              AND split_part(refresh_token_enc, ':', 1) = 'v' || key_version::text)))
+  )
+);
+
+-- project targets: where this project's external outputs go (replace GITHUB_OWNER / JIRA_PROJECT_KEY for NEW operations)
+ALTER TABLE project
+  ADD COLUMN github_owner      text,
+  ADD COLUMN jira_cloud_id     text,
+  ADD COLUMN jira_project_key  text,
+  ADD CONSTRAINT project_jira_target_pair
+    CHECK ((jira_cloud_id IS NULL) = (jira_project_key IS NULL)),
+  ADD CONSTRAINT project_target_not_blank
+    CHECK ((github_owner     IS NULL OR length(btrim(github_owner))     > 0)
+       AND (jira_cloud_id    IS NULL OR length(btrim(jira_cloud_id))    > 0)
+       AND (jira_project_key IS NULL OR length(btrim(jira_project_key)) > 0));
+
+-- the connection an operation was created with; NULL = legacy operation made with the shared env credential.
+-- Composite FK: the connection must be for the SAME provider as the operation (MATCH SIMPLE skips it when NULL).
+ALTER TABLE external_operation
+  ADD COLUMN connection_id uuid,
+  ADD FOREIGN KEY (connection_id, provider)
+    REFERENCES provider_connection (id, provider) ON DELETE RESTRICT;
+
+-- disconnect asks "does any operation still reference this connection?"; RESTRICT checks probe the same column
+CREATE INDEX external_operation_connection ON external_operation (connection_id) WHERE connection_id IS NOT NULL;
+```
+
+**`0010_provider_connection_hardening.sql`**
+
+```sql
+-- ERD Appendix B round 14: hardening for provider_connection (A.3 pattern; T34 catches a miss).
+-- provider_connection is MUTABLE (tokens are refreshed, status changes), so none of the append-only /
+-- frozen-row triggers apply. Only touch_updated_at does: its updated_at feeds the refresh-expiry decision.
+
+CREATE TRIGGER provider_connection_touch BEFORE UPDATE ON provider_connection
+  FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+
+REVOKE ALL ON provider_connection FROM anon, authenticated;
+ALTER TABLE provider_connection ENABLE ROW LEVEL SECURITY;   -- no policies: deny-all, even after an accidental GRANT
+
+-- Operator cleanup for a deleted Supabase user (known limitation 15) - run by hand, one user at a time:
+--   UPDATE provider_connection
+--      SET status = 'revoked', access_token_enc = 'revoked', refresh_token_enc = NULL, expires_at = NULL
+--    WHERE user_id = '<deleted user id>';
 ```
 
 ---
@@ -1754,9 +1990,67 @@ This is an Auth **configuration** change (Supabase Dashboard -> Authentication -
 
 ---
 
+### Round 14 (v1.10 -> v1.11: per-user provider connections; reverses the shared-credential model)
+
+**Stated reason for reopening frozen decisions:** project owner request - *users must act with their own provider accounts; this reverses the shared-credential model.* It reopens, each recorded in the same edit: section 2 "Secrets" and NFR-005's "credentials ... never a column" (per-user credentials are now a column, but only as ciphertext, and still never reach the browser); section 7.3's "a new encrypted credentials table ... this model deliberately does not have"; section 7.4 and BRD/TR "one configured Jira project per instance"; and TR section 9A's "a settings screen is out of scope" (the Connections screen now has FR-087). Technical Requirements v1.7 and BRD v2.5 were written in the same step (BR-012, FR-086..FR-090). The LLM key stays shared and server-side. The R9-4 accepted-risk note is amended: users now spend their own GitHub/Jira/Stitch quota; only the LLM key remains a shared budget.
+
+| Ref | Change | Note |
+|---|---|---|
+| R14-1 | New table #17 `provider_connection` (section 4.17): `UNIQUE (user_id, provider)`, ciphertext-shape CHECKs, `key_version`, `status` in (`active`,`needs_reauth`,`revoked`), whitelisted `provider_meta` | Mutable, owned by a user not a project, outside the lineage graph: `forbid_mutation` and the other guards do not apply; `touch_updated_at` does. Data API deny-all as for the other 16 |
+| R14-2 | Encryption in app code: AES-256-GCM, fresh IV per write, AAD = `user_id:provider`, key `CONNECTION_ENCRYPTION_KEY` (32-byte base64); DB stores `v1:iv:tag:ct` only | No plaintext token is ever a column; the DB CHECK is a shape backstop for a code path that forgets to encrypt (T45) |
+| R14-3 | `project.github_owner`, `jira_cloud_id`, `jira_project_key`; Jira pair CHECK | Replace env `GITHUB_OWNER` / `JIRA_PROJECT_KEY` for new operations. Not covered by `project_seed_frozen` |
+| R14-4 | `external_operation.connection_id` with composite FK `(connection_id, provider)` -> `provider_connection (id, provider)`; NULL = legacy | Stronger than a plain FK: a connection can back only its own provider. `RESTRICT` means a referenced connection is tombstoned, not deleted. `operation_key`s unchanged (section 4.14 explains why); `request_hash` and `target_descriptor.account_id` carry the owner/site/account |
+| R14-5 | Section 7.2 step 0 and 7.6: credential resolution, reconnect-required is never `failed` and never a warning, account-mismatch guard, refresh-with-rotation under a **row** lock distinct from the project advisory lock, and its ordering rule | The one intentional lock-across-a-network-call exception (the token endpoint), bounded and never across a Jira/LLM call |
+| R14-6 | GitHub ownership marker unchanged (HMAC over `operation_key`); Jira marker unchanged | Both are properties of the operation, not the account |
+| R14-7 | Sections 8, 9 (R14, R15), 10 (T45-T52), 11 (limitations 15-18), 12, 13, 14, 15 updated; Appendix A.5 (migrations `0009`, `0010`); `delete_project()` unchanged | `provider_connection` is not project data |
+| R14-8 | Tests T45-T52. SQL halves of T45-T50 and the extended T34 are in Appendix C.2 | T45 extends T34's secret-free scan; T49 has a DB half (structural: nothing reacts to a connection status) and an APP half; T51, T52 are APP-only |
+
+**Not done by this round:** no code, no Drizzle schema, no migration file, and nothing applied to the live Supabase project.
+
+### Round 15 (v1.11 -> v1.12: GitHub owner defaults to the connected account)
+
+**Reason:** product feedback after trying UC-E1 (Jira Plan UC-S9) - making the user pick a GitHub owner is friction when the connected account is the obvious answer. No frozen scope is reopened beyond TR FR-088's "GitHub owner chosen by the owner", refined in TR v1.8.
+
+| Ref | Change | Note |
+|---|---|---|
+| R15-1 | `project.github_owner` semantics: NULL = default to the connected account's login; a value = explicit override (section 4.2) | **No DDL change**: the column was nullable since `0009`, and `project_target_not_blank` still forbids a blank value. T48 unchanged (wording only) |
+| R15-2 | Owner resolution (sections 7.3, 7.6): `ctx.githubOwner ?? credential.meta.login`; the resolved owner is snapshotted into `target_descriptor` and `request_hash` | An existing operation is never affected by a later change of override or account (the account-mismatch guard, 7.6, is unchanged) |
+| R15-3 | `TARGET_REQUIRED` for GitHub becomes defensive (no override and no connection login) | The connection check fails first with `CONNECTION_REQUIRED` in practice. Jira `TARGET_REQUIRED` is unchanged |
+| R15-4 | GitHub repository visibility is selectable (`public` default, `private`): recorded in `target_descriptor`, hashed only when `private`, reused by retry, legacy operations stay public (section 7.3) | Earlier text was silent (the API doc fixed it as public in v1.10); uses TR FR-030's "if configurable" clause. Hash-when-private keeps every existing hash valid. T18 wording extended, no new test id |
+
+**Not done by this round:** no schema, migration or test change; Appendix A and Appendix C are unchanged, so no SQL needed re-running.
+
+### Round 16 (v1.12 -> v1.13: remove a GitHub repository link)
+
+**Reason:** product feedback (Jira Plan UC-S10) - a project could never get a second repository, even after the first was deleted on GitHub. Refines the "one repository per project" rule of section 4.15 / TR FR-031 without reopening it: still at most one repository link per project at any time.
+
+| Ref | Change | Note |
+|---|---|---|
+| R16-1 | New section 7.7: `external-operations.unlinkGithubRepository(projectId)` deletes the project's GitHub `external_ref` then the completed `external_operation`, under runOperation's per-project GitHub advisory lock, refused while an operation is `pending`/`reconciliation_required` | **No DDL or migration**: neither table is append-only. Refs first because of `ON DELETE RESTRICT`. `failed` rows kept. Nothing is ever deleted on GitHub and no GitHub call is made |
+| R16-4 | Correction (v1.14): the ownership marker `HMAC(GITHUB_MARKER_SECRET, operation_key)` is identical for the same project and name before and after an unlink; same name is reusable only after the old repository is deleted on GitHub (definitive `name_taken_by_other` otherwise; re-adoption only via an ambiguous create followed by reconciliation, and only if the description is unedited); a different name always gets a new key and marker. The unlink in-flight check precedes the nothing-linked lookup (pending with no ref = 409) | Replaces the earlier v1.13 claim that the old marker was gone and that the same name could always be reused. T53 and 7.7 reworded |
+| R16-2 | T53 added (application test; no SQL half) | Appendix C and A unchanged, so nothing needed executing |
+| R16-3 | User-facing name of the Connections screen is now "Integrations" (route unchanged) | No data-model effect; `provider_connection.display_name` comment updated |
+
+**Not done by this round:** no code and no migration.
+
+### Round 17 (v1.14 -> v1.15: create a Jira project from Throughline)
+
+**Reason:** product feedback (Jira Plan UC-S11) - users had to leave Throughline to create the Jira project they then had to pick. No frozen scope is reopened; the Jira scope set is widened by one scope.
+
+| Ref | Change | Note |
+|---|---|---|
+| R17-1 | New section 7.8: a provider setup action (`jira.validateProjectKey`, `jira.createProject`) outside the 7.2 write protocol | No `external_operation`/`external_ref`/lineage row; idempotent by Jira key uniqueness; no lock |
+| R17-2 | Jira OAuth scope set gains `manage:jira-project` (4.17 `scopes` note, 7.6) | Existing connections reconnect once (`missing_scope`); `scopes` column already stores what was granted, so no DDL |
+| R17-3 | T54 added (application test; no SQL half) | Appendices A and C unchanged, so nothing needed executing; the Appendix C.2 fixture string was updated to the new scope set (data only) |
+
+**Not done by this round:** no code, no migration.
+
+---
+
 ## Appendix C - Verification suite
 
-Round 13 adds T44 (project deletion, section 10; `tests/integration/project-deletion.test.ts`, passing on PostgreSQL 15 through the real triggers and FKs). The post-P0 extension adds T45 for generated BRD/ERD document artifacts; verification is tracked separately from the historical suite below. Otherwise:
+Round 13 adds T44 (project deletion, section 10; `tests/integration/project-deletion.test.ts`, passing on PostgreSQL 15 through the real triggers and FKs). Round 14 adds T45-T52 (per-user provider connections); the SQL halves are in **C.2** below, and their execution status is stated there. Round 17 adds T54 (create a Jira project; application test, no SQL half). Round 16 adds T53 (unlink a GitHub repository record): **not yet implemented in SQL - an application-level integration test**, with no SQL half in C.2. Otherwise:
+The post-P0 document extension adds T55 (`tests/integration/document-artifacts.test.ts`). Migration `0011` was applied to the configured Supabase Postgres on 2026-09-30; T55 must pass in CI against a fresh database before E7-S1 is complete.
 
 Round 7 changed no DDL, so these results still apply unchanged. T40-T43 are application-level integration tests (they exercise service code, not new constraints) and belong to slices 2 and 4.
 
@@ -1780,3 +2074,217 @@ The suite runs the canonical flow through the real triggers - Requirements v1 ->
 T14 UPDATE `item_version` / UPDATE `semantic_dependency` / DELETE `impact_acknowledgement` / membership added to a superseded version; T27 UPDATE `architecture_option`; T28 INSERT an approved version; frozen payload; immutable `version_number`; illegal `superseded -> approved`; second draft per artifact; base version from another artifact; override without a note; display key not matching item type; cross-project edge; ItemVersion whose project disagrees with its LogicalItem; acknowledgement across two LogicalItems; duplicate removal acknowledgement (`NULLS NOT DISTINCT`); Jira ref whose `(version, item)` is not a membership row; GitHub ref with item provenance; brief edited after Requirements generation; stale rejection without `raw_output`; `raw_output` on a normal draft; T36 born rejected with a non-stale reason / draft -> rejected claiming stale; T37 manual fallback with a ref / api without one; T39 Jira operation without an item / with a non-member item / any operation without a source version; T9 architecture approval with one option, with no selection, with another version's option, and a third option; **T34** `anon` reading, writing, or calling `impact()` - all denied, and an accidental grant still shows zero rows.
 
 **Accepted writes (positive controls)** - a brief edited before any Requirements version; a stale-generation version inserted directly as `rejected` with `raw_output`; an Architecture approval with a valid own-option selection and exactly two options; T35 a re-created Supabase user with the same email, and an idempotent login upsert; T38 `updated_at` refreshed by the database even when a caller writes a stale value.
+
+### C.2 Round 14 checks (T45-T50 SQL halves, T34 extended)
+
+**Execution status: NOT executed.** These statements were written together with A.5 but have not been run: no PostgreSQL 15+ was reachable when this round was made (no `psql` on the machine; Docker Desktop is installed but its daemon would not start, so the `postgres:15-alpine` Testcontainers path of Project Setup section 10 was unavailable; the live Supabase project was deliberately not used). They were reviewed by hand only. To run: on a scratch database, create the `anon` and `authenticated` roles and `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated`, apply `drizzle/migrations/0000`-`0008` plus the two A.5 files in order (strip the `--> statement-breakpoint` markers), then run the script below with `psql -v ON_ERROR_STOP=1` in one session. Success is a run that prints only `NOTICE: ok ...` lines; any failed expectation aborts with `FAILED T..`. UC-S3 must record the real output here before it is called done.
+
+```sql
+-- Round 14 checks (T45-T50, SQL halves). Run after migrations 0000-0010, as the table owner, in ONE psql session.
+-- Every DO block raises on a failed expectation; a clean run prints only NOTICE lines beginning "ok".
+\set ON_ERROR_STOP on
+
+-- helper: run a statement that MUST fail with one of the given SQLSTATE classes
+CREATE FUNCTION pg_temp.must_fail(stmt text, label text) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v_ok boolean;
+BEGIN
+  BEGIN
+    EXECUTE stmt;
+    v_ok := true;
+  EXCEPTION WHEN check_violation OR unique_violation OR foreign_key_violation OR raise_exception
+                 OR insufficient_privilege THEN
+    v_ok := false;
+    RAISE NOTICE 'ok  % -> %', label, SQLERRM;
+  END;
+  IF v_ok THEN RAISE EXCEPTION 'FAILED %: the statement was accepted', label; END IF;
+END $$;
+
+-- helper: every text / jsonb / text[] column of every public table, searched for a marker string
+CREATE FUNCTION pg_temp.plaintext_hits(marker text) RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE r record; n bigint; total bigint := 0;
+BEGIN
+  FOR r IN SELECT c.table_name, c.column_name FROM information_schema.columns c
+            JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+           WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+             AND c.data_type IN ('text','jsonb','json','character varying','ARRAY')
+  LOOP
+    EXECUTE format('SELECT count(*) FROM public.%I WHERE %I::text LIKE %L', r.table_name, r.column_name, '%' || marker || '%') INTO n;
+    total := total + n;
+  END LOOP;
+  RETURN total;
+END $$;
+
+-- fixtures
+INSERT INTO app_user (id, email) VALUES
+  ('00000000-0000-0000-0000-0000000000a1', 'a@example.test'),
+  ('00000000-0000-0000-0000-0000000000a2', 'b@example.test');
+INSERT INTO project (id, owner_user_id, name, brief) VALUES
+  ('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000a1', 'P1', 'brief'),
+  ('00000000-0000-0000-0000-0000000000b2', '00000000-0000-0000-0000-0000000000a1', 'P2', 'brief');
+INSERT INTO artifact (id, project_id, type) VALUES
+  ('00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-0000000000b1', 'architecture'),
+  ('00000000-0000-0000-0000-0000000000c2', '00000000-0000-0000-0000-0000000000b2', 'architecture');
+INSERT INTO artifact_version (id, artifact_id, version_number, status, schema_version) VALUES
+  ('00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-0000000000c1', 1, 'draft', 1),
+  ('00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-0000000000c2', 1, 'draft', 1);
+
+-- ------------------------------------------------------------------ T45  no plaintext token in any column
+INSERT INTO provider_connection (id, user_id, provider, external_account_id, display_name, access_token_enc, scopes, provider_meta) VALUES
+  ('00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-0000000000a1', 'github', '1001', 'octo-a',
+   'v1:AAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBB:Y2lwaGVydGV4dA', 'repo', '{"login":"octo-a"}');
+SELECT pg_temp.must_fail($q$INSERT INTO provider_connection (user_id, provider, external_account_id, display_name, access_token_enc)
+  VALUES ('00000000-0000-0000-0000-0000000000a2','github','2','x','ghp_PLAINTEXTTOKEN0123456789')$q$, 'T45a plaintext access token refused');
+SELECT pg_temp.must_fail($q$INSERT INTO provider_connection (user_id, provider, external_account_id, display_name, access_token_enc, refresh_token_enc)
+  VALUES ('00000000-0000-0000-0000-0000000000a2','jira','2','x','v1:AAAA:BBBB:CCCC','PLAINTEXTREFRESH0123')$q$, 'T45b plaintext refresh token refused');
+SELECT pg_temp.must_fail($q$INSERT INTO provider_connection (user_id, provider, external_account_id, display_name, access_token_enc)
+  VALUES ('00000000-0000-0000-0000-0000000000a2','stitch','2','x','v2:AAAA:BBBB:CCCC')$q$, 'T45c ciphertext version must equal key_version');
+SELECT pg_temp.must_fail($q$INSERT INTO provider_connection (user_id, provider, external_account_id, display_name, access_token_enc, provider_meta)
+  VALUES ('00000000-0000-0000-0000-0000000000a2','stitch','2','x','v1:AAAA:BBBB:CCCC','{"access_token":"PLAINTEXTTOKEN"}')$q$, 'T45d token-named key in provider_meta refused');
+SELECT pg_temp.must_fail($q$INSERT INTO provider_connection (user_id, provider, external_account_id, display_name, access_token_enc, status)
+  VALUES ('00000000-0000-0000-0000-0000000000a2','stitch','2','x','v1:AAAA:BBBB:CCCC','revoked')$q$, 'T45e a revoked row must be the tombstone');
+DO $$ BEGIN
+  IF pg_temp.plaintext_hits('PLAINTEXT') <> 0 THEN RAISE EXCEPTION 'FAILED T45f: a plaintext marker is present in some column'; END IF;
+  RAISE NOTICE 'ok  T45f no plaintext marker in any text/jsonb column of any table';
+END $$;
+
+-- ------------------------------------------------------------------ T46  one connection per (user, provider)
+SELECT pg_temp.must_fail($q$INSERT INTO provider_connection (user_id, provider, external_account_id, display_name, access_token_enc)
+  VALUES ('00000000-0000-0000-0000-0000000000a1','github','9','dup','v1:AAAA:BBBB:CCCC')$q$, 'T46a second github connection for the same user');
+SELECT pg_temp.must_fail($q$INSERT INTO provider_connection (user_id, provider, external_account_id, display_name, access_token_enc)
+  VALUES ('00000000-0000-0000-0000-0000000000a2','gitlab','9','x','v1:AAAA:BBBB:CCCC')$q$, 'T46b unknown provider');
+SELECT pg_temp.must_fail($q$INSERT INTO provider_connection (user_id, provider, external_account_id, display_name, access_token_enc, status)
+  VALUES ('00000000-0000-0000-0000-0000000000a2','github','9','x','v1:AAAA:BBBB:CCCC','expired')$q$, 'T46c unknown status');
+SELECT pg_temp.must_fail($q$INSERT INTO provider_connection (user_id, provider, external_account_id, display_name, access_token_enc)
+  VALUES ('00000000-0000-0000-0000-0000000000ff','github','9','x','v1:AAAA:BBBB:CCCC')$q$, 'T46d unknown user (FK)');
+INSERT INTO provider_connection (id, user_id, provider, external_account_id, display_name, access_token_enc) VALUES
+  ('00000000-0000-0000-0000-0000000000e2', '00000000-0000-0000-0000-0000000000a2', 'github', '1002', 'octo-b', 'v1:AAAA:BBBB:CCCC'),
+  ('00000000-0000-0000-0000-0000000000e3', '00000000-0000-0000-0000-0000000000a1', 'stitch', 'k1', 'Stitch key', 'v1:AAAA:BBBB:CCCC');
+INSERT INTO provider_connection (id, user_id, provider, external_account_id, display_name, access_token_enc, refresh_token_enc, scopes, provider_meta) VALUES
+  ('00000000-0000-0000-0000-0000000000e4', '00000000-0000-0000-0000-0000000000a1', 'jira', 'acct-1', 'Ada', 'v1:AAAA:BBBB:CCCC', 'v1:DDDD:EEEE:FFFF',
+   'read:jira-work write:jira-work manage:jira-project offline_access read:me', '{"cloudId":"cloud-1","siteUrl":"https://x.atlassian.net","siteName":"x"}');
+DO $$ BEGIN
+  IF (SELECT count(DISTINCT provider) FROM provider_connection WHERE user_id = '00000000-0000-0000-0000-0000000000a1') <> 3 THEN
+    RAISE EXCEPTION 'FAILED T46e: user a1 does not have all three providers'; END IF;
+END $$;
+DO $$ BEGIN RAISE NOTICE 'ok  T46e another user may connect the same provider; one user may connect all three'; END $$;
+
+-- ------------------------------------------------------------------ T47  connection_id FK, legacy NULL, delete_project()
+INSERT INTO external_operation (id, project_id, provider, operation_type, operation_key, status, request_hash, source_artifact_version_id, connection_id) VALUES
+  ('00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-0000000000b1', 'github', 'create_repo', 'github:create_repo:b1:app', 'pending', 'h1',
+   '00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-0000000000e1');
+INSERT INTO external_operation (id, project_id, provider, operation_type, operation_key, status, request_hash, source_artifact_version_id) VALUES
+  ('00000000-0000-0000-0000-0000000000f2', '00000000-0000-0000-0000-0000000000b2', 'github', 'create_repo', 'github:create_repo:b2:app', 'pending', 'h2',
+   '00000000-0000-0000-0000-0000000000d2');   -- legacy: connection_id NULL
+SELECT pg_temp.must_fail($q$INSERT INTO external_operation (project_id, provider, operation_type, operation_key, status, request_hash, source_artifact_version_id, connection_id)
+  VALUES ('00000000-0000-0000-0000-0000000000b1','stitch','generate_ui','stitch:generate:d1','pending','h3','00000000-0000-0000-0000-0000000000d1','00000000-0000-0000-0000-0000000000e1')$q$,
+  'T47a a github connection cannot back a stitch operation');
+SELECT pg_temp.must_fail($q$DELETE FROM provider_connection WHERE id = '00000000-0000-0000-0000-0000000000e1'$q$, 'T47b a referenced connection cannot be deleted (RESTRICT)');
+DO $$ BEGIN
+  IF NOT (SELECT delete_project('00000000-0000-0000-0000-0000000000b1')) THEN RAISE EXCEPTION 'FAILED T47c: delete_project returned false'; END IF;
+  IF (SELECT count(*) FROM provider_connection) <> 4 THEN RAISE EXCEPTION 'FAILED T47c: delete_project touched provider_connection'; END IF;
+  IF EXISTS (SELECT 1 FROM external_operation WHERE id = '00000000-0000-0000-0000-0000000000f1') THEN RAISE EXCEPTION 'FAILED T47c: operation survived'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM external_operation WHERE id = '00000000-0000-0000-0000-0000000000f2' AND connection_id IS NULL) THEN RAISE EXCEPTION 'FAILED T47c: legacy operation lost'; END IF;
+  RAISE NOTICE 'ok  T47c delete_project() removed the project and its operation, left all 4 connections and the other project''s legacy operation';
+END $$;
+DELETE FROM provider_connection WHERE id = '00000000-0000-0000-0000-0000000000e1';   -- now unreferenced: allowed
+DO $$ BEGIN RAISE NOTICE 'ok  T47d an unreferenced connection can be deleted'; END $$;
+
+-- ------------------------------------------------------------------ T48  project targets
+UPDATE project SET github_owner = 'octo-org' WHERE id = '00000000-0000-0000-0000-0000000000b2';
+UPDATE project SET jira_cloud_id = 'cloud-1', jira_project_key = 'SCRUM' WHERE id = '00000000-0000-0000-0000-0000000000b2';
+UPDATE project SET jira_cloud_id = NULL, jira_project_key = NULL WHERE id = '00000000-0000-0000-0000-0000000000b2';
+SELECT pg_temp.must_fail($q$UPDATE project SET jira_cloud_id = 'cloud-1' WHERE id = '00000000-0000-0000-0000-0000000000b2'$q$, 'T48a cloud id without project key');
+SELECT pg_temp.must_fail($q$UPDATE project SET jira_project_key = 'SCRUM' WHERE id = '00000000-0000-0000-0000-0000000000b2'$q$, 'T48b project key without cloud id');
+SELECT pg_temp.must_fail($q$UPDATE project SET github_owner = '   ' WHERE id = '00000000-0000-0000-0000-0000000000b2'$q$, 'T48c blank github owner');
+INSERT INTO artifact (id, project_id, type) VALUES ('00000000-0000-0000-0000-0000000000c3', '00000000-0000-0000-0000-0000000000b2', 'requirements');
+INSERT INTO artifact_version (artifact_id, version_number, status, schema_version) VALUES ('00000000-0000-0000-0000-0000000000c3', 1, 'draft', 1);
+UPDATE project SET github_owner = 'octo-org-2' WHERE id = '00000000-0000-0000-0000-0000000000b2';   -- brief is now frozen; targets are not
+SELECT pg_temp.must_fail($q$UPDATE project SET brief = 'edited' WHERE id = '00000000-0000-0000-0000-0000000000b2'$q$, 'T48d brief frozen (control)');
+DO $$ BEGIN RAISE NOTICE 'ok  T48e owner alone / pair set / pair cleared accepted, and a target changes after Requirements exist (project_seed_frozen unaffected)'; END $$;
+
+-- ------------------------------------------------------------------ T49  a lapsed connection changes nothing else
+-- Fixture: a Backlog item (S-01) in project b2, a completed Jira operation + its external_ref (connection e4, jira),
+-- a completed and a pending Stitch operation (connection e3).
+INSERT INTO artifact (id, project_id, type) VALUES ('00000000-0000-0000-0000-0000000000c4', '00000000-0000-0000-0000-0000000000b2', 'backlog');
+INSERT INTO artifact_version (id, artifact_id, version_number, status, schema_version) VALUES
+  ('00000000-0000-0000-0000-0000000000d4', '00000000-0000-0000-0000-0000000000c4', 1, 'draft', 1);
+INSERT INTO logical_item (id, project_id, artifact_id, item_type, display_key) VALUES
+  ('00000000-0000-0000-0000-0000000000a5', '00000000-0000-0000-0000-0000000000b2', '00000000-0000-0000-0000-0000000000c4', 'story', 'S-01');
+INSERT INTO item_version (id, project_id, logical_item_id, revision_number, payload, semantic_hash, semantic_hash_version) VALUES
+  ('00000000-0000-0000-0000-0000000000a6', '00000000-0000-0000-0000-0000000000b2', '00000000-0000-0000-0000-0000000000a5', 1, '{}',
+   repeat('a', 64), 1);
+INSERT INTO artifact_version_item_membership (artifact_version_id, artifact_id, logical_item_id, item_version_id) VALUES
+  ('00000000-0000-0000-0000-0000000000d4', '00000000-0000-0000-0000-0000000000c4', '00000000-0000-0000-0000-0000000000a5', '00000000-0000-0000-0000-0000000000a6');
+INSERT INTO external_operation (id, project_id, provider, operation_type, operation_key, status, external_id, request_hash,
+                                source_artifact_version_id, source_item_version_id, connection_id) VALUES
+  ('00000000-0000-0000-0000-0000000000f5', '00000000-0000-0000-0000-0000000000b2', 'jira', 'create_issue', 'jira:create_issue:SCRUM:a6', 'completed', 'SCRUM-1', 'h5',
+   '00000000-0000-0000-0000-0000000000d4', '00000000-0000-0000-0000-0000000000a6', '00000000-0000-0000-0000-0000000000e4');
+INSERT INTO external_ref (id, project_id, provider, external_id, external_key, source_artifact_version_id, source_item_version_id, external_operation_id) VALUES
+  ('00000000-0000-0000-0000-0000000000f7', '00000000-0000-0000-0000-0000000000b2', 'jira', 'SCRUM-1', 'SCRUM-1',
+   '00000000-0000-0000-0000-0000000000d4', '00000000-0000-0000-0000-0000000000a6', '00000000-0000-0000-0000-0000000000f5');
+INSERT INTO external_operation (id, project_id, provider, operation_type, operation_key, status, external_id, request_hash, source_artifact_version_id, connection_id) VALUES
+  ('00000000-0000-0000-0000-0000000000f4', '00000000-0000-0000-0000-0000000000b2', 'stitch', 'generate_ui', 'stitch:generate:d2:conn', 'completed', 'stitch-2', 'h8',
+   '00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-0000000000e3'),
+  ('00000000-0000-0000-0000-0000000000f6', '00000000-0000-0000-0000-0000000000b2', 'stitch', 'generate_ui', 'stitch:generate:d2:pending', 'pending', NULL, 'h6',
+   '00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-0000000000e3');
+CREATE FUNCTION pg_temp.snapshot() RETURNS text LANGUAGE sql AS $$
+  SELECT md5(coalesce((SELECT string_agg(row_to_json(o)::text, '|' ORDER BY o.id) FROM external_operation o), '') || '#' ||
+             coalesce((SELECT string_agg(row_to_json(r)::text, '|' ORDER BY r.id) FROM external_ref r), '') || '#' ||
+             coalesce((SELECT string_agg(row_to_json(i)::text, '|' ORDER BY i.subject_id, i.root_item_version_id)
+                         FROM impact('00000000-0000-0000-0000-0000000000b2') i), ''));
+$$;
+DO $$
+DECLARE before_hash text; after_hash text; trg text;
+BEGIN
+  before_hash := pg_temp.snapshot();
+  UPDATE provider_connection SET status = 'needs_reauth' WHERE id IN ('00000000-0000-0000-0000-0000000000e3', '00000000-0000-0000-0000-0000000000e4');
+  IF pg_temp.snapshot() <> before_hash THEN RAISE EXCEPTION 'FAILED T49a: needs_reauth changed an operation, a ref or impact()'; END IF;
+  UPDATE provider_connection SET status = 'revoked', access_token_enc = 'revoked', refresh_token_enc = NULL, expires_at = NULL
+   WHERE id IN ('00000000-0000-0000-0000-0000000000e3', '00000000-0000-0000-0000-0000000000e4');   -- tombstones: operations reference them
+  after_hash := pg_temp.snapshot();
+  IF after_hash <> before_hash THEN RAISE EXCEPTION 'FAILED T49b: revoking changed an operation, a ref or impact()'; END IF;
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'impact' AND prosrc ILIKE '%provider_connection%') THEN
+    RAISE EXCEPTION 'FAILED T49c: impact() reads provider_connection'; END IF;
+  SELECT string_agg(tgname, ',' ORDER BY tgname) INTO trg FROM pg_trigger
+   WHERE tgrelid = 'provider_connection'::regclass AND NOT tgisinternal;
+  IF trg IS DISTINCT FROM 'provider_connection_touch' THEN RAISE EXCEPTION 'FAILED T49d: unexpected triggers on provider_connection: %', trg; END IF;
+  RAISE NOTICE 'ok  T49 pending + completed operations, a Jira external_ref and impact() are byte-identical (md5 over every column) after needs_reauth and revoked; the only trigger is provider_connection_touch';
+END $$;
+
+-- ------------------------------------------------------------------ T50  legacy (NULL connection) operations keep their state machine
+DO $$
+BEGIN
+  INSERT INTO external_operation (id, project_id, provider, operation_type, operation_key, status, request_hash, source_artifact_version_id)
+  VALUES ('00000000-0000-0000-0000-0000000000f3', '00000000-0000-0000-0000-0000000000b2', 'stitch', 'generate_ui', 'stitch:generate:d2', 'pending', 'h9',
+          '00000000-0000-0000-0000-0000000000d2');
+  UPDATE external_operation SET status = 'reconciliation_required' WHERE id = '00000000-0000-0000-0000-0000000000f3';
+  UPDATE external_operation SET status = 'completed', external_id = 'stitch-1' WHERE id = '00000000-0000-0000-0000-0000000000f3';
+  IF (SELECT connection_id FROM external_operation WHERE id = '00000000-0000-0000-0000-0000000000f3') IS NOT NULL THEN
+    RAISE EXCEPTION 'FAILED T50: legacy operation acquired a connection'; END IF;
+  RAISE NOTICE 'ok  T50 legacy operation (connection_id NULL): pending -> reconciliation_required -> completed unchanged';
+END $$;
+
+-- ------------------------------------------------------------------ T34 extension  Data API denied on the new table
+DO $$
+DECLARE n bigint;
+BEGIN
+  SET LOCAL ROLE anon;
+  BEGIN
+    SELECT count(*) INTO n FROM provider_connection;
+    RESET ROLE;
+    RAISE EXCEPTION 'FAILED T34+: anon could read provider_connection';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RESET ROLE;
+    RAISE NOTICE 'ok  T34+ anon: permission denied for provider_connection';
+  END;
+  GRANT SELECT ON provider_connection TO anon;       -- the accidental grant
+  SET LOCAL ROLE anon;
+  SELECT count(*) INTO n FROM provider_connection;
+  RESET ROLE;
+  REVOKE ALL ON provider_connection FROM anon;
+  IF n <> 0 THEN RAISE EXCEPTION 'FAILED T34+: RLS exposed % rows after an accidental grant', n; END IF;
+  RAISE NOTICE 'ok  T34+ accidental GRANT still shows 0 rows (RLS, no policies)';
+END $$;
+```
+
+Not covered by SQL, therefore **application integration tests to be written in UC-S2..UC-S8** and not executed by this round: T45's flows/log/response scan, T49's and T50's application halves, T51 and T52.

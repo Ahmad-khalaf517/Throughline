@@ -1,5 +1,5 @@
 {
-  "id": "903457c8-82ea-43d6-b21f-39bdf26825bf",
+  "id": "71d114e1-15f7-4493-9be9-f080e7fef93a",
   "prevId": "5bb9efac-4c1d-4470-9fd4-0225e55ff534",
   "version": "7",
   "dialect": "postgresql",
@@ -101,9 +101,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "ai_generation_run_project": {
           "name": "ai_generation_run_project",
@@ -116,37 +116,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "ai_generation_run_project_id_project_id_fk": {
           "name": "ai_generation_run_project_id_project_id_fk",
           "tableFrom": "ai_generation_run",
+          "tableTo": "project",
           "columnsFrom": [
             "project_id"
           ],
-          "tableTo": "project",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "ai_generation_run_artifact_version_id_artifact_version_id_fk": {
           "name": "ai_generation_run_artifact_version_id_artifact_version_id_fk",
           "tableFrom": "ai_generation_run",
+          "tableTo": "artifact_version",
           "columnsFrom": [
             "artifact_version_id"
           ],
-          "tableTo": "artifact_version",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -264,10 +264,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"approval_event\".\"action\" = 'approved'",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "approval_event_version_time": {
           "name": "approval_event_version_time",
@@ -286,37 +286,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "approval_event_artifact_version_id_artifact_version_id_fk": {
           "name": "approval_event_artifact_version_id_artifact_version_id_fk",
           "tableFrom": "approval_event",
+          "tableTo": "artifact_version",
           "columnsFrom": [
             "artifact_version_id"
           ],
-          "tableTo": "artifact_version",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "approval_event_actor_user_id_app_user_id_fk": {
           "name": "approval_event_actor_user_id_app_user_id_fk",
           "tableFrom": "approval_event",
+          "tableTo": "app_user",
           "columnsFrom": [
             "actor_user_id"
           ],
-          "tableTo": "app_user",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -387,71 +387,71 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "artifact_version_item_membership_artifact_version_id_artifact_id_artifact_version_id_artifact_id_fk": {
           "name": "artifact_version_item_membership_artifact_version_id_artifact_id_artifact_version_id_artifact_id_fk",
           "tableFrom": "artifact_version_item_membership",
+          "tableTo": "artifact_version",
           "columnsFrom": [
             "artifact_version_id",
             "artifact_id"
           ],
-          "tableTo": "artifact_version",
           "columnsTo": [
             "id",
             "artifact_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "artifact_version_item_membership_logical_item_id_artifact_id_logical_item_id_artifact_id_fk": {
           "name": "artifact_version_item_membership_logical_item_id_artifact_id_logical_item_id_artifact_id_fk",
           "tableFrom": "artifact_version_item_membership",
+          "tableTo": "logical_item",
           "columnsFrom": [
             "logical_item_id",
             "artifact_id"
           ],
-          "tableTo": "logical_item",
           "columnsTo": [
             "id",
             "artifact_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "artifact_version_item_membership_item_version_id_logical_item_id_item_version_id_logical_item_id_fk": {
           "name": "artifact_version_item_membership_item_version_id_logical_item_id_item_version_id_logical_item_id_fk",
           "tableFrom": "artifact_version_item_membership",
+          "tableTo": "item_version",
           "columnsFrom": [
             "item_version_id",
             "logical_item_id"
           ],
-          "tableTo": "item_version",
           "columnsTo": [
             "id",
             "logical_item_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "artifact_version_item_membership_artifact_version_id_parent_logical_item_id_artifact_version_item_membership_artifact_version_id_logical_item_id_fk": {
           "name": "artifact_version_item_membership_artifact_version_id_parent_logical_item_id_artifact_version_item_membership_artifact_version_id_logical_item_id_fk",
           "tableFrom": "artifact_version_item_membership",
+          "tableTo": "artifact_version_item_membership",
           "columnsFrom": [
             "artifact_version_id",
             "parent_logical_item_id"
           ],
-          "tableTo": "artifact_version_item_membership",
           "columnsTo": [
             "artifact_version_id",
             "logical_item_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -466,11 +466,11 @@
       "uniqueConstraints": {
         "artifact_version_item_membership_artifact_version_id_logical_item_id_unique": {
           "name": "artifact_version_item_membership_artifact_version_id_logical_item_id_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "artifact_version_id",
             "logical_item_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -548,34 +548,34 @@
         "architecture_option_artifact_version_id_artifact_version_id_fk": {
           "name": "architecture_option_artifact_version_id_artifact_version_id_fk",
           "tableFrom": "architecture_option",
+          "tableTo": "artifact_version",
           "columnsFrom": [
             "artifact_version_id"
           ],
-          "tableTo": "artifact_version",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "architecture_option_artifact_version_id_option_key_unique": {
           "name": "architecture_option_artifact_version_id_option_key_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "artifact_version_id",
             "option_key"
-          ],
-          "nullsNotDistinct": false
+          ]
         },
         "architecture_option_id_artifact_version_id_unique": {
           "name": "architecture_option_id_artifact_version_id_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "artifact_version_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -680,10 +680,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"artifact_version\".\"status\" = 'approved'",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "one_draft_version": {
           "name": "one_draft_version",
@@ -696,74 +696,74 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"artifact_version\".\"status\" = 'draft'",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
         "artifact_version_artifact_id_artifact_id_fk": {
           "name": "artifact_version_artifact_id_artifact_id_fk",
           "tableFrom": "artifact_version",
+          "tableTo": "artifact",
           "columnsFrom": [
             "artifact_id"
           ],
-          "tableTo": "artifact",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "artifact_version_base_approved_version_id_artifact_id_artifact_version_id_artifact_id_fk": {
           "name": "artifact_version_base_approved_version_id_artifact_id_artifact_version_id_artifact_id_fk",
           "tableFrom": "artifact_version",
+          "tableTo": "artifact_version",
           "columnsFrom": [
             "base_approved_version_id",
             "artifact_id"
           ],
-          "tableTo": "artifact_version",
           "columnsTo": [
             "id",
             "artifact_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "artifact_version_selected_architecture_option_id_id_architecture_option_id_artifact_version_id_fk": {
           "name": "artifact_version_selected_architecture_option_id_id_architecture_option_id_artifact_version_id_fk",
           "tableFrom": "artifact_version",
+          "tableTo": "architecture_option",
           "columnsFrom": [
             "selected_architecture_option_id",
             "id"
           ],
-          "tableTo": "architecture_option",
           "columnsTo": [
             "id",
             "artifact_version_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "artifact_version_artifact_id_version_number_unique": {
           "name": "artifact_version_artifact_id_version_number_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "artifact_id",
             "version_number"
-          ],
-          "nullsNotDistinct": false
+          ]
         },
         "artifact_version_id_artifact_id_unique": {
           "name": "artifact_version_id_artifact_id_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "artifact_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -835,41 +835,41 @@
         "artifact_project_id_project_id_fk": {
           "name": "artifact_project_id_project_id_fk",
           "tableFrom": "artifact",
+          "tableTo": "project",
           "columnsFrom": [
             "project_id"
           ],
-          "tableTo": "project",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "artifact_project_id_type_unique": {
           "name": "artifact_project_id_type_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "project_id",
             "type"
-          ],
-          "nullsNotDistinct": false
+          ]
         },
         "artifact_id_project_id_unique": {
           "name": "artifact_id_project_id_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "project_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
       "checkConstraints": {
         "artifact_type_check": {
           "name": "artifact_type_check",
-          "value": "\"artifact\".\"type\" IN ('requirements','architecture','ui_requirements','backlog','brd','erd')"
+          "value": "\"artifact\".\"type\" IN ('requirements','architecture','ui_requirements','backlog')"
         }
       },
       "isRLSEnabled": false
@@ -933,6 +933,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "connection_id": {
+          "name": "connection_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "target_descriptor": {
           "name": "target_descriptor",
           "type": "jsonb",
@@ -967,58 +973,90 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "external_operation_connection": {
+          "name": "external_operation_connection",
+          "columns": [
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"external_operation\".\"connection_id\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "external_operation_project_id_project_id_fk": {
           "name": "external_operation_project_id_project_id_fk",
           "tableFrom": "external_operation",
+          "tableTo": "project",
           "columnsFrom": [
             "project_id"
           ],
-          "tableTo": "project",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "external_operation_source_artifact_version_id_artifact_version_id_fk": {
           "name": "external_operation_source_artifact_version_id_artifact_version_id_fk",
           "tableFrom": "external_operation",
+          "tableTo": "artifact_version",
           "columnsFrom": [
             "source_artifact_version_id"
           ],
-          "tableTo": "artifact_version",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "external_operation_source_artifact_version_id_source_item_version_id_artifact_version_item_membership_artifact_version_id_item_version_id_fk": {
           "name": "external_operation_source_artifact_version_id_source_item_version_id_artifact_version_item_membership_artifact_version_id_item_version_id_fk",
           "tableFrom": "external_operation",
+          "tableTo": "artifact_version_item_membership",
           "columnsFrom": [
             "source_artifact_version_id",
             "source_item_version_id"
           ],
-          "tableTo": "artifact_version_item_membership",
           "columnsTo": [
             "artifact_version_id",
             "item_version_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "external_operation_connection_id_provider_provider_connection_id_provider_fk": {
+          "name": "external_operation_connection_id_provider_provider_connection_id_provider_fk",
+          "tableFrom": "external_operation",
+          "tableTo": "provider_connection",
+          "columnsFrom": [
+            "connection_id",
+            "provider"
+          ],
+          "columnsTo": [
+            "id",
+            "provider"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "external_operation_operation_key_unique": {
           "name": "external_operation_operation_key_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "operation_key"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -1128,10 +1166,10 @@
             }
           ],
           "isUnique": true,
-          "with": {},
-          "method": "btree",
           "where": "\"external_ref\".\"provider\" = 'github'",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "external_ref_source_item": {
           "name": "external_ref_source_item",
@@ -1144,9 +1182,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "external_ref_source_version": {
           "name": "external_ref_source_version",
@@ -1159,83 +1197,83 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "external_ref_project_id_project_id_fk": {
           "name": "external_ref_project_id_project_id_fk",
           "tableFrom": "external_ref",
+          "tableTo": "project",
           "columnsFrom": [
             "project_id"
           ],
-          "tableTo": "project",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "external_ref_source_artifact_version_id_artifact_version_id_fk": {
           "name": "external_ref_source_artifact_version_id_artifact_version_id_fk",
           "tableFrom": "external_ref",
+          "tableTo": "artifact_version",
           "columnsFrom": [
             "source_artifact_version_id"
           ],
-          "tableTo": "artifact_version",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "external_ref_external_operation_id_external_operation_id_fk": {
           "name": "external_ref_external_operation_id_external_operation_id_fk",
           "tableFrom": "external_ref",
+          "tableTo": "external_operation",
           "columnsFrom": [
             "external_operation_id"
           ],
-          "tableTo": "external_operation",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "external_ref_source_artifact_version_id_source_item_version_id_artifact_version_item_membership_artifact_version_id_item_version_id_fk": {
           "name": "external_ref_source_artifact_version_id_source_item_version_id_artifact_version_item_membership_artifact_version_id_item_version_id_fk",
           "tableFrom": "external_ref",
+          "tableTo": "artifact_version_item_membership",
           "columnsFrom": [
             "source_artifact_version_id",
             "source_item_version_id"
           ],
-          "tableTo": "artifact_version_item_membership",
           "columnsTo": [
             "artifact_version_id",
             "item_version_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "external_ref_external_operation_id_unique": {
           "name": "external_ref_external_operation_id_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "external_operation_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         },
         "external_ref_provider_external_id_unique": {
           "name": "external_ref_provider_external_id_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "provider",
             "external_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -1280,28 +1318,28 @@
         "generation_context_ref_target_artifact_version_id_artifact_version_id_fk": {
           "name": "generation_context_ref_target_artifact_version_id_artifact_version_id_fk",
           "tableFrom": "generation_context_ref",
+          "tableTo": "artifact_version",
           "columnsFrom": [
             "target_artifact_version_id"
           ],
-          "tableTo": "artifact_version",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "generation_context_ref_source_artifact_version_id_artifact_version_id_fk": {
           "name": "generation_context_ref_source_artifact_version_id_artifact_version_id_fk",
           "tableFrom": "generation_context_ref",
+          "tableTo": "artifact_version",
           "columnsFrom": [
             "source_artifact_version_id"
           ],
-          "tableTo": "artifact_version",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -1395,84 +1433,84 @@
         "impact_acknowledgement_project_id_project_id_fk": {
           "name": "impact_acknowledgement_project_id_project_id_fk",
           "tableFrom": "impact_acknowledgement",
+          "tableTo": "project",
           "columnsFrom": [
             "project_id"
           ],
-          "tableTo": "project",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "impact_acknowledgement_subject_item_version_id_item_version_id_fk": {
           "name": "impact_acknowledgement_subject_item_version_id_item_version_id_fk",
           "tableFrom": "impact_acknowledgement",
+          "tableTo": "item_version",
           "columnsFrom": [
             "subject_item_version_id"
           ],
-          "tableTo": "item_version",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "impact_acknowledgement_subject_external_ref_id_external_ref_id_fk": {
           "name": "impact_acknowledgement_subject_external_ref_id_external_ref_id_fk",
           "tableFrom": "impact_acknowledgement",
+          "tableTo": "external_ref",
           "columnsFrom": [
             "subject_external_ref_id"
           ],
-          "tableTo": "external_ref",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "impact_acknowledgement_acknowledged_by_user_id_app_user_id_fk": {
           "name": "impact_acknowledgement_acknowledged_by_user_id_app_user_id_fk",
           "tableFrom": "impact_acknowledgement",
+          "tableTo": "app_user",
           "columnsFrom": [
             "acknowledged_by_user_id"
           ],
-          "tableTo": "app_user",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "impact_acknowledgement_obsolete_upstream_item_version_id_root_logical_item_id_item_version_id_logical_item_id_fk": {
           "name": "impact_acknowledgement_obsolete_upstream_item_version_id_root_logical_item_id_item_version_id_logical_item_id_fk",
           "tableFrom": "impact_acknowledgement",
+          "tableTo": "item_version",
           "columnsFrom": [
             "obsolete_upstream_item_version_id",
             "root_logical_item_id"
           ],
-          "tableTo": "item_version",
           "columnsTo": [
             "id",
             "logical_item_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "impact_acknowledgement_acknowledged_against_upstream_item_version_id_root_logical_item_id_item_version_id_logical_item_id_fk": {
           "name": "impact_acknowledgement_acknowledged_against_upstream_item_version_id_root_logical_item_id_item_version_id_logical_item_id_fk",
           "tableFrom": "impact_acknowledgement",
+          "tableTo": "item_version",
           "columnsFrom": [
             "acknowledged_against_upstream_item_version_id",
             "root_logical_item_id"
           ],
-          "tableTo": "item_version",
           "columnsTo": [
             "id",
             "logical_item_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1525,6 +1563,24 @@
           "primaryKey": false,
           "notNull": false
         },
+        "github_owner": {
+          "name": "github_owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "jira_cloud_id": {
+          "name": "jira_cloud_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "jira_project_key": {
+          "name": "jira_project_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -1545,21 +1601,30 @@
         "project_owner_user_id_app_user_id_fk": {
           "name": "project_owner_user_id_app_user_id_fk",
           "tableFrom": "project",
+          "tableTo": "app_user",
           "columnsFrom": [
             "owner_user_id"
           ],
-          "tableTo": "app_user",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "project_jira_target_pair": {
+          "name": "project_jira_target_pair",
+          "value": "(\"project\".\"jira_cloud_id\" IS NULL) = (\"project\".\"jira_project_key\" IS NULL)"
+        },
+        "project_target_not_blank": {
+          "name": "project_target_not_blank",
+          "value": "(\"project\".\"github_owner\" IS NULL OR length(btrim(\"project\".\"github_owner\")) > 0)\n        AND (\"project\".\"jira_cloud_id\" IS NULL OR length(btrim(\"project\".\"jira_cloud_id\")) > 0)\n        AND (\"project\".\"jira_project_key\" IS NULL OR length(btrim(\"project\".\"jira_project_key\")) > 0)"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.logical_item": {
@@ -1610,44 +1675,44 @@
         "logical_item_artifact_id_project_id_artifact_id_project_id_fk": {
           "name": "logical_item_artifact_id_project_id_artifact_id_project_id_fk",
           "tableFrom": "logical_item",
+          "tableTo": "artifact",
           "columnsFrom": [
             "artifact_id",
             "project_id"
           ],
-          "tableTo": "artifact",
           "columnsTo": [
             "id",
             "project_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "logical_item_project_id_display_key_unique": {
           "name": "logical_item_project_id_display_key_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "project_id",
             "display_key"
-          ],
-          "nullsNotDistinct": false
+          ]
         },
         "logical_item_id_artifact_id_unique": {
           "name": "logical_item_id_artifact_id_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "artifact_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         },
         "logical_item_id_project_id_unique": {
           "name": "logical_item_id_project_id_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "project_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -1723,44 +1788,44 @@
         "item_version_logical_item_id_project_id_logical_item_id_project_id_fk": {
           "name": "item_version_logical_item_id_project_id_logical_item_id_project_id_fk",
           "tableFrom": "item_version",
+          "tableTo": "logical_item",
           "columnsFrom": [
             "logical_item_id",
             "project_id"
           ],
-          "tableTo": "logical_item",
           "columnsTo": [
             "id",
             "project_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "item_version_logical_item_id_revision_number_unique": {
           "name": "item_version_logical_item_id_revision_number_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "logical_item_id",
             "revision_number"
-          ],
-          "nullsNotDistinct": false
+          ]
         },
         "item_version_id_logical_item_id_unique": {
           "name": "item_version_id_logical_item_id_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "logical_item_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         },
         "item_version_id_project_id_unique": {
           "name": "item_version_id_project_id_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "id",
             "project_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -1824,41 +1889,41 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "semantic_dependency_downstream_item_version_id_project_id_item_version_id_project_id_fk": {
           "name": "semantic_dependency_downstream_item_version_id_project_id_item_version_id_project_id_fk",
           "tableFrom": "semantic_dependency",
+          "tableTo": "item_version",
           "columnsFrom": [
             "downstream_item_version_id",
             "project_id"
           ],
-          "tableTo": "item_version",
           "columnsTo": [
             "id",
             "project_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "semantic_dependency_upstream_item_version_id_project_id_item_version_id_project_id_fk": {
           "name": "semantic_dependency_upstream_item_version_id_project_id_item_version_id_project_id_fk",
           "tableFrom": "semantic_dependency",
+          "tableTo": "item_version",
           "columnsFrom": [
             "upstream_item_version_id",
             "project_id"
           ],
-          "tableTo": "item_version",
           "columnsTo": [
             "id",
             "project_id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -1962,51 +2027,51 @@
         "stitch_output_project_id_project_id_fk": {
           "name": "stitch_output_project_id_project_id_fk",
           "tableFrom": "stitch_output",
+          "tableTo": "project",
           "columnsFrom": [
             "project_id"
           ],
-          "tableTo": "project",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "stitch_output_source_ui_requirements_version_id_artifact_version_id_fk": {
           "name": "stitch_output_source_ui_requirements_version_id_artifact_version_id_fk",
           "tableFrom": "stitch_output",
+          "tableTo": "artifact_version",
           "columnsFrom": [
             "source_ui_requirements_version_id"
           ],
-          "tableTo": "artifact_version",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         },
         "stitch_output_external_ref_id_external_ref_id_fk": {
           "name": "stitch_output_external_ref_id_external_ref_id_fk",
           "tableFrom": "stitch_output",
+          "tableTo": "external_ref",
           "columnsFrom": [
             "external_ref_id"
           ],
-          "tableTo": "external_ref",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "restrict"
+          "onDelete": "restrict",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "stitch_output_source_ui_requirements_version_id_unique": {
           "name": "stitch_output_source_ui_requirements_version_id_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "source_ui_requirements_version_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -2029,14 +2094,174 @@
         }
       },
       "isRLSEnabled": false
+    },
+    "public.provider_connection": {
+      "name": "provider_connection",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_account_id": {
+          "name": "external_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "access_token_enc": {
+          "name": "access_token_enc",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "refresh_token_enc": {
+          "name": "refresh_token_enc",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scopes": {
+          "name": "scopes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "provider_meta": {
+          "name": "provider_meta",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "key_version": {
+          "name": "key_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "provider_connection_user_id_app_user_id_fk": {
+          "name": "provider_connection_user_id_app_user_id_fk",
+          "tableFrom": "provider_connection",
+          "tableTo": "app_user",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "provider_connection_user_id_provider_unique": {
+          "name": "provider_connection_user_id_provider_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "provider"
+          ]
+        },
+        "provider_connection_id_provider_unique": {
+          "name": "provider_connection_id_provider_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "provider"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "provider_connection_provider_check": {
+          "name": "provider_connection_provider_check",
+          "value": "\"provider_connection\".\"provider\" IN ('github','jira','stitch')"
+        },
+        "provider_connection_status_check": {
+          "name": "provider_connection_status_check",
+          "value": "\"provider_connection\".\"status\" IN ('active','needs_reauth','revoked')"
+        },
+        "provider_connection_key_version_check": {
+          "name": "provider_connection_key_version_check",
+          "value": "\"provider_connection\".\"key_version\" > 0"
+        },
+        "provider_connection_meta_object_check": {
+          "name": "provider_connection_meta_object_check",
+          "value": "jsonb_typeof(\"provider_connection\".\"provider_meta\") = 'object'"
+        },
+        "provider_connection_meta_no_secret_keys_check": {
+          "name": "provider_connection_meta_no_secret_keys_check",
+          "value": "NOT (\"provider_connection\".\"provider_meta\" ?| ARRAY['access_token','refresh_token','token','api_key','apiKey','secret','client_secret','password'])"
+        },
+        "provider_connection_token_shape_check": {
+          "name": "provider_connection_token_shape_check",
+          "value": "(\"provider_connection\".\"status\" = 'revoked' AND \"provider_connection\".\"access_token_enc\" = 'revoked' AND \"provider_connection\".\"refresh_token_enc\" IS NULL AND \"provider_connection\".\"expires_at\" IS NULL)\n        OR\n        (\"provider_connection\".\"status\" <> 'revoked'\n         AND \"provider_connection\".\"access_token_enc\" ~ '^v[0-9]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$'\n         AND split_part(\"provider_connection\".\"access_token_enc\", ':', 1) = 'v' || \"provider_connection\".\"key_version\"::text\n         AND (\"provider_connection\".\"refresh_token_enc\" IS NULL\n              OR (\"provider_connection\".\"refresh_token_enc\" ~ '^v[0-9]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$'\n                  AND split_part(\"provider_connection\".\"refresh_token_enc\", ':', 1) = 'v' || \"provider_connection\".\"key_version\"::text)))"
+        }
+      },
+      "isRLSEnabled": false
     }
   },
   "enums": {},
   "schemas": {},
-  "views": {},
   "sequences": {},
   "roles": {},
   "policies": {},
+  "views": {},
   "_meta": {
     "columns": {},
     "schemas": {},

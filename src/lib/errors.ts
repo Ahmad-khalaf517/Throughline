@@ -13,8 +13,12 @@ import { NextResponse } from 'next/server';
 // after `REQUEST_CONFLICT` are E3-S10's (API Contracts sections 4-5, the
 // artifact/version/item-edit routes), again exactly what those routes throw,
 // no more: `DRAFT_EXISTS` is reserved and never fires (API Contracts 4).
-// `NOT_CURRENTLY_FLAGGED`, last in the union, is E3-S11's (API Contracts 6,
-// `POST /api/impact/acknowledgements`): the one code that route adds.
+// `NOT_CURRENTLY_FLAGGED` is E3-S11's (API Contracts 6,
+// `POST /api/impact/acknowledgements`): the one code that route adds. The five
+// codes after it are round 14's (API Contracts 10A / section 11, UC-S4):
+// per-user provider connections and project targets. `UNLINK_BLOCKED` is round
+// 16's (API Contracts 8, UC-S10). `PROJECT_KEY_TAKEN` and `JIRA_ADMIN_REQUIRED`
+// are round 17's (API Contracts 10A, UC-S11).
 export type ErrorCode =
   | 'VALIDATION_ERROR'
   | 'UNAUTHENTICATED'
@@ -38,7 +42,16 @@ export type ErrorCode =
   | 'OPTION_NOT_SELECTED'
   | 'OPTION_COUNT_INVALID'
   | 'NOT_CURRENTLY_FLAGGED'
-  | 'SOURCE_VERSION_CHANGED';
+  | 'SOURCE_VERSION_CHANGED'
+  | 'CONNECTION_REQUIRED'
+  | 'RECONNECT_REQUIRED'
+  | 'TARGET_REQUIRED'
+  | 'TARGET_LOCKED'
+  | 'TARGET_NOT_ACCESSIBLE'
+  | 'PROVIDER_KEY_REJECTED'
+  | 'UNLINK_BLOCKED'
+  | 'PROJECT_KEY_TAKEN'
+  | 'JIRA_ADMIN_REQUIRED';
 
 const STATUS_BY_CODE: Record<ErrorCode, number> = {
   VALIDATION_ERROR: 400,
@@ -64,6 +77,15 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   OPTION_COUNT_INVALID: 422,
   NOT_CURRENTLY_FLAGGED: 409,
   SOURCE_VERSION_CHANGED: 409,
+  CONNECTION_REQUIRED: 409,
+  RECONNECT_REQUIRED: 409,
+  TARGET_REQUIRED: 409,
+  TARGET_LOCKED: 409,
+  TARGET_NOT_ACCESSIBLE: 422,
+  PROVIDER_KEY_REJECTED: 422,
+  UNLINK_BLOCKED: 409,
+  PROJECT_KEY_TAKEN: 409,
+  JIRA_ADMIN_REQUIRED: 403,
 };
 
 // The one error shape every route handler throws and every response maps

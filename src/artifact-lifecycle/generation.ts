@@ -300,7 +300,7 @@ export async function createDraftFromGeneration(
       boundUpstream = bindUpstreamRefs({ members, candidates });
       // BRD/ERD have no item-level candidates, so the normal bound-upstream
       // freshness check is vacuous. Their captured source versions themselves
-      // must still be current when the model result is persisted (FR-088).
+      // must still be current when the model result is persisted (FR-095).
       if (opts.artifactType === 'brd' || opts.artifactType === 'erd') {
         const [artifact] = await tx
           .select({ type: schema.artifact.type })

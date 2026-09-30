@@ -25,9 +25,20 @@
 import { createHash, createHmac } from 'node:crypto';
 import { Octokit, RequestError } from 'octokit';
 import { env } from '@/lib/env';
+import { legacyCredentialAvailable } from '@/lib/legacy-credentials';
+import {
+  getCredential,
+  getCredentialForOperation,
+  listConnections,
+  reportAuthFailure,
+  ReconnectRequiredError,
+  type ConnectionStatus,
+  type Credential,
+} from '@/connections';
 import {
   runOperation,
   getRefById,
+  getOperationById,
   DefinitiveProviderError,
   type ExternalRef,
 } from '@/external/operations';
@@ -106,6 +117,24 @@ export class GithubLookupRejectedError extends Error {
   }
 }
 
+/**
+ * Round 14 (FR-088): no owner could be resolved - the project has no
+ * `github_owner` AND the connection carries no account login to default to, so
+ * there is nowhere to create the repository. Defensive only: `getCredential`'s
+ * `ConnectionRequiredError` comes first in practice. -> API 409 `TARGET_REQUIRED`
+ * `{ target: 'githubOwner' }`. Thrown before any operation row exists.
+ */
+export class GithubTargetRequiredError extends Error {
+  readonly target = 'githubOwner' as const;
+
+  constructor() {
+    super(
+      'No GitHub owner could be determined. Reconnect GitHub or choose where the repository goes.',
+    );
+    this.name = 'GithubTargetRequiredError';
+  }
+}
+
 export class GithubOperationRefusedError extends Error {
   constructor(reason: string) {
     super(`GitHub operation refused: ${reason}`);
@@ -169,11 +198,16 @@ export function normalizeRepoName(raw: string): string {
     .slice(0, 90);
 }
 
+/**
+ * The legacy environment credential's owner. Only a legacy operation
+ * (connection_id NULL) reads it; if GITHUB_TOKEN or GITHUB_OWNER is gone the
+ * operation cannot continue: RECONNECT_REQUIRED with the legacy hint, never a
+ * failed operation (ERD 7.6, Module Boundaries 4.9 rule 6). Checking the token
+ * here matters: an Octokit built without one would call GitHub unauthenticated.
+ */
 function requireOwner(): string {
-  if (!env.GITHUB_OWNER) {
-    throw new Error(
-      'GITHUB_OWNER is not configured - required to call the GitHub API (ERD 7.3, real mode).',
-    );
+  if (!legacyCredentialAvailable('github') || !env.GITHUB_OWNER) {
+    throw new ReconnectRequiredError('github', 'legacy_credential_missing', null);
   }
   return env.GITHUB_OWNER;
 }
@@ -197,9 +231,9 @@ function requireServerSecret(): string {
   return env.GITHUB_MARKER_SECRET;
 }
 
-function createOctokitClient(): Octokit {
+function createOctokitClient(token: string | undefined = env.GITHUB_TOKEN): Octokit {
   return new Octokit({
-    auth: env.GITHUB_TOKEN,
+    auth: token,
     // No explicit `request.fetch` override here. @octokit/request's own
     // fetchWrapper resolves `requestOptions.request?.fetch || globalThis.fetch`
     // freshly on EVERY call (confirmed in
@@ -243,6 +277,77 @@ function createOctokitClient(): Octokit {
     // retry-on-throttle underneath a module whose own header comment
     // already promises neither.
   });
+}
+
+// ---------------------------------------------------------------------------
+// Round 14 - which credential talks to GitHub.
+//
+// A NEW operation (and every lookup) uses the acting user's own connection,
+// resolved with `getCredential(ctx.userId, 'github')` BEFORE any operation row
+// exists. Anything that touches an EXISTING operation (its send, its reconcile,
+// a retry) takes the credential from the connection recorded on that row
+// (`getCredentialForOperation`), and only a row with no recorded connection
+// (`{ kind: 'legacy' }`) falls back to the optional GITHUB_TOKEN / GITHUB_OWNER
+// environment credential, exactly as before round 14.
+// ---------------------------------------------------------------------------
+
+type GithubAuth =
+  | { kind: 'user'; octokit: Octokit; owner: string; credential: Credential }
+  | { kind: 'legacy'; octokit: Octokit; owner: string };
+
+/**
+ * The owner a user-connection call runs under: the project's chosen owner when
+ * there is one, otherwise the connected account's own login (the default - no
+ * choice is needed to create a repository). The login is the connection's
+ * `meta.login`; the account display name (the same login, as stored) is the
+ * fallback. Neither exists -> `GithubTargetRequiredError`.
+ */
+async function resolveOwner(ctx: GithubCtx, credential: Credential): Promise<string> {
+  if (ctx.githubOwner) return ctx.githubOwner;
+  const login = credential.meta.login;
+  if (login) return login;
+  const account = (await listConnections(ctx.userId)).find((c) => c.provider === 'github');
+  if (account?.displayName) return account.displayName;
+  throw new GithubTargetRequiredError();
+}
+
+function authFor(recorded: Credential | { kind: 'legacy' }, owner: string | null): GithubAuth {
+  if ('kind' in recorded) {
+    return { kind: 'legacy', octokit: createOctokitClient(), owner: requireOwner() };
+  }
+  if (!owner) throw new GithubTargetRequiredError();
+  return {
+    kind: 'user',
+    octokit: createOctokitClient(recorded.accessToken),
+    owner,
+    credential: recorded,
+  };
+}
+
+/**
+ * GitHub answered 401 to the user's credential: it is invalid (revoked at
+ * GitHub, or the token was deleted). Marks the connection `needs_reauth` (and
+ * nothing else) and stops with `ReconnectRequiredError` - never a `failed`
+ * operation (ERD 7.6). The legacy environment credential keeps its old handling.
+ */
+async function failUnauthorized(error: unknown, credential: Credential | null): Promise<void> {
+  if (credential && error instanceof RequestError && error.status === 401) {
+    await reportAuthFailure(credential.connectionId);
+    throw new ReconnectRequiredError('github', 'needs_reauth', credential.connectionId);
+  }
+}
+
+function credentialOf(auth: GithubAuth): Credential | null {
+  return auth.kind === 'user' ? auth.credential : null;
+}
+
+async function guarded<T>(credential: Credential | null, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    await failUnauthorized(error, credential);
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -320,25 +425,119 @@ export interface RepoNameCheck {
 }
 
 /**
- * Read-only: one `GET /repos/{owner}/{name}` under the configured owner, no
- * DB and no operation row. Advisory only - `initRepo` stays the authority
- * (its create call still answers 422 `name_taken_by_other` if the name is
- * gone by then, or if the token cannot see a private repo that already uses
- * it, which reads as 404 here).
+ * Round 14 (Module Boundaries 4.6): what a layer-6 route passes in - the
+ * verified project owner and the project's chosen GitHub owner. This module
+ * cannot read `project` or resolve users itself.
  */
-export async function checkRepoName(repoName: string): Promise<RepoNameCheck> {
-  const normalized = normalizeRepoName(repoName);
-  if (!normalized) return { repoName: normalized, status: 'invalid' };
+export type GithubCtx = { userId: string; githubOwner?: string | null };
 
+/** Who can read the created repository. `public` is the default and what every earlier operation used. */
+export type RepoVisibility = 'public' | 'private';
+
+/** One `GET /repos/{owner}/{name}` with an already-resolved credential. */
+async function lookupRepoName(auth: GithubAuth, normalized: string): Promise<RepoNameCheck> {
   try {
-    await createOctokitClient().rest.repos.get({ owner: requireOwner(), repo: normalized });
+    await auth.octokit.rest.repos.get({ owner: auth.owner, repo: normalized });
     return { repoName: normalized, status: 'taken' };
   } catch (error) {
     if (error instanceof RequestError && error.status === 404) {
       return { repoName: normalized, status: 'available' };
     }
+    await failUnauthorized(error, credentialOf(auth));
     if (isDefinitiveRejection(error)) {
-      throw new GithubLookupRejectedError(describeRejection(error, 'check the repository name'));
+      throw new GithubLookupRejectedError(
+        describeRejection(error, 'check the repository name', auth.kind),
+      );
+    }
+    throw error;
+  }
+}
+
+/** The caller's own credential and the resolved owner (chosen, else own login) - step 0 of every new call. */
+async function userAuth(ctx: GithubCtx): Promise<GithubAuth> {
+  const credential = await getCredential(ctx.userId, 'github');
+  return authFor(credential, await resolveOwner(ctx, credential));
+}
+
+/**
+ * Read-only: one `GET /repos/{owner}/{name}` under the project's chosen owner
+ * with the caller's own connection, no DB write and no operation row. Advisory
+ * only - `initRepo` stays the authority (its create call still answers 422
+ * `name_taken_by_other` if the name is gone by then, or if the token cannot see
+ * a private repo that already uses it, which reads as 404 here).
+ *
+ * `ConnectionRequiredError` / `ReconnectRequiredError` (a 401 also marks the
+ * connection `needs_reauth`) and `GithubTargetRequiredError` propagate.
+ */
+export async function checkRepoName(repoName: string, ctx: GithubCtx): Promise<RepoNameCheck> {
+  const normalized = normalizeRepoName(repoName);
+  if (!normalized) return { repoName: normalized, status: 'invalid' };
+  return lookupRepoName(await userAuth(ctx), normalized);
+}
+
+/**
+ * Round 14 (FR-088): the caller's own login plus the organizations they belong
+ * to, for the owner picker. Read-only with the user's credential; no table.
+ * `GET /user/orgs` is answered reliably because the connection requests
+ * `read:org`. `ConnectionRequiredError` / `ReconnectRequiredError` propagate.
+ */
+export async function listOwners(
+  ctx: GithubCtx,
+): Promise<{ login: string; kind: 'user' | 'org' }[]> {
+  const credential = await getCredential(ctx.userId, 'github');
+  const octokit = createOctokitClient(credential.accessToken);
+  return guarded(credential, async () => {
+    const { data: me } = await octokit.rest.users.getAuthenticated();
+    const orgs = await octokit.paginate(octokit.rest.orgs.listForAuthenticatedUser, {
+      per_page: 100,
+    });
+    return [
+      { login: me.login, kind: 'user' as const },
+      ...orgs.map((org) => ({ login: org.login, kind: 'org' as const })),
+    ];
+  });
+}
+
+/**
+ * Round 14 (D2, FR-088): can the caller's own GitHub connection create
+ * repositories under `owner`? Read-only provider calls with the user's
+ * credential (never the environment token); no table is touched. Used by
+ * `PATCH .../targets` BEFORE any project lock is taken.
+ *
+ * `true` when `owner` is the connected account's own login, or an organization
+ * in which the connection holds an active membership. `false` for an unknown
+ * owner, another user, or an organization the account is not an active member
+ * of. `ConnectionRequiredError` (no connection) and `ReconnectRequiredError`
+ * (GitHub rejected the credential; the connection is marked `needs_reauth`)
+ * propagate.
+ *
+ * The org branch relies on `GET /user/memberships/orgs/{org}`, which GitHub
+ * answers 404 when the token lacks `read:org`; the OAuth connection therefore
+ * requests `repo read:org` (src/connections/oauth-github.ts).
+ */
+export async function checkOwnerAccessible(ctx: GithubCtx, owner: string): Promise<boolean> {
+  const credential = await getCredential(ctx.userId, 'github');
+  const octokit = createOctokitClient(credential.accessToken);
+
+  try {
+    const { data: me } = await octokit.rest.users.getAuthenticated();
+    if (me.login.toLowerCase() === owner.toLowerCase()) return true;
+
+    try {
+      const { data: membership } = await octokit.request('GET /user/memberships/orgs/{org}', {
+        org: owner,
+      });
+      return membership.state === 'active';
+    } catch (error) {
+      if (error instanceof RequestError && (error.status === 404 || error.status === 403)) {
+        return false;
+      }
+      throw error;
+    }
+  } catch (error) {
+    if (error instanceof RequestError && error.status === 401) {
+      await reportAuthFailure(credential.connectionId);
+      throw new ReconnectRequiredError('github', 'needs_reauth', credential.connectionId);
     }
     throw error;
   }
@@ -367,15 +566,22 @@ const MAX_SUGGESTION_ATTEMPTS = 10;
  * the preview: a suggestion is advisory and `checkRepoName` reports the real
  * problem separately, so the unverified project-name slug is returned.
  */
-async function suggestRepoName(projectId: string, projectName?: string): Promise<string> {
+async function suggestRepoName(
+  projectId: string,
+  ctx: GithubCtx,
+  projectName?: string,
+): Promise<string> {
   const projectIdName = normalizeRepoName(`throughline-project-${projectId}`);
   const base = projectName ? normalizeRepoName(projectName) : '';
   if (!base) return projectIdName;
 
   try {
+    // No connection / no chosen owner / a lapsed credential all land in the
+    // catch below: the preview stays readable and returns the unverified slug.
+    const auth = await userAuth(ctx);
     for (let attempt = 1; attempt <= MAX_SUGGESTION_ATTEMPTS; attempt++) {
       const candidate = attempt === 1 ? base : `${base}-${attempt}`;
-      const { status } = await checkRepoName(candidate);
+      const { status } = await lookupRepoName(auth, candidate);
       if (status === 'available') return candidate;
     }
     return projectIdName;
@@ -388,19 +594,37 @@ async function suggestRepoName(projectId: string, projectName?: string): Promise
 // FR-030 - preview.
 // ---------------------------------------------------------------------------
 
+/**
+ * Round 14 (API Contracts `PreviewConnectionDTO`, FR-089): whether the caller
+ * can write to GitHub right now. Carried in the preview so the screen shows the
+ * connect-to-continue prompt instead of the preview failing.
+ */
+export interface PreviewConnection {
+  status: ConnectionStatus['status'];
+  /**
+   * GitHub needs no chosen target: the owner defaults to the connected account,
+   * so this is true whenever the connection is `active`.
+   */
+  targetReady: boolean;
+  /** The connected account's display name (its login), or null. Never a token. */
+  accountName: string | null;
+}
+
 export async function previewInit(
   architectureVersionId: string,
-  projectName?: string,
+  projectName: string | undefined,
+  ctx: GithubCtx,
 ): Promise<{
   mode: 'scaffold' | 'docs-only';
   repoName: string;
   starter: StarterPreview | null;
   impact: ImpactRow[];
+  connection: PreviewConnection;
 }> {
   const selected = await resolveApprovedSelection(architectureVersionId);
   const starter = pickStarter(selected.option.stack);
   const mode = starter ? 'scaffold' : 'docs-only';
-  const repoName = await suggestRepoName(selected.projectId, projectName);
+  const repoName = await suggestRepoName(selected.projectId, ctx, projectName);
   const plan = planStarter(starter, repoName, selected);
 
   // TR FR-085: "Every external-write preview... shows current impact for
@@ -421,6 +645,14 @@ export async function previewInit(
     (row) => row.subjectKind === 'item_version' && adrItemVersionIds.has(row.subjectId),
   );
 
+  // Read AFTER the name lookup: a 401 there moves the connection to needs_reauth.
+  const github = (await listConnections(ctx.userId)).find((c) => c.provider === 'github');
+  const connection: PreviewConnection = {
+    status: github?.status ?? 'none',
+    targetReady: github?.status === 'active',
+    accountName: github?.displayName ?? null,
+  };
+
   return {
     mode,
     repoName,
@@ -431,6 +663,7 @@ export async function previewInit(
       notScaffolded: plan.notScaffolded,
     },
     impact,
+    connection,
   };
 }
 
@@ -468,28 +701,35 @@ function isDefinitiveRejection(error: unknown): error is RequestError {
  * `reconciliation_required` forever (reconcile finds no repo and never
  * resends), and the user only ever saw "Something went wrong."
  */
-function describeRejection(error: RequestError, action: string): string {
+function describeRejection(
+  error: RequestError,
+  action: string,
+  credential: 'user' | 'legacy',
+): string {
   const data: unknown = error.response?.data;
   const githubMessage =
     typeof data === 'object' && data !== null && 'message' in data
       ? String(data.message)
       : error.message;
   const detail = `${error.status}: ${githubMessage}`;
+  // A user connection's 401 never reaches here: it becomes ReconnectRequiredError.
   if (error.status === 401) {
     return `GitHub rejected the configured GITHUB_TOKEN (${detail}) - it is invalid or expired.`;
   }
   if (error.status === 403) {
-    return (
-      `GitHub refused to ${action} (${detail}) - the configured GITHUB_TOKEN does not have ` +
-      'the access this needs. Use a token with repository access (e.g. a classic token with ' +
-      'the `repo` scope).'
-    );
+    return credential === 'legacy'
+      ? `GitHub refused to ${action} (${detail}) - the configured GITHUB_TOKEN does not have ` +
+          'the access this needs. Use a token with repository access (e.g. a classic token with ' +
+          'the `repo` scope).'
+      : `GitHub refused to ${action} (${detail}) - your connected GitHub account does not have ` +
+          'the access this needs (for an organization, it must be allowed to create repositories ' +
+          'there and Throughline must be authorized for it).';
   }
   return `GitHub rejected the request to ${action} (${detail}).`;
 }
 
 async function sendCreateRepo(args: {
-  octokit: Octokit;
+  auth: GithubAuth;
   repoName: string;
   marker: string;
   mode: 'scaffold' | 'docs-only';
@@ -497,32 +737,44 @@ async function sendCreateRepo(args: {
   selected: SelectedArchitectureOption;
   architectureVersionId: string;
   adrItems: ArchitectureDecisionItem[];
+  visibility: RepoVisibility;
 }): Promise<{
   externalId: string;
   externalKey: string;
   externalUrl: string;
   metadata: { mode: 'scaffold' | 'docs-only' };
 }> {
+  const { auth } = args;
+  const octokit = auth.octokit;
   let created: CreatedRepo;
   try {
-    const response = await args.octokit.rest.repos.createForAuthenticatedUser({
+    const repository = {
       name: args.repoName,
       description: `${MARKER_PREFIX}${args.marker}`,
-      // Always public: the repository exists to be shown (demoed, linked,
+      // Public by default: the repository exists to be shown (demoed, linked,
       // read by people without access to Throughline), and everything
       // written to it - README, ADRs, lineage.json - is architecture
-      // documentation and ids, never a secret. There is deliberately no
-      // visibility option (FR-030 only asks for one "if configurable"); the
-      // GitHub screen tells the user up front that the repository is public.
-      private: false,
-    });
+      // documentation and ids, never a secret. The user may choose private on
+      // the GitHub screen (user connections only); the legacy environment
+      // credential path always creates public, as before.
+      private: auth.kind === 'user' && args.visibility === 'private',
+    };
+    // Round 14: an owner that is not the connected account's own login is an
+    // organization, which has its own create endpoint. The legacy environment
+    // credential keeps creating under its token's own account, as before.
+    const ownLogin = auth.kind === 'user' ? (auth.credential.meta.login ?? '') : null;
+    const ownAccount = ownLogin === null || ownLogin.toLowerCase() === auth.owner.toLowerCase();
+    const response = ownAccount
+      ? await octokit.rest.repos.createForAuthenticatedUser(repository)
+      : await octokit.rest.repos.createInOrg({ org: auth.owner, ...repository });
     created = {
       id: response.data.id,
       fullName: response.data.full_name,
       htmlUrl: response.data.html_url,
-      ownerLogin: response.data.owner?.login ?? requireOwner(),
+      ownerLogin: response.data.owner?.login ?? auth.owner,
     };
   } catch (error) {
+    await failUnauthorized(error, credentialOf(auth));
     if (error instanceof RequestError && error.status === 422) {
       // operations/index.ts's own `DefinitiveProviderError` doc comment
       // names this EXACT case ("GitHub 422 name-already-exists") as its
@@ -536,7 +788,9 @@ async function sendCreateRepo(args: {
       throw new DefinitiveProviderError('name_taken_by_other');
     }
     if (isDefinitiveRejection(error)) {
-      throw new DefinitiveProviderError(describeRejection(error, 'create the repository'));
+      throw new DefinitiveProviderError(
+        describeRejection(error, 'create the repository', auth.kind),
+      );
     }
     throw error;
   }
@@ -547,7 +801,7 @@ async function sendCreateRepo(args: {
   // create response, not a separate failure mode: `reconcile()` only checks
   // whether the repo exists with our marker, never whether every doc file
   // landed (ERD 7.3 doesn't make the docs part of the ownership contract).
-  await writeProvenanceFiles(args.octokit, created.ownerLogin, args.repoName, {
+  await writeProvenanceFiles(octokit, created.ownerLogin, args.repoName, {
     marker: args.marker,
     mode: args.mode,
     starter: args.starter,
@@ -565,8 +819,7 @@ async function sendCreateRepo(args: {
 }
 
 async function reconcileRepo(args: {
-  octokit: Octokit;
-  owner: string;
+  auth: GithubAuth;
   repoName: string;
   marker: string;
   mode: 'scaffold' | 'docs-only';
@@ -583,11 +836,15 @@ async function reconcileRepo(args: {
 > {
   let response;
   try {
-    response = await args.octokit.rest.repos.get({ owner: args.owner, repo: args.repoName });
+    response = await args.auth.octokit.rest.repos.get({
+      owner: args.auth.owner,
+      repo: args.repoName,
+    });
   } catch (error) {
     if (error instanceof RequestError && error.status === 404) {
       return { found: false };
     }
+    await failUnauthorized(error, credentialOf(args.auth));
     throw error;
   }
   const expected = `${MARKER_PREFIX}${args.marker}`;
@@ -705,28 +962,125 @@ async function writeProvenanceFiles(
   });
 }
 
+/**
+ * Round 14 (ERD 7.2 step 0): the repository is created with the caller's own
+ * GitHub connection under `ctx.githubOwner`, or - when the project has none -
+ * under the connected account's own login. The credential is resolved BEFORE
+ * `runOperation`, so `ConnectionRequiredError` (no connection) and
+ * `GithubTargetRequiredError` (no owner resolvable) leave no `external_operation`
+ * row behind. The connection id and the provider's account id are handed to
+ * `runOperation`, which records them on the row; the owner goes into the
+ * request hash and the target descriptor.
+ */
 export async function initRepo(
   architectureVersionId: string,
   repoName: string,
+  ctx: GithubCtx,
+  visibility: RepoVisibility = 'public',
 ): Promise<ExternalRef> {
+  const credential = await getCredential(ctx.userId, 'github');
+  return createRepository({
+    architectureVersionId,
+    repoName,
+    ctx,
+    recorded: credential,
+    visibility,
+  });
+}
+
+/**
+ * Round 14: the retry route's entry point. The request is rebuilt from current
+ * inputs using `ctx` (so the request-hash check still catches a changed owner),
+ * but the CREDENTIAL is the one recorded on the operation
+ * (`getCredentialForOperation`), never the user's current connection. A
+ * recorded connection that is not usable, or that now belongs to a different
+ * GitHub account, throws `ReconnectRequiredError` before any network call and
+ * leaves the operation exactly as it was; an operation with no recorded
+ * connection retries with the optional environment credential.
+ */
+export async function retryOperation(
+  operationId: string,
+  ctx: GithubCtx,
+): Promise<
+  { status: 'completed'; ref: ExternalRef } | { status: 'reconciliation_required' | 'pending' }
+> {
+  const operation = await getOperationById(operationId);
+  if (!operation || operation.provider !== 'github') {
+    throw new Error(`external_operation ${operationId} is not a GitHub operation`);
+  }
+  const repoName = (operation.targetDescriptor as { repoName?: unknown }).repoName;
+  if (typeof repoName !== 'string') {
+    throw new Error(`github external_operation ${operationId} has a malformed target_descriptor`);
+  }
+  // The visibility the operation was created with (an operation recorded before
+  // visibility existed has none: public).
+  const recordedVisibility = (operation.targetDescriptor as { visibility?: unknown }).visibility;
+  const visibility: RepoVisibility = recordedVisibility === 'private' ? 'private' : 'public';
+  const recorded = await getCredentialForOperation(operationId);
+
+  try {
+    const ref = await createRepository({
+      architectureVersionId: operation.sourceArtifactVersionId,
+      repoName,
+      ctx,
+      recorded,
+      visibility,
+    });
+    return { status: 'completed', ref };
+  } catch (error) {
+    if (error instanceof GithubReconciliationRequiredError) {
+      return { status: 'reconciliation_required' };
+    }
+    if (error instanceof GithubOperationInFlightError) {
+      return { status: 'pending' };
+    }
+    throw error;
+  }
+}
+
+async function createRepository(args: {
+  architectureVersionId: string;
+  repoName: string;
+  ctx: GithubCtx;
+  recorded: Credential | { kind: 'legacy' };
+  visibility: RepoVisibility;
+}): Promise<ExternalRef> {
+  const { architectureVersionId, ctx, recorded } = args;
+  const credential = 'kind' in recorded ? null : recorded;
   const selected = await resolveApprovedSelection(architectureVersionId);
-  const normalizedRepoName = normalizeRepoName(repoName);
+  const normalizedRepoName = normalizeRepoName(args.repoName);
   const starter = planStarter(pickStarter(selected.option.stack), normalizedRepoName, selected);
   const mode = starter ? 'scaffold' : 'docs-only';
   const operationKey = `github:create_repo:${selected.projectId}:${normalizedRepoName}`;
-  // Request fingerprint (ERD 7.2/29): same repoName + mode must round-trip
-  // to the same hash so a genuine resend (same inputs) is never flagged as
-  // a conflict, while a materially different request under the same key
-  // (e.g. a different mode after the option changed) is.
-  const requestHash = createHash('sha256')
-    .update(JSON.stringify({ repoName: normalizedRepoName, mode }))
-    .digest('hex');
+  // A connection-backed request carries its owner (ERD 7.3/4.14, R14-4); the
+  // legacy shape is unchanged so a legacy operation's stored hash still matches.
+  const owner = credential ? await resolveOwner(ctx, credential) : requireOwner();
+  // The legacy environment credential always creates public repositories.
+  const visibility: RepoVisibility = credential ? args.visibility : 'public';
+  // `visibility` joins the request hash ONLY when private, so the hash of every
+  // existing (public) operation is unchanged and its retries keep matching; a
+  // resend under the same key with a different visibility is a hash conflict.
+  const requestFacts = credential
+    ? {
+        repoName: normalizedRepoName,
+        mode,
+        owner,
+        ...(visibility === 'private' ? { visibility } : {}),
+      }
+    : { repoName: normalizedRepoName, mode };
+  // Request fingerprint (ERD 7.2/29): same repoName + mode (+ owner) must
+  // round-trip to the same hash so a genuine resend (same inputs) is never
+  // flagged as a conflict, while a materially different request under the same
+  // key (e.g. a different mode after the option changed) is.
+  const requestHash = createHash('sha256').update(JSON.stringify(requestFacts)).digest('hex');
   const serverSecret = requireServerSecret();
   const marker = computeMarker(serverSecret, operationKey);
-  const owner = requireOwner();
-  const octokit = createOctokitClient();
 
   const adrItems = await getArchitectureDecisionItems(architectureVersionId);
+
+  // Every send/reconcile of THIS row resolves its credential from the row itself.
+  const authForOperation = async (operationId: string): Promise<GithubAuth> =>
+    authFor(await getCredentialForOperation(operationId), credential ? owner : null);
 
   const result = await runOperation({
     projectId: selected.projectId,
@@ -734,20 +1088,31 @@ export async function initRepo(
     operationType: 'create_repo',
     operationKey,
     requestHash,
-    targetDescriptor: { repoName: normalizedRepoName, mode },
+    // A connection-backed descriptor always records the visibility (missing = public on read).
+    targetDescriptor: credential ? { ...requestFacts, visibility } : requestFacts,
     sourceArtifactVersionId: architectureVersionId,
-    send: () =>
-      sendCreateRepo({
-        octokit,
-        repoName: normalizedRepoName,
-        marker,
-        mode,
-        starter,
-        selected,
-        architectureVersionId,
-        adrItems,
-      }),
-    reconcile: () => reconcileRepo({ octokit, owner, repoName: normalizedRepoName, marker, mode }),
+    connectionId: credential?.connectionId ?? null,
+    accountId: credential?.accountId ?? null,
+    send: async ({ operationId }) => {
+      const auth = await authForOperation(operationId);
+      return guarded(credentialOf(auth), () =>
+        sendCreateRepo({
+          auth,
+          repoName: normalizedRepoName,
+          marker,
+          mode,
+          starter,
+          selected,
+          architectureVersionId,
+          adrItems,
+          visibility,
+        }),
+      );
+    },
+    reconcile: async ({ operationId }) => {
+      const auth = await authForOperation(operationId);
+      return reconcileRepo({ auth, repoName: normalizedRepoName, marker, mode });
+    },
   });
 
   switch (result.status) {

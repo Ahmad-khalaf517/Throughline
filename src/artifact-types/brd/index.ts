@@ -1,4 +1,4 @@
-// FR-086: terminal BRD document. The payload is versioned by artifact-lifecycle;
+// FR-093: terminal BRD document. The payload is versioned by artifact-lifecycle;
 // no logical items or semantic dependencies are minted from document prose.
 import { z } from 'zod';
 import { generateStructured } from '@/ai-client';

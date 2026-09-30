@@ -1,10 +1,10 @@
 # Throughline - Business Requirements Document (BRD)
 
-**Document version:** 2.4  
+**Document version:** 2.6
 **Project:** Throughline  
 **Project type:** AI-assisted software project initialization and traceability platform  
 **Delivery context:** Solo capstone project, 8 full-time development days  
-**Status:** Business baseline for Technical Requirements -> ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v2.3: added BR-011 - the Stitch design reference includes a persistent navigation shell and per-project dashboard overview that had no business requirement behind them; added so the Jira Plan stories building that UI cite something real instead of nothing. v2.4: the pinned GitHub starter becomes a small pinned set (Django and Next.js) instead of one - real AI-proposed stacks are mostly Django, so a single starter shaped like Throughline's own Next.js stack almost never matched and scaffold mode wrote no code at all. Docs-only mode still applies to every stack no starter fits, and BR-005 (never pretend to scaffold an unsupported architecture) is unchanged.  
+**Status:** v2.6: BR-013 adds generated BRD and ERD documents as terminal artifacts. Business baseline for Technical Requirements -> ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v2.3: added BR-011 - the Stitch design reference includes a persistent navigation shell and per-project dashboard overview that had no business requirement behind them; added so the Jira Plan stories building that UI cite something real instead of nothing. v2.4: the pinned GitHub starter becomes a small pinned set (Django and Next.js) instead of one - real AI-proposed stacks are mostly Django, so a single starter shaped like Throughline's own Next.js stack almost never matched and scaffold mode wrote no code at all. Docs-only mode still applies whenever no starter fits, and BR-005 (never pretend to scaffold an unsupported architecture) is unchanged. v2.5: added BR-012 - each signed-in user connects their own GitHub, Jira and Stitch accounts instead of every user acting through one shared server credential. Reopens, at the project owner request ("users must act with their own provider accounts; reverses the shared-credential model"), three earlier positions: the section 11 credential-misuse mitigation, the section 12 Jira row ("Customer OAuth/app installation" as a future consideration) and the section 13 "one configured Jira project" assumption. The LLM key stays shared and server-side.
 **Primary audience:** Instructor/mentor, project reviewer, developer, and future product stakeholders
 
 ---
@@ -138,18 +138,19 @@ GitHub, Stitch, and Jira are useful outputs of the planning process. They do not
 | **BR-004** | When an approved upstream item is changed or removed, Throughline shall identify the specific directly and transitively dependent work that may require review and shall provide an inspectable reason/path. | BO-003, BO-004 |
 | **BR-005** | Throughline shall be able to create a GitHub repository or documentation-only repository output from the approved architecture without pretending to scaffold an unsupported architecture. | BO-001, BO-003 |
 | **BR-006** | Throughline shall convert approved UI Requirements into a structured Google Stitch generation request while keeping the Stitch visual output non-authoritative for functional backlog lineage. | BO-001, BO-003 |
-| **BR-007** | Throughline shall be able to preview and create approved Epics and Stories in one configured Jira project while preserving the exact local source item version for each created issue. | BO-001, BO-003 |
+| **BR-007** | Throughline shall be able to preview and create approved Epics and Stories in one Jira project chosen for the Throughline project (in the Jira site the user has connected) while preserving the exact local source item version for each created issue. | BO-001, BO-003 |
 | **BR-008** | External writes shall be explicit, previewed, retry-aware, and recoverable after ambiguous failures where practical. Third-party failures shall not corrupt internal project history. | BO-005 |
 | **BR-009** | AI shall be used for interpretation, generation, trade-off reasoning, and semantic mapping. Deterministic code shall own identifiers, validation, workflow state, approvals, lineage storage, traversal, and external-operation state. | BO-002, BO-006 |
 | **BR-010** | When scope pressure occurs, optional AI commentary and advanced polish shall be removed before weakening the core lineage, approval, versioning, or traceability behavior. | BO-005, BO-006 |
 | **BR-011** | Throughline shall present each project's current approval status across artifact types and its recent lineage activity in one overview screen, reachable through navigation shared by every project screen, so a user can see the state of the traceability chain without opening each artifact type individually. | BO-001, BO-004 |
-| **BR-012** | Throughline shall generate reviewable, versioned BRD and ERD documents from approved planning artifacts, record the exact source versions used, and require explicit approval before either document is authoritative. | BO-001, BO-003, BO-005 |
+| **BR-012** | Throughline shall let each signed-in user connect their own GitHub, Jira and Stitch accounts, and every external write shall be made with the acting user's own connected account rather than a credential shared by all users. A user with no active connection for a provider shall be told to connect it before the write can be sent (the preview stays readable; only the write is withheld), and a connection that has lapsed or been revoked shall be shown as reconnect-required without changing the state of any local project work. | BO-005 |
+| **BR-013** | Throughline shall generate reviewable, versioned BRD and ERD documents from approved planning artifacts, record the exact source versions used, and require explicit approval before either document is authoritative. | BO-001, BO-003, BO-005 |
 
 ---
 
 ## 8. MVP Scope (P0)
 
-**Post-P0 scope extension (BR-012, requested 2026-09-30):** Generated BRD and ERD documents are additional artifact types. The generated BRD is derived from approved Requirements; the generated ERD is derived from approved Requirements and Architecture. They are terminal planning documents, not new sources for the existing Requirements, Architecture, UI Requirements, or Backlog generation chain. Their structured sections live in artifact-version payloads, and their source artifact versions are recorded as generation context. A source-version change makes the document due for regeneration. This addition reopens the original four-artifact scope expressly at the user's request; the original P0 evaluation and estimate remain the historical baseline.
+**Post-P0 scope extension (BR-013, requested 2026-09-30):** Generated BRD and ERD documents are additional artifact types. The generated BRD is derived from approved Requirements; the generated ERD is derived from approved Requirements and Architecture. They are terminal planning documents, not new sources for the existing Requirements, Architecture, UI Requirements, or Backlog generation chain. Their structured sections live in artifact-version payloads, and their source artifact versions are recorded as generation context. A source-version change makes the document due for regeneration. This addition reopens the original four-artifact scope expressly at the user's request; the original P0 evaluation and estimate remain the historical baseline.
 
 The capstone MVP must demonstrate the following end-to-end capabilities:
 
@@ -169,6 +170,7 @@ The capstone MVP must demonstrate the following end-to-end capabilities:
 - detect changed/removed upstream items only after the new artifact version is approved
 - show direct/transitive impact and an inspectable dependency path
 - provide a simple dependency/version visualization
+- let each signed-in user connect their own GitHub, Jira and Stitch accounts, and make every external write with them (BR-012)
 - protect external writes against ordinary duplicate/retry behavior and reconcile ambiguous failures where supported
 
 ---
@@ -273,7 +275,7 @@ Negative findings shall be reported honestly.
 | **Missed semantic dependency** | Incorrect source mapping can hide real impact | AI proposes semantic dependencies; code validates references; human approval remains authoritative; limitations are explicit |
 | **Third-party dependency** | GitHub, Stitch, Jira, or LLM APIs can fail or change | Preview actions, persist first-party state, use fallbacks/reconciliation, and keep integration boundaries narrow |
 | **Scope overrun** | Three integrations can consume the 8-day build | Build lineage first, one GitHub template, one Stitch flow, one Jira project; cut P1 before P0 |
-| **Security / credential misuse** | Hosted app holds API credentials capable of external writes | Server-side secrets, protected hosted access, explicit external-write confirmation, no credentials in generated repos |
+| **Security / credential misuse** | Hosted app holds API credentials capable of external writes | Per-user provider connections (BR-012): each user acts with their own GitHub/Jira/Stitch accounts, tokens encrypted at rest and never sent to the browser; only the LLM key stays shared server-side. Explicit external-write confirmation, no credentials in generated repos |
 | **Architecture/template mismatch** | A small set of starters cannot represent every AI-proposed architecture | Support scaffold mode only when compatible; otherwise use docs-only GitHub output |
 
 ---
@@ -288,9 +290,9 @@ The capstone should minimize cash cost and measure variable AI/integration usage
 | Throughline hosting | Use a low-cost/free development tier where practical | Usage-based web/server hosting |
 | PostgreSQL | Development/free tier where practical | Storage, backups, production availability |
 | LLM usage | Usage-based; record tokens/model/latency per generated version | Likely the main variable cost; optimize prompts/models and consider per-project pricing |
-| GitHub | Use development/personal account capabilities needed for demo | App permissions, organization support, support burden |
-| Jira | Use one configured project/account for demo | Customer OAuth/app installation and configuration differences |
-| Stitch | Use available programmatic workflow for the capstone | Availability/support/pricing risk must be reassessed before commercialization |
+| GitHub | Each user connects their own GitHub account (OAuth App, `repo` scope; BR-012) and spends their own quota | App permissions, organization support, support burden |
+| Jira | Each user connects their own Jira site through Atlassian OAuth 2.0 (3LO) and picks the target project (BR-012; was one configured project/account for the demo) | Marketplace/app-review requirements for the OAuth app, site and project configuration differences |
+| Stitch | Each user pastes their own Stitch API key (BR-012); use the available programmatic workflow for the capstone | Availability/support/pricing risk must be reassessed before commercialization |
 | File/object storage | Minimal storage for Stitch screenshots/HTML and metadata | Scales with projects and retained artifacts |
 
 The capstone does not require a final SaaS price. A future business case should compare per-project infrastructure cost with willingness to pay, especially because project initialization is not a daily activity for many users.
@@ -304,7 +306,7 @@ The capstone does not require a final SaaS price. A future business case should 
 | One Project Creator is enough for the capstone | Multi-user identity, permissions, and concurrent approvals would increase scope and require a different access model |
 | One AI provider is enough for the MVP | A provider fallback or broader abstraction may be required, increasing integration and testing work |
 | A small pinned set of GitHub starters (Django, Next.js) is enough to prove repository initialization | Stacks outside that set fall back to docs-only mode; covering more would require additional starters |
-| One configured Jira project is enough to prove one-way backlog creation | Multi-project configuration and project-specific field mapping would need to move into scope |
+| One Jira project per Throughline project (chosen from the user's own connected site) is enough to prove one-way backlog creation | Multiple Jira projects per Throughline project and project-specific field mapping would need to move into scope |
 | One Stitch generation per approved UI Requirements version is enough to prove design handoff | Variants, iterative editing, and comparison workflows would require additional UI and API work |
 | The hosted Throughline instance can be access-restricted for the demo | Exposed credentials and external-write capabilities would create an unacceptable security risk; deployment approach would need to change |
 | External APIs are available often enough for a live demo | The demo must rely on preview/fallback artifacts and previously persisted outputs rather than live third-party execution |

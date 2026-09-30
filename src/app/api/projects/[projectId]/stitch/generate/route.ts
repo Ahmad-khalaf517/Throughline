@@ -11,7 +11,8 @@ import {
   StitchOperationConflictError,
 } from '@/external/stitch';
 import { getOperationsForVersion, getRefsForVersion } from '@/external/operations';
-import { ApiError, errorResponse } from '@/lib/errors';
+import { ApiError } from '@/lib/errors';
+import { routeErrorResponse } from '@/app/api/_shared/connection-errors';
 import { toImpactRowDTOs, serializeStitchApiOutput } from '@/app/api/_shared/external';
 import { stitchGenerateSchema } from '../schemas';
 
@@ -59,7 +60,7 @@ export async function POST(request: Request, { params }: RouteParams) {
 
     let preview;
     try {
-      preview = await previewPrompt(uiRequirementsVersionId);
+      preview = await previewPrompt(uiRequirementsVersionId, { userId: user.id });
     } catch (error) {
       if (error instanceof UiRequirementsVersionNotApprovedError) {
         throw new ApiError('PREREQUISITE_NOT_APPROVED', error.message);
@@ -74,7 +75,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     }
 
     try {
-      const output = await generate(uiRequirementsVersionId);
+      const output = await generate(uiRequirementsVersionId, { userId: user.id });
 
       if (output.mode === 'manual_fallback') {
         return NextResponse.json({ mode: 'manual_fallback', promptText: output.promptText });
@@ -126,6 +127,6 @@ export async function POST(request: Request, { params }: RouteParams) {
       throw error;
     }
   } catch (error) {
-    return errorResponse(error);
+    return routeErrorResponse(error);
   }
 }

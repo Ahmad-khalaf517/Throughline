@@ -279,6 +279,79 @@ export async function deleteProject(projectId: string): Promise<boolean> {
   });
 }
 
+/** `updateProjectTargets` was handed a blank value or half a Jira pair (ERD 4.2 CHECKs, API `VALIDATION_ERROR`). */
+export class InvalidProjectTargetsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidProjectTargetsError';
+  }
+}
+
+/**
+ * Round 14 (ERD 4.2, TR FR-088, Module Boundaries 4.3): sets where the
+ * project's external outputs go. Absent = unchanged, `null` = clear; the Jira
+ * pair is set or cleared together. Under `withProjectLock`, writes ONLY
+ * `project.github_owner` / `jira_cloud_id` / `jira_project_key` and returns the
+ * project.
+ *
+ * It reads no `external_operation`, calls no provider and never calls
+ * `connections`: everything that needs one (provider validation, the
+ * `TARGET_LOCKED` check) is done by the ROUTE before this call (Module
+ * Boundaries 4.7).
+ */
+export async function updateProjectTargets(
+  projectId: string,
+  targets: {
+    githubOwner?: string | null | undefined;
+    jira?: { cloudId: string; projectKey: string } | null | undefined;
+  },
+): Promise<ProjectWithArtifacts> {
+  const setValues: Partial<typeof schema.project.$inferInsert> = {};
+
+  if (targets.githubOwner !== undefined) {
+    if (targets.githubOwner === null) {
+      setValues.githubOwner = null;
+    } else {
+      const owner = targets.githubOwner.trim();
+      if (!owner) throw new InvalidProjectTargetsError('githubOwner must not be blank.');
+      setValues.githubOwner = owner;
+    }
+  }
+
+  if (targets.jira !== undefined) {
+    if (targets.jira === null) {
+      setValues.jiraCloudId = null;
+      setValues.jiraProjectKey = null;
+    } else {
+      const cloudId = typeof targets.jira.cloudId === 'string' ? targets.jira.cloudId.trim() : '';
+      const projectKey =
+        typeof targets.jira.projectKey === 'string' ? targets.jira.projectKey.trim() : '';
+      // Both or neither: a half pair is refused here as well as by the
+      // project_jira_target_pair CHECK (ERD 4.2).
+      if (!cloudId || !projectKey) {
+        throw new InvalidProjectTargetsError(
+          'jira requires both a non-blank cloudId and projectKey, or null to clear.',
+        );
+      }
+      setValues.jiraCloudId = cloudId;
+      setValues.jiraProjectKey = projectKey;
+    }
+  }
+
+  if (Object.keys(setValues).length > 0) {
+    await withProjectLock(projectId, async (tx) => {
+      await tx.update(schema.project).set(setValues).where(eq(schema.project.id, projectId));
+    });
+  }
+
+  const project = await getProjectById(projectId);
+  if (!project) {
+    // The caller already resolved this id via requireProjectOwner.
+    throw new Error(`project ${projectId} not found after updating targets`);
+  }
+  return project;
+}
+
 // Matches on the trigger's own message, not just SQLSTATE P0001, because
 // every plain `RAISE EXCEPTION` in that migration (forbid_mutation,
 // membership_draft_only, artifact_version_guard, ...) shares that same

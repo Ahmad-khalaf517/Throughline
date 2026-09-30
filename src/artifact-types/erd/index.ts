@@ -1,4 +1,4 @@
-// FR-087: terminal ERD design document. This does not execute generated DDL.
+// FR-094: terminal ERD design document. This does not execute generated DDL.
 import { z } from 'zod';
 import { generateStructured } from '@/ai-client';
 import { getProjectById } from '@/artifact-lifecycle';

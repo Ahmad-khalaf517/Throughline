@@ -35,7 +35,10 @@ export async function createManualRevisionDraft(
   // deviation as CreateDraftFromGenerationOptions.actorUserId (generation.ts).
   actorUserId: string,
 ): Promise<ArtifactVersion> {
-  if (artifactType === 'architecture' || artifactType === 'brd' || artifactType === 'erd') {
+  if (artifactType === 'architecture') {
+    throw new Error('createManualRevisionDraft has no Architecture path');
+  }
+  if (artifactType === 'brd' || artifactType === 'erd') {
     throw new Error(`${artifactType} is revised only by regeneration`);
   }
 

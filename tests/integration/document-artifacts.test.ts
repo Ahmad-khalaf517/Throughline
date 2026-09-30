@@ -3,7 +3,7 @@ import type postgres from 'postgres';
 import { connect } from './support/connection';
 import * as fx from './support/fixtures';
 
-// ERD T45 / FR-086..088: six artifact slots, exact document sources, and a
+// ERD T55 / FR-093..095: six artifact slots, exact document sources, and a
 // source-currentness check that prevents approval of an obsolete draft.
 let sql: postgres.Sql;
 let lifecycle: typeof import('@/artifact-lifecycle');
@@ -24,10 +24,10 @@ afterAll(async () => {
   await sql.end({ timeout: 5 });
 });
 
-describe('T45 generated BRD and ERD artifact slots', () => {
+describe('T55 generated BRD and ERD artifact slots', () => {
   it('creates six slots and rejects an unknown type', async () => {
     const userId = await fx.createAppUser(sql);
-    const project = await lifecycle.createProject(userId, 'T45 slots', 'A project brief');
+    const project = await lifecycle.createProject(userId, 'T55 slots', 'A project brief');
     const rows = await sql<{ type: string }[]>`
       SELECT type FROM artifact WHERE project_id = ${project.id} ORDER BY type
     `;
@@ -46,7 +46,7 @@ describe('T45 generated BRD and ERD artifact slots', () => {
 
   it('marks a BRD source change and refuses approval of its obsolete draft', async () => {
     const userId = await fx.createAppUser(sql);
-    const project = await lifecycle.createProject(userId, 'T45 currentness', 'Another brief');
+    const project = await lifecycle.createProject(userId, 'T55 currentness', 'Another brief');
     const requirementsRows = await sql<{ id: string }[]>`
       SELECT id FROM artifact WHERE project_id = ${project.id} AND type = 'requirements'
     `;
@@ -77,7 +77,7 @@ describe('T45 generated BRD and ERD artifact slots', () => {
 
   it('tracks both ERD source versions without minting lineage items', async () => {
     const userId = await fx.createAppUser(sql);
-    const project = await lifecycle.createProject(userId, 'T45 ERD', 'An ERD brief');
+    const project = await lifecycle.createProject(userId, 'T55 ERD', 'An ERD brief');
     const artifacts = await sql<{ id: string; type: string }[]>`
       SELECT id, type FROM artifact WHERE project_id = ${project.id}
     `;

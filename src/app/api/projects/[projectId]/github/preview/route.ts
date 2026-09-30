@@ -6,7 +6,9 @@ import {
   ArchitectureOptionNotSelectedError,
   ArchitectureVersionNotApprovedError,
 } from '@/external/github';
-import { ApiError, errorResponse } from '@/lib/errors';
+import { ApiError } from '@/lib/errors';
+import { routeErrorResponse } from '@/app/api/_shared/connection-errors';
+import { toGithubCtx } from '@/app/api/_shared/github-ctx';
 import { getAllExternalRefsForProject, toImpactRowDTOs } from '@/app/api/_shared/external';
 import { githubPreviewSchema } from '../schemas';
 
@@ -82,7 +84,11 @@ export async function POST(request: Request, { params }: RouteParams) {
 
     let preview;
     try {
-      preview = await previewInit(architectureVersionId, project.name);
+      preview = await previewInit(
+        architectureVersionId,
+        project.name,
+        toGithubCtx(user.id, project),
+      );
     } catch (error) {
       if (
         error instanceof ArchitectureOptionNotSelectedError ||
@@ -98,9 +104,14 @@ export async function POST(request: Request, { params }: RouteParams) {
       repoName: preview.repoName,
       // FR-030: the exact files the write will add. `null` = docs-only.
       starter: preview.starter ?? null,
+      // The default the screen preselects; the user picks the real one on init.
+      visibility: 'public' as const,
       impact: await toImpactRowDTOs(preview.impact),
+      // Round 14 (FR-089): the preview never fails for a missing or lapsed
+      // connection; this block lets the screen show the connect-to-continue prompt.
+      connection: preview.connection,
     });
   } catch (error) {
-    return errorResponse(error);
+    return routeErrorResponse(error);
   }
 }

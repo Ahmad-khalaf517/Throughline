@@ -10,6 +10,9 @@ const {
   FakeGithubOperationConflictError,
   FakeGithubReconciliationRequiredError,
   FakeGithubOperationInFlightError,
+  FakeGithubTargetRequiredError,
+  FakeConnectionRequiredError,
+  FakeReconnectRequiredError,
 } = vi.hoisted(() => {
   class FakeArchitectureOptionNotSelectedError extends Error {}
   class FakeArchitectureVersionNotApprovedError extends Error {}
@@ -24,6 +27,16 @@ const {
   class FakeGithubOperationConflictError extends Error {}
   class FakeGithubReconciliationRequiredError extends Error {}
   class FakeGithubOperationInFlightError extends Error {}
+  class FakeGithubTargetRequiredError extends Error {
+    readonly target = 'githubOwner';
+  }
+  class FakeConnectionRequiredError extends Error {
+    provider = 'github';
+  }
+  class FakeReconnectRequiredError extends Error {
+    provider = 'github';
+    reason = 'needs_reauth';
+  }
   return {
     FakeArchitectureOptionNotSelectedError,
     FakeArchitectureVersionNotApprovedError,
@@ -32,8 +45,18 @@ const {
     FakeGithubOperationConflictError,
     FakeGithubReconciliationRequiredError,
     FakeGithubOperationInFlightError,
+    FakeGithubTargetRequiredError,
+    FakeConnectionRequiredError,
+    FakeReconnectRequiredError,
   };
 });
+
+// The route's error translation imports `@/connections` (layer 3b), which is
+// built on `@/db`/`@/lib/env`; stand-in error classes are enough for `instanceof`.
+vi.mock('@/connections', () => ({
+  ConnectionRequiredError: FakeConnectionRequiredError,
+  ReconnectRequiredError: FakeReconnectRequiredError,
+}));
 
 vi.mock('@/auth', () => ({
   getVerifiedUser: vi.fn(),
@@ -61,6 +84,7 @@ vi.mock('@/external/github', () => ({
   GithubOperationConflictError: FakeGithubOperationConflictError,
   GithubReconciliationRequiredError: FakeGithubReconciliationRequiredError,
   GithubOperationInFlightError: FakeGithubOperationInFlightError,
+  GithubTargetRequiredError: FakeGithubTargetRequiredError,
 }));
 vi.mock('@/external/jira', () => ({ checkDrift: vi.fn() }));
 vi.mock('@/external/stitch', () => ({ checkDrift: vi.fn() }));
@@ -99,6 +123,9 @@ function baseProject() {
     name: 'x',
     brief: 'y',
     inputContext: null,
+    githubOwner: null,
+    jiraCloudId: null,
+    jiraProjectKey: null,
     createdAt: now,
     updatedAt: now,
     artifacts,
@@ -154,6 +181,7 @@ describe('POST /api/projects/:projectId/github/init', () => {
       repoName: 'suggested',
       starter: null,
       impact: [],
+      connection: { status: 'active', targetReady: true, accountName: null },
     });
   });
 
@@ -232,6 +260,7 @@ describe('POST /api/projects/:projectId/github/init', () => {
           acknowledged: false,
         },
       ],
+      connection: { status: 'active', targetReady: true, accountName: null },
     });
     mockedGetDisplayKeys.mockResolvedValue(new Map([['iv-1', 'ADR-01']]));
 
@@ -258,10 +287,96 @@ describe('POST /api/projects/:projectId/github/init', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({ status: 'completed', ref: { id: 'ref-1', provider: 'github' } });
-    expect(mockedInitRepo).toHaveBeenCalledWith('arch-v1', 'my-repo');
+    // Round 14: the ctx is built by the route from the verified user and the
+    // project's chosen owner (Module Boundaries 4.6, D1).
+    expect(mockedInitRepo).toHaveBeenCalledWith(
+      'arch-v1',
+      'my-repo',
+      { userId: 'user-1' },
+      'public',
+    );
     // init only wants the impact re-check from the preview - it must not pass
     // a project name, which would make previewInit look names up on GitHub.
-    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1');
+    expect(mockedPreviewInit).toHaveBeenCalledWith('arch-v1', undefined, { userId: 'user-1' });
+  });
+
+  it("passes the project's github_owner in the ctx", async () => {
+    mockedGetProjectById.mockResolvedValue({ ...baseProject(), githubOwner: 'acme' });
+    mockedInitRepo.mockResolvedValue(makeRef());
+
+    await POST(postRequest({ repoName: 'r', impactAcknowledged: true }), paramsFor('project-1'));
+
+    expect(mockedInitRepo).toHaveBeenCalledWith(
+      'arch-v1',
+      'r',
+      { userId: 'user-1', githubOwner: 'acme' },
+      'public',
+    );
+  });
+
+  it('passes visibility: private through to initRepo', async () => {
+    mockedInitRepo.mockResolvedValue(makeRef());
+
+    const response = await POST(
+      postRequest({ repoName: 'r', impactAcknowledged: true, visibility: 'private' }),
+      paramsFor('project-1'),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockedInitRepo).toHaveBeenCalledWith('arch-v1', 'r', { userId: 'user-1' }, 'private');
+  });
+
+  it('rejects an unknown visibility with VALIDATION_ERROR before anything is written', async () => {
+    const response = await POST(
+      postRequest({ repoName: 'r', impactAcknowledged: true, visibility: 'internal' }),
+      paramsFor('project-1'),
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe('VALIDATION_ERROR');
+    expect(mockedInitRepo).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 TARGET_REQUIRED { target: githubOwner } when the project has no owner', async () => {
+    mockedInitRepo.mockRejectedValue(new FakeGithubTargetRequiredError('no owner'));
+
+    const response = await POST(
+      postRequest({ repoName: 'x', impactAcknowledged: true }),
+      paramsFor('project-1'),
+    );
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error.code).toBe('TARGET_REQUIRED');
+    expect(body.error.details).toEqual({ target: 'githubOwner' });
+  });
+
+  it('returns 409 CONNECTION_REQUIRED when the caller has no GitHub connection', async () => {
+    mockedInitRepo.mockRejectedValue(new FakeConnectionRequiredError('none'));
+
+    const response = await POST(
+      postRequest({ repoName: 'x', impactAcknowledged: true }),
+      paramsFor('project-1'),
+    );
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error.code).toBe('CONNECTION_REQUIRED');
+    expect(body.error.details).toEqual({ provider: 'github' });
+  });
+
+  it('returns 409 RECONNECT_REQUIRED when the connection is not usable', async () => {
+    mockedInitRepo.mockRejectedValue(new FakeReconnectRequiredError('lapsed'));
+
+    const response = await POST(
+      postRequest({ repoName: 'x', impactAcknowledged: true }),
+      paramsFor('project-1'),
+    );
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error.code).toBe('RECONNECT_REQUIRED');
+    expect(body.error.details).toEqual({ provider: 'github', reason: 'needs_reauth' });
   });
 
   it('returns 409 GITHUB_ALREADY_INITIALIZED when the operation was refused', async () => {
