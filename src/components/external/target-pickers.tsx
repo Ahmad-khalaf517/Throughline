@@ -278,7 +278,7 @@ export function JiraTargetPicker({
 }: JiraTargetPickerProps) {
   const router = useRouter();
   const usable = connection?.status === 'active';
-  // Whether the connection was granted `manage:jira-project`; null until read.
+  // Whether the connection was granted `manage:jira-configuration`; null until read.
   const [canCreate, setCanCreate] = useState<boolean | null>(null);
   const [projectsRefresh, setProjectsRefresh] = useState(0);
   const createdRef = useRef<{ cloudId: string; project: CreatedJiraProject } | null>(null);

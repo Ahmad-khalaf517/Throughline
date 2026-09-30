@@ -51,7 +51,7 @@ interface CreateJiraProjectProps {
   /** Prefill for the Name field (the Throughline project's name). */
   defaultName: string;
   /**
-   * Whether the connection holds `manage:jira-project`; `null` while it is still
+   * Whether the connection holds `manage:jira-configuration`; `null` while it is still
    * being read (the form is then withheld rather than shown and refused).
    */
   canCreate: boolean | null;

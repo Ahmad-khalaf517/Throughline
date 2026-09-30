@@ -924,13 +924,13 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
 
   // ERD 7.8 / T54 (UC-S11, FR-092): creating a Jira project is a provider SETUP
   // action - it writes no external_operation, no external_ref and no lineage
-  // row (no table at all), needs manage:jira-project in the stored scopes, and
+  // row (no table at all), needs manage:jira-configuration in the stored scopes, and
   // maps Jira's answers to typed errors.
   describe('T54 - create a Jira project (setup action, no rows written)', () => {
     const FULL_SCOPES = [
       'read:jira-work',
       'write:jira-work',
-      'manage:jira-project',
+      'manage:jira-configuration',
       'offline_access',
       'read:me',
     ];
@@ -1039,7 +1039,7 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       expect(after).toEqual(before);
     });
 
-    it('a connection made before manage:jira-project is reconnect required (missing_scope) with no network call', async () => {
+    it('a connection made before manage:jira-configuration is reconnect required (missing_scope) with no network call', async () => {
       const { userId } = await fx.createProjectWithOwner(sql, { name: 'jira T54 scope' });
       await connectWithScopes(userId, ['read:jira-work', 'write:jira-work', 'offline_access']);
       const fake = createFakeAtlassian();

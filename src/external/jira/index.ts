@@ -46,6 +46,7 @@
 import { createHash } from 'node:crypto';
 import { env } from '@/lib/env';
 import { legacyCredentialAvailable } from '@/lib/legacy-credentials';
+import { JIRA_CREATE_PROJECT_SCOPE } from '@/lib/jira-scopes';
 import {
   getCredential,
   getCredentialForOperation,
@@ -348,6 +349,13 @@ async function requestText(args: RequestArgs): Promise<string> {
   });
   const bodyText = await res.text();
   if (res.status === 401 && credential) {
+    // A 401 whose body says the token's SCOPE does not match is not a bad token:
+    // the connection is healthy but lacks a permission this call needs. Read for
+    // classification only; the text never enters a message. The connection stays
+    // active and the user is asked to reconnect to grant the permission.
+    if (/scope does not match/i.test(bodyText)) {
+      throw new ReconnectRequiredError('jira', 'missing_scope', credential.connectionId);
+    }
     await reportAuthFailure(credential.connectionId);
     throw new ReconnectRequiredError('jira', 'needs_reauth', credential.connectionId);
   }
@@ -1192,12 +1200,10 @@ export async function checkProjectAccessible(
 // `withProjectLock`.
 // ---------------------------------------------------------------------------
 
-const MANAGE_PROJECT_SCOPE = 'manage:jira-project';
-
 /** The connection's credential, or `ReconnectRequiredError('missing_scope')` before any Atlassian call. */
 async function projectAdminCredential(ctx: Pick<JiraCtx, 'userId'>): Promise<Credential> {
   const credential = await getCredential(ctx.userId, 'jira');
-  if (!credential.scopes.includes(MANAGE_PROJECT_SCOPE)) {
+  if (!credential.scopes.includes(JIRA_CREATE_PROJECT_SCOPE)) {
     throw new ReconnectRequiredError('jira', 'missing_scope', credential.connectionId);
   }
   return credential;
@@ -1318,7 +1324,7 @@ interface JiraCreateProjectResponse {
 /**
  * Creates a project on `cloudId` with the caller's own credential; the caller
  * becomes the project lead. Order: connection (`ConnectionRequiredError` /
- * `ReconnectRequiredError` propagate) -> `manage:jira-project` in the stored
+ * `ReconnectRequiredError` propagate) -> `manage:jira-configuration` in the stored
  * scopes (else `ReconnectRequiredError('missing_scope')`, no Atlassian call) ->
  * the site is one of the caller's -> the key is free (`ProjectKeyTakenError`) ->
  * the create call. 400/409 -> `ProjectKeyTakenError`; 403 ->

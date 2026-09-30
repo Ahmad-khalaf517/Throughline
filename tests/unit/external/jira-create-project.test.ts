@@ -110,7 +110,12 @@ const credential = (scopes: string[]) => ({
   scopes,
 });
 
-const FULL_SCOPES = ['read:jira-work', 'write:jira-work', 'manage:jira-project', 'offline_access'];
+const FULL_SCOPES = [
+  'read:jira-work',
+  'write:jira-work',
+  'manage:jira-configuration',
+  'offline_access',
+];
 const INPUT = { cloudId: 'cloud-1', name: 'ShiftSwap', key: 'SHIFT', template: 'scrum' } as const;
 
 beforeEach(() => {
@@ -177,7 +182,7 @@ describe('createProject', () => {
     ).toBe('com.pyxis.greenhopper.jira:gh-simplified-agility-kanban');
   });
 
-  it('a connection without manage:jira-project is reconnect required (missing_scope) and Atlassian is never called', async () => {
+  it('a connection without manage:jira-configuration is reconnect required (missing_scope) and Atlassian is never called', async () => {
     mocks.getCredential.mockResolvedValue(credential(['read:jira-work', 'write:jira-work']));
 
     const failure = await createProject({ userId: 'user-1' }, INPUT).catch((e: unknown) => e);
@@ -243,6 +248,25 @@ describe('createProject', () => {
     expect(failure).toBeInstanceOf(mocks.ReconnectRequiredErrorFake);
     expect(failure).toMatchObject({ reason: 'needs_reauth' });
     expect(mocks.reportAuthFailure).toHaveBeenCalledWith('conn-1');
+  });
+
+  it('a 401 "scope does not match" is missing_scope: the connection is NOT marked needs_reauth', async () => {
+    routes[CREATE] = {
+      status: 401,
+      body: { code: 401, message: 'Unauthorized; scope does not match' },
+    };
+    const failure = await createProject({ userId: 'user-1' }, INPUT).catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(mocks.ReconnectRequiredErrorFake);
+    expect(failure).toMatchObject({ reason: 'missing_scope', connectionId: 'conn-1' });
+    expect((failure as Error).message).not.toContain('scope does not match');
+    expect(mocks.reportAuthFailure).not.toHaveBeenCalled();
+  });
+
+  it('a connection that only has the old manage:jira-project scope must reconnect before any Atlassian call', async () => {
+    mocks.getCredential.mockResolvedValue(credential(['read:jira-work', 'manage:jira-project']));
+    const failure = await createProject({ userId: 'user-1' }, INPUT).catch((e: unknown) => e);
+    expect(failure).toMatchObject({ reason: 'missing_scope' });
+    expect(seen).toHaveLength(0);
   });
 
   it('any other status is a generic error carrying the status only, never the provider body', async () => {
@@ -407,7 +431,7 @@ describe('validateProjectKey', () => {
     });
   });
 
-  it('does not need manage:jira-project (it is a read) and refuses a foreign site', async () => {
+  it('does not need manage:jira-configuration (it is a read) and refuses a foreign site', async () => {
     mocks.getCredential.mockResolvedValue(credential(['read:jira-work']));
     await expect(validateProjectKey({ userId: 'user-1' }, 'cloud-1', 'SHIFT')).resolves.toEqual({
       valid: true,

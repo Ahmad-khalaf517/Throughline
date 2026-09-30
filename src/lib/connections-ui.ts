@@ -4,6 +4,7 @@
 // testable surface for tests/unit/lib/connections-ui.test.ts. Nothing here ever
 // sees, formats or stores a token or key: only status and identity.
 
+import { JIRA_CREATE_PROJECT_SCOPE } from './jira-scopes';
 import type { ConnectionDTO, ExternalOperationDTO } from './serialize';
 
 export type ConnectionProvider = ConnectionDTO['provider'];
@@ -344,12 +345,9 @@ export function ownerOptionLabel(owner: { login: string; kind: 'user' | 'org' })
 // Jira site display and project creation (round 17, UC-S11, FR-092)
 // ---------------------------------------------------------------------------
 
-/** The Atlassian scope that lets the app create a Jira project (ERD 7.8). */
-export const JIRA_PROJECT_SCOPE = 'manage:jira-project';
-
 /** A connection made before the scope was requested lacks it and must reconnect once. */
 export function canCreateJiraProjects(scopes: readonly string[] | null | undefined): boolean {
-  return (scopes ?? []).includes(JIRA_PROJECT_SCOPE);
+  return (scopes ?? []).includes(JIRA_CREATE_PROJECT_SCOPE);
 }
 
 /** The Integrations card's hint for a usable Jira connection. */

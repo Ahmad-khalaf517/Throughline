@@ -314,10 +314,10 @@ describe('Jira site display and project creation (FR-092)', () => {
   });
 
   it('reads project-creation permission from the granted scopes', () => {
-    expect(canCreateJiraProjects(['read:jira-work', 'manage:jira-project'])).toBe(true);
+    expect(canCreateJiraProjects(['read:jira-work', 'manage:jira-configuration'])).toBe(true);
     expect(canCreateJiraProjects(['read:jira-work'])).toBe(false);
     expect(canCreateJiraProjects(undefined)).toBe(false);
-    expect(describeProjectCreationHint(['manage:jira-project'])).toEqual({
+    expect(describeProjectCreationHint(['manage:jira-configuration'])).toEqual({
       allowed: true,
       text: 'Can create projects',
     });
