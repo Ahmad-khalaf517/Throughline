@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   availableActions,
   canCreateJiraProjects,
+  canSubmitCreate,
+  describeCreateSummary,
+  describeCreatedNotice,
+  describeCreateToggle,
   deriveProjectKey,
   describeCreateProjectError,
   describeJiraSite,
@@ -357,6 +361,45 @@ describe('Jira site display and project creation (FR-092)', () => {
     });
     expect(describeCreateProjectError('RECONNECT_REQUIRED').kind).toBe('reconnect');
     expect(describeCreateProjectError('anything else').kind).toBe('other');
+  });
+
+  it('states exactly the name, key and site that will be sent', () => {
+    expect(describeCreateSummary('  RMFlow ', 'RM', 'Acme')).toBe(
+      'This will create the Jira project “RMFlow” with key RM on Acme.',
+    );
+    expect(describeCreateSummary('RoomFlow', 'RMF', null)).toBe(
+      'This will create the Jira project “RoomFlow” with key RMF.',
+    );
+    expect(describeCreateSummary('RoomFlow', 'RMF', '  ')).not.toContain(' on ');
+  });
+
+  it('describes the persistent created notice and the expander label', () => {
+    expect(describeCreatedNotice({ name: 'RMFlow', key: 'RM' }, null)).toEqual({
+      tone: 'success',
+      text: "Created “RMFlow” (RM) and selected it as this project's Jira target.",
+    });
+    const warning = describeCreatedNotice({ name: 'RMFlow', key: 'RM' }, 'Jira is slow.');
+    expect(warning.tone).toBe('warning');
+    expect(warning.text).toContain('Jira is slow.');
+    expect(warning.text).toContain('Save target');
+    expect(describeCreateToggle(false)).toEqual({
+      label: 'Create a new Jira project',
+      variant: 'link',
+    });
+    expect(describeCreateToggle(true)).toEqual({
+      label: 'Create another Jira project',
+      variant: 'secondary',
+    });
+  });
+
+  it('cannot submit before the site is known, while pending, or with a bad name or key', () => {
+    const ok = { cloudId: 'cloud-1', name: 'RMFlow', formatError: null, pending: false };
+    expect(canSubmitCreate(ok)).toBe(true);
+    expect(canSubmitCreate({ ...ok, cloudId: '' })).toBe(false);
+    expect(canSubmitCreate({ ...ok, pending: true })).toBe(false);
+    expect(canSubmitCreate({ ...ok, formatError: 'bad key' })).toBe(false);
+    expect(canSubmitCreate({ ...ok, name: '   ' })).toBe(false);
+    expect(canSubmitCreate({ ...ok, name: 'x'.repeat(81) })).toBe(false);
   });
 
   it('describes a missing_scope reconnect for the badge', () => {

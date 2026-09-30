@@ -6,6 +6,7 @@ import { CircleAlert, CircleCheck } from 'lucide-react';
 import { FieldShell } from '@/components/auth/field-shell';
 import {
   canCreateJiraProjects,
+  describeCreatedNotice,
   describeTargetError,
   ownerOptionLabel,
   type PreviewConnection,
@@ -291,6 +292,11 @@ export function JiraTargetPicker({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<TargetErrorCopy | null>(null);
   const [justSaved, setJustSaved] = useState(false);
+  // The persistent confirmation of the last created project (the create form collapses).
+  const [lastCreated, setLastCreated] = useState<{
+    project: CreatedJiraProject;
+    targetError: string | null;
+  } | null>(null);
 
   useEffect(() => {
     if (!usable) return;
@@ -416,10 +422,13 @@ export function JiraTargetPicker({
         router.push('/sign-in');
         return null;
       }
+      // The project stays selected and Save target stays enabled (saved is unchanged).
+      setLastCreated({ project, targetError: result.error.message });
       return result.error.message;
     }
     setSaved(result.targets.jira);
     setJustSaved(true);
+    setLastCreated({ project, targetError: null });
     onSaved(result.targets);
     return null;
   }
@@ -444,6 +453,9 @@ export function JiraTargetPicker({
     onSaved(result.targets);
   }
 
+  const createdNotice = lastCreated
+    ? describeCreatedNotice(lastCreated.project, lastCreated.targetError)
+    : null;
   const unchanged = saved?.cloudId === cloudId && saved?.projectKey === projectKey;
   const projectsLoading = usable && cloudId !== '' && projects === null;
   const savedProjectName =
@@ -461,6 +473,7 @@ export function JiraTargetPicker({
             setCloudId(event.target.value);
             setProjectKey('');
             setProjects(null);
+            setLastCreated(null);
             setJustSaved(false);
             setError(null);
           }}
@@ -490,6 +503,7 @@ export function JiraTargetPicker({
             value={projectKey}
             onChange={(event) => {
               setProjectKey(event.target.value);
+              setLastCreated(null);
               setJustSaved(false);
               setError(null);
             }}
@@ -533,10 +547,29 @@ export function JiraTargetPicker({
           </strong>
         </p>
       )}
+      <div role="status" aria-live="polite" className="text-sm">
+        {createdNotice && (
+          <p
+            className={`${
+              createdNotice.tone === 'success' ? 'text-success' : 'text-error'
+            } flex items-start gap-1.5`}
+          >
+            {createdNotice.tone === 'success' ? (
+              <CircleCheck className="mt-px size-4 shrink-0" aria-hidden="true" />
+            ) : (
+              <CircleAlert className="mt-px size-4 shrink-0" aria-hidden="true" />
+            )}
+            <span>{createdNotice.text}</span>
+          </p>
+        )}
+      </div>
       {usable && (
         <CreateJiraProject
-          key={cloudId}
+          hasCreated={lastCreated !== null}
+          onEdit={() => setLastCreated(null)}
           cloudId={cloudId}
+          siteName={sites?.find((site) => site.cloudId === cloudId)?.name ?? null}
+          sitesLoading={sites === null}
           siteUrl={sites?.find((site) => site.cloudId === cloudId)?.url ?? null}
           existingKeys={projects?.map((project) => project.key) ?? []}
           defaultName={projectName}
