@@ -1,10 +1,11 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
-import { getProjectById } from '@/artifact-lifecycle';
+import { getProjectById, listArtifactVersions } from '@/artifact-lifecycle';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
 import { ApiError } from '@/lib/errors';
 import { ARTIFACT_TYPES, type ArtifactType } from '@/lib/serialize';
 import { ArtifactReviewScreen } from '@/components/review/artifact-review-screen';
+import { DocumentReviewScreen } from '@/components/review/document-review-screen';
 import { loadReviewVersion } from '../load-review-version';
 
 interface ArtifactReviewPageProps {
@@ -16,6 +17,8 @@ const ARTIFACT_TYPE_LABELS: Record<ArtifactType, string> = {
   architecture: 'Architecture',
   ui_requirements: 'UI Requirements',
   backlog: 'Backlog',
+  brd: 'Business Requirements Document',
+  erd: 'Entity Relationship Diagram',
 };
 
 function isArtifactType(value: string): value is ArtifactType {
@@ -24,7 +27,7 @@ function isArtifactType(value: string): value is ArtifactType {
 
 /**
  * Generic, type-parameterized artifact review screen (E5-S2; Jira Plan 1.6
- * option 2 - one screen for all four artifact types rather than four bespoke
+ * option 2 - one route for all artifact types rather than bespoke
  * ones). Auth guard and `notFound()` mapping copied from
  * `projects/[projectId]/page.tsx` exactly (see that file's own comment for
  * why `requireProjectOwner`'s `ApiError('NOT_FOUND')` is caught explicitly
@@ -55,7 +58,7 @@ export default async function ArtifactReviewPage({ params }: ArtifactReviewPageP
   }
 
   // The `:type` path segment is unvalidated user input (API Contracts 1.7) -
-  // anything outside the four real artifact.type CHECK values 404s exactly
+  // anything outside the six real artifact.type CHECK values 404s exactly
   // like an unknown project id would, never a 500.
   if (!isArtifactType(type)) {
     notFound();
@@ -65,6 +68,14 @@ export default async function ArtifactReviewPage({ params }: ArtifactReviewPageP
   if (!project) notFound();
 
   const reviewData = await loadReviewVersion(projectId, type);
+  const documentHistory =
+    type === 'brd' || type === 'erd'
+      ? (await listArtifactVersions(projectId, type)).map((entry) => ({
+          id: entry.id,
+          versionNumber: entry.versionNumber,
+          status: entry.status,
+        }))
+      : [];
   const artifactTypeName = ARTIFACT_TYPE_LABELS[type];
 
   return (
@@ -73,12 +84,20 @@ export default async function ArtifactReviewPage({ params }: ArtifactReviewPageP
     >
       <Link
         href={`/projects/${projectId}`}
-        className="text-on-surface-variant hover:text-on-surface text-sm font-medium"
+        className="document-print-hide text-on-surface-variant hover:text-on-surface text-sm font-medium"
       >
         ← {project.name}
       </Link>
 
-      {reviewData ? (
+      {type === 'brd' || type === 'erd' ? (
+        <DocumentReviewScreen
+          projectId={projectId}
+          type={type}
+          title={artifactTypeName}
+          version={reviewData?.version ?? null}
+          history={documentHistory}
+        />
+      ) : reviewData ? (
         // Keyed by version id: a manual/AI revision mints a brand-new
         // `artifact_version` after this page's next read, and this key
         // forces `ArtifactReviewScreen` to remount (fresh local state) for
@@ -94,7 +113,7 @@ export default async function ArtifactReviewPage({ params }: ArtifactReviewPageP
           upstreamDisplayKeysByItemVersionId={reviewData.upstreamDisplayKeysByItemVersionId}
         />
       ) : (
-        // Not a hard 404: the artifact type is real (it's one of the 4 CHECK
+        // Not a hard 404: the artifact type is real (it's one of the 6 CHECK
         // values), it just has no version yet (nothing has been generated
         // into it). `artifactType` is passed through explicitly (not derived
         // from a version, since there isn't one) so the screen's own

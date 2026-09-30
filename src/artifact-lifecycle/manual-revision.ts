@@ -36,10 +36,10 @@ export async function createManualRevisionDraft(
   actorUserId: string,
 ): Promise<ArtifactVersion> {
   if (artifactType === 'architecture') {
-    throw new Error(
-      'createManualRevisionDraft has no Architecture path - Architecture is revised only by ' +
-        'regeneration, because its ADRs are materialized at approval (ERD 3.6 closing paragraph)',
-    );
+    throw new Error('createManualRevisionDraft has no Architecture path');
+  }
+  if (artifactType === 'brd' || artifactType === 'erd') {
+    throw new Error(`${artifactType} is revised only by regeneration`);
   }
 
   return withProjectLock(projectId, async (tx) => {

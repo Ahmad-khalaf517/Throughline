@@ -14,12 +14,19 @@ import {
 
 describe('ARTIFACT_TYPES', () => {
   it('is exactly the artifact.type CHECK constraint values (API Contracts 1.7)', () => {
-    expect(ARTIFACT_TYPES).toEqual(['requirements', 'architecture', 'ui_requirements', 'backlog']);
+    expect(ARTIFACT_TYPES).toEqual([
+      'requirements',
+      'architecture',
+      'ui_requirements',
+      'backlog',
+      'brd',
+      'erd',
+    ]);
   });
 });
 
 describe('emptyArtifactSummaries', () => {
-  it('has all 4 artifact types, each with no approved/draft version', () => {
+  it('has all 6 artifact types, each with no approved/draft version', () => {
     const summaries = emptyArtifactSummaries();
     expect(Object.keys(summaries).sort()).toEqual([...ARTIFACT_TYPES].sort());
     for (const type of ARTIFACT_TYPES) {
@@ -116,6 +123,7 @@ describe('toArtifactVersionSummaryDTO', () => {
       payload: { businessProblem: 'p' },
       rawOutput: null,
       selectedArchitectureOptionId: null,
+      sourceCurrent: null,
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-02-03T04:05:06.789Z',
     });

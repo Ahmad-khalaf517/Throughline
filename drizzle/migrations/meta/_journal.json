@@ -78,6 +78,13 @@
       "when": 1790684694909,
       "tag": "0010_provider_connection_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790765824595,
+      "tag": "0011_document_artifacts",
+      "breakpoints": true
     }
   ]
 }

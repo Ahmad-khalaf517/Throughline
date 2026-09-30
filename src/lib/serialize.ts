@@ -7,13 +7,16 @@
 // artifact-lifecycle) because `lib` is the one place every layer, including
 // layer 2, is allowed to import from; artifact-lifecycle imports this same
 // union instead of redefining it, so the two can never drift.
-export type ArtifactType = 'requirements' | 'architecture' | 'ui_requirements' | 'backlog';
+export type ArtifactType =
+  'requirements' | 'architecture' | 'ui_requirements' | 'backlog' | 'brd' | 'erd';
 
 export const ARTIFACT_TYPES: readonly ArtifactType[] = [
   'requirements',
   'architecture',
   'ui_requirements',
   'backlog',
+  'brd',
+  'erd',
 ];
 
 export interface ArtifactSummaryDTO {
@@ -137,6 +140,7 @@ export interface ArtifactVersionDTO {
   items: ItemVersionDTO[];
   options: ArchitectureOptionDTO[] | null; // architecture only, else null
   selectedArchitectureOptionId: string | null; // architecture only, set once approved
+  sourceCurrent: boolean | null; // FR-088: BRD/ERD context still points at current approved sources
   createdAt: string;
   updatedAt: string;
 }
@@ -203,6 +207,7 @@ export type ArtifactVersionSummaryDTO = Omit<ArtifactVersionDTO, 'items' | 'opti
 
 export function toArtifactVersionSummaryDTO(
   version: ArtifactVersionInput,
+  sourceCurrent: boolean | null = null,
 ): ArtifactVersionSummaryDTO {
   return {
     id: version.id,
@@ -221,6 +226,7 @@ export function toArtifactVersionSummaryDTO(
     rawOutput:
       version.statusReason === 'stale_generation_context' ? (version.rawOutput ?? null) : null,
     selectedArchitectureOptionId: version.selectedArchitectureOptionId,
+    sourceCurrent,
     createdAt: version.createdAt.toISOString(),
     updatedAt: version.updatedAt.toISOString(),
   };
@@ -236,9 +242,10 @@ export function toArtifactVersionDTO(
   version: ArtifactVersionInput,
   items: ItemVersionDTO[],
   options: ArchitectureOptionDTO[] | null,
+  sourceCurrent: boolean | null = null,
 ): ArtifactVersionDTO {
   return {
-    ...toArtifactVersionSummaryDTO(version),
+    ...toArtifactVersionSummaryDTO(version, sourceCurrent),
     items,
     options: version.artifactType === 'architecture' ? (options ?? []) : null,
   };

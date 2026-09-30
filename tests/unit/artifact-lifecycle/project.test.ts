@@ -98,7 +98,7 @@ describe('createProject', () => {
     return { insert, projectValues, artifactValues };
   }
 
-  it('inserts the project then its 4 artifact rows inside one transaction (ERD 4.2)', async () => {
+  it('inserts the project then its 6 artifact rows inside one transaction (ERD 4.2/T45)', async () => {
     const row = projectRow({ inputContext: { teamSize: 3 } });
     const tx = makeTx(row);
     withTxMock.mockImplementation((fn: (tx: unknown) => unknown) => fn(tx));
@@ -117,6 +117,8 @@ describe('createProject', () => {
       { projectId: 'p1', type: 'architecture' },
       { projectId: 'p1', type: 'ui_requirements' },
       { projectId: 'p1', type: 'backlog' },
+      { projectId: 'p1', type: 'brd' },
+      { projectId: 'p1', type: 'erd' },
     ]);
     expect(withTxMock).toHaveBeenCalledTimes(1);
   });
@@ -224,8 +226,8 @@ describe('getProjectById', () => {
           approvedVersionId: null,
           draftVersionId: 'dv-arch',
         },
-        // ui_requirements and backlog rows deliberately omitted: createProject
-        // always creates all 4 artifact rows, but this reduction must not
+        // Other rows deliberately omitted: createProject
+        // always creates all 6 artifact rows, but this reduction must not
         // assume that - a still-missing type must default, never come back
         // `undefined` (E1-S8: "don't hardcode null, use the real join").
       ]),
@@ -238,6 +240,8 @@ describe('getProjectById', () => {
       architecture: { approvedVersionId: null, draftVersionId: 'dv-arch' },
       ui_requirements: { approvedVersionId: null, draftVersionId: null },
       backlog: { approvedVersionId: null, draftVersionId: null },
+      brd: { approvedVersionId: null, draftVersionId: null },
+      erd: { approvedVersionId: null, draftVersionId: null },
     });
   });
 

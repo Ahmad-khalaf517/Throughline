@@ -180,6 +180,8 @@ const ARTIFACT_TYPE_LABELS: Record<ArtifactType, string> = {
   architecture: 'Architecture',
   ui_requirements: 'UI Requirements',
   backlog: 'Backlog',
+  brd: 'BRD',
+  erd: 'ERD',
 };
 
 const VERSION_STATUS_STYLE: Record<

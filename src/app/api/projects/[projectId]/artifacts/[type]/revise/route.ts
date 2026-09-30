@@ -36,10 +36,10 @@ export async function POST(request: Request, { params }: RouteParams) {
     await requireProjectOwner(user.id, projectId);
     const type = parseArtifactType(rawType);
 
-    if (type === 'architecture') {
+    if (type === 'architecture' || type === 'brd' || type === 'erd') {
       throw new ApiError(
         'MANUAL_REVISION_UNSUPPORTED',
-        'Architecture has no manual revision - regenerate it instead.',
+        `${type} has no manual revision - regenerate it instead.`,
       );
     }
 

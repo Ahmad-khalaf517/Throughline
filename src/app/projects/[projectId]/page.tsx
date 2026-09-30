@@ -1,7 +1,12 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { ArrowUpRight, GitBranch, Layers3, LayoutTemplate, ListTodo } from 'lucide-react';
-import { getProjectById, getProjectDashboard, type DashboardActivity } from '@/artifact-lifecycle';
+import {
+  getDocumentSourceCurrentness,
+  getProjectById,
+  getProjectDashboard,
+  type DashboardActivity,
+} from '@/artifact-lifecycle';
 import { getVerifiedUser, requireProjectOwner } from '@/auth';
 import { ProjectJourney } from '@/components/projects/project-journey';
 import { FlaggedGlyph, StatusBadge } from '@/components/status/status-badge';
@@ -17,6 +22,8 @@ const LABELS: Record<ArtifactType, string> = {
   architecture: 'Architecture decisions',
   ui_requirements: 'UI requirements',
   backlog: 'Backlog epics & stories',
+  brd: 'Business requirements document',
+  erd: 'Entity relationship diagram',
 };
 
 const TILE_ICONS = {
@@ -24,6 +31,8 @@ const TILE_ICONS = {
   architecture: Layers3,
   ui_requirements: LayoutTemplate,
   backlog: GitBranch,
+  brd: ListTodo,
+  erd: Layers3,
 } as const;
 
 function formatDate(date: Date) {
@@ -140,6 +149,15 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
   const project = await getProjectById(projectId);
   if (!project) notFound();
   const dashboard = await getProjectDashboard(projectId);
+  const documentCurrentness = new Map(
+    await Promise.all(
+      dashboard.tiles
+        .filter((tile) => (tile.type === 'brd' || tile.type === 'erd') && tile.versionId)
+        .map(
+          async (tile) => [tile.type, await getDocumentSourceCurrentness(tile.versionId!)] as const,
+        ),
+    ),
+  );
   const hasVersions = dashboard.tiles.some((tile) => tile.versionId);
   const impacted = dashboard.activity.filter((entry) => entry.kind === 'current_impact');
   const firstImpact = impacted[0];
@@ -186,9 +204,11 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
               <Link
                 key={tile.type}
                 href={
-                  tile.versionId
-                    ? `/projects/${projectId}/versions/${tile.versionId}`
-                    : `/projects/${projectId}/artifacts/${tile.type}`
+                  tile.type === 'brd' || tile.type === 'erd'
+                    ? `/projects/${projectId}/artifacts/${tile.type}`
+                    : tile.versionId
+                      ? `/projects/${projectId}/versions/${tile.versionId}`
+                      : `/projects/${projectId}/artifacts/${tile.type}`
                 }
                 className="app-card app-card-link group flex min-h-48 flex-col justify-between gap-4 p-5 focus-visible:outline-none"
               >
@@ -202,18 +222,29 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
                 </div>
                 <div>
                   <p className="text-on-surface text-sm font-semibold">{LABELS[tile.type]}</p>
-                  <p className="text-on-surface mt-2 text-3xl font-semibold tracking-tight">
-                    {tile.itemCount}
-                    <span className="text-on-surface-variant ml-1 text-xs font-normal">
-                      {itemNoun(tile.itemCount)}
-                    </span>
-                  </p>
+                  {tile.type === 'brd' || tile.type === 'erd' ? (
+                    <p className="text-on-surface-variant mt-2 text-sm">
+                      {tile.versionId ? 'Document generated' : 'No document yet'}
+                    </p>
+                  ) : (
+                    <p className="text-on-surface mt-2 text-3xl font-semibold tracking-tight">
+                      {tile.itemCount}
+                      <span className="text-on-surface-variant ml-1 text-xs font-normal">
+                        {itemNoun(tile.itemCount)}
+                      </span>
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   {tile.status ? (
                     <StatusBadge status={tile.status} />
                   ) : (
                     <span className="text-on-surface-variant text-xs">Not generated</span>
+                  )}
+                  {documentCurrentness.get(tile.type) === false && (
+                    <span className="text-status-draft-text inline-flex items-center gap-1 text-xs font-medium">
+                      Needs regeneration
+                    </span>
                   )}
                 </div>
                 <span className="text-primary inline-flex items-center gap-1 text-xs font-semibold group-hover:underline group-focus-visible:underline">
@@ -332,7 +363,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
       </div>
       {!hasVersions && (
         <p className="text-on-surface-variant text-xs">
-          All four artifact types are ready for their first version.
+          All six artifact types are ready for their first version.
         </p>
       )}
     </main>

@@ -20,6 +20,10 @@ const STEPS: { type: ArtifactType; label: string; icon: typeof FileText }[] = [
   { type: 'ui_requirements', label: 'UI specification', icon: LayoutTemplate },
   { type: 'backlog', label: 'Backlog', icon: GitBranch },
 ];
+const DOCUMENTS: { type: ArtifactType; label: string; icon: typeof FileText }[] = [
+  { type: 'brd', label: 'BRD', icon: FileText },
+  { type: 'erd', label: 'ERD', icon: FileText },
+];
 
 interface JourneyTile {
   type: ArtifactType;
@@ -34,11 +38,19 @@ export function ProjectJourney({ projectId, tiles }: { projectId: string; tiles:
     if (byType.get(step.type)?.status !== 'approved') break;
     approvedInOrder += 1;
   }
-  const completed = approvedInOrder + 1; // The saved project brief is the first milestone.
+  const completed =
+    approvedInOrder +
+    1 + // The saved project brief is the first milestone.
+    DOCUMENTS.filter((document) => byType.get(document.type)?.status === 'approved').length;
   const next = STEPS.find((step) => byType.get(step.type)?.status !== 'approved');
+  const nextDocument = DOCUMENTS.find(
+    (document) => byType.get(document.type)?.status !== 'approved',
+  );
   const destination = next
     ? `/projects/${projectId}/artifacts/${next.type}`
-    : `/projects/${projectId}/outputs`;
+    : nextDocument
+      ? `/projects/${projectId}/artifacts/${nextDocument.type}`
+      : `/projects/${projectId}/outputs`;
 
   return (
     <section aria-labelledby="journey-heading" className="app-card p-5 sm:p-7">
@@ -56,7 +68,7 @@ export function ProjectJourney({ projectId, tiles }: { projectId: string; tiles:
           </p>
         </div>
         <p className="font-mono-code text-primary text-xs font-semibold">
-          {completed} / 5 milestones
+          {completed} / 7 milestones
         </p>
       </div>
 
@@ -64,16 +76,16 @@ export function ProjectJourney({ projectId, tiles }: { projectId: string; tiles:
         role="progressbar"
         aria-label="Project journey"
         aria-valuemin={0}
-        aria-valuemax={5}
+        aria-valuemax={7}
         aria-valuenow={completed}
-        aria-valuetext={`${completed} of 5 milestones complete`}
+        aria-valuetext={`${completed} of 7 milestones complete`}
         className="app-journey-track mt-6 h-1.5 overflow-hidden rounded-full"
       >
         <motion.div
           aria-hidden="true"
           className="app-journey-fill h-full w-full origin-left rounded-full"
           initial={reduceMotion ? false : { transform: 'scaleX(0)' }}
-          animate={{ transform: `scaleX(${completed / 5})` }}
+          animate={{ transform: `scaleX(${completed / 7})` }}
           transition={{ duration: reduceMotion ? 0 : 0.55, ease: [0.23, 1, 0.32, 1] }}
         />
       </div>
@@ -143,11 +155,44 @@ export function ProjectJourney({ projectId, tiles }: { projectId: string; tiles:
         })}
       </ol>
 
+      <div className="border-surface-dim mt-6 border-t pt-5">
+        <p className="text-on-surface-variant mb-3 text-xs font-medium">Generated documents</p>
+        <ul className="grid gap-2 sm:grid-cols-2">
+          {DOCUMENTS.map((document) => {
+            const tile = byType.get(document.type);
+            const Icon = document.icon;
+            return (
+              <li key={document.type}>
+                <Link
+                  href={`/projects/${projectId}/artifacts/${document.type}`}
+                  aria-label={`${document.label}: ${tile?.status ?? 'not generated'}. Open ${document.label}.`}
+                  className="app-card-link border-surface-dim bg-surface-container-lowest flex items-center justify-between gap-3 rounded-lg border p-4 focus-visible:outline-none"
+                >
+                  <span className="text-on-surface inline-flex items-center gap-2 text-sm font-semibold">
+                    <Icon className="text-primary-container size-5" aria-hidden="true" />
+                    {document.label}
+                  </span>
+                  {tile?.status ? (
+                    <StatusBadge status={tile.status} />
+                  ) : (
+                    <span className="text-on-surface-variant text-xs">Not generated</span>
+                  )}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+
       <Link
         href={destination}
         className="text-primary hover:text-primary-container-hover focus-visible:ring-primary mt-5 inline-flex items-center gap-2 rounded-md text-sm font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none"
       >
-        {next ? `Continue with ${next.label}` : 'Explore your outputs'}
+        {next
+          ? `Continue with ${next.label}`
+          : nextDocument
+            ? `Continue with ${nextDocument.label}`
+            : 'Explore your outputs'}
         <ArrowRight className="size-4" aria-hidden="true" />
       </Link>
     </section>

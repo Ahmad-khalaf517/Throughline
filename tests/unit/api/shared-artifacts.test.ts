@@ -34,9 +34,13 @@ vi.mock('@/artifact-lifecycle', () => ({
   VersionNotDraftError: FakeVersionNotDraftError,
   ApprovalGateBlockedError: FakeApprovalGateBlockedError,
   ItemEditError: FakeItemEditError,
+  DocumentSourceChangedError: class DocumentSourceChangedError extends Error {},
+  getDocumentSourceCurrentness: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('@/artifact-types/requirements', () => ({ generate: vi.fn(), qualityGate: vi.fn() }));
+vi.mock('@/artifact-types/brd', () => ({ generate: vi.fn() }));
+vi.mock('@/artifact-types/erd', () => ({ generate: vi.fn() }));
 vi.mock('@/artifact-types/architecture', () => ({
   generate: vi.fn(),
   getOptionsForVersion: vi.fn(),
@@ -60,6 +64,8 @@ import {
   qualityGate as qualityGateRequirements,
 } from '@/artifact-types/requirements';
 import { generate as generateUiRequirements } from '@/artifact-types/ui-requirements';
+import { generate as generateBrd } from '@/artifact-types/brd';
+import { generate as generateErd } from '@/artifact-types/erd';
 import {
   generate as generateBacklog,
   qualityGate as qualityGateBacklog,
@@ -160,6 +166,8 @@ describe('ARTIFACT_PREREQUISITES (TR FR-080)', () => {
       architecture: ['requirements'],
       ui_requirements: ['requirements', 'architecture'],
       backlog: ['requirements', 'architecture', 'ui_requirements'],
+      brd: ['requirements'],
+      erd: ['requirements', 'architecture'],
     });
   });
 });
@@ -177,6 +185,10 @@ describe('missingPrerequisites', () => {
     ['backlog', { ui_requirements: 'u' }, ['requirements', 'architecture']],
     ['backlog', { requirements: 'r', architecture: 'a' }, ['ui_requirements']],
     ['backlog', { requirements: 'r', architecture: 'a', ui_requirements: 'u' }, []],
+    ['brd', {}, ['requirements']],
+    ['brd', { requirements: 'r' }, []],
+    ['erd', { requirements: 'r' }, ['architecture']],
+    ['erd', { requirements: 'r', architecture: 'a' }, []],
   ] as const)('%s with approved %j is missing %j', (type, approved, missing) => {
     expect(missingPrerequisites(makeProject(approved), type)).toEqual(missing);
   });
@@ -210,6 +222,8 @@ describe('prerequisiteVersionIds', () => {
     expect(prerequisiteVersionIds(project, 'architecture')).toEqual(['req-v1']);
     expect(prerequisiteVersionIds(project, 'ui_requirements')).toEqual(['req-v1', 'arch-v2']);
     expect(prerequisiteVersionIds(project, 'backlog')).toEqual(['req-v1', 'arch-v2', 'ui-v3']);
+    expect(prerequisiteVersionIds(project, 'brd')).toEqual(['req-v1']);
+    expect(prerequisiteVersionIds(project, 'erd')).toEqual(['req-v1', 'arch-v2']);
   });
 
   it('skips a prerequisite with no approved version rather than fabricating an id', () => {
@@ -220,7 +234,7 @@ describe('prerequisiteVersionIds', () => {
 });
 
 describe('ARTIFACT_TYPE_DISPATCH', () => {
-  it('covers exactly the four artifact types', () => {
+  it('covers exactly the six artifact types', () => {
     expect(Object.keys(ARTIFACT_TYPE_DISPATCH).sort()).toEqual([...ARTIFACT_TYPES].sort());
   });
 
@@ -229,6 +243,8 @@ describe('ARTIFACT_TYPE_DISPATCH', () => {
     expect(ARTIFACT_TYPE_DISPATCH.architecture.generate).toBe(generateArchitecture);
     expect(ARTIFACT_TYPE_DISPATCH.ui_requirements.generate).toBe(generateUiRequirements);
     expect(ARTIFACT_TYPE_DISPATCH.backlog.generate).toBe(generateBacklog);
+    expect(ARTIFACT_TYPE_DISPATCH.brd.generate).toBe(generateBrd);
+    expect(ARTIFACT_TYPE_DISPATCH.erd.generate).toBe(generateErd);
   });
 
   it('has a quality gate only for requirements (FR-012) and backlog (FR-063)', () => {
@@ -236,6 +252,8 @@ describe('ARTIFACT_TYPE_DISPATCH', () => {
     expect(ARTIFACT_TYPE_DISPATCH.backlog.qualityGate).toBe(qualityGateBacklog);
     expect(ARTIFACT_TYPE_DISPATCH.architecture.qualityGate).toBeNull();
     expect(ARTIFACT_TYPE_DISPATCH.ui_requirements.qualityGate).toBeNull();
+    expect(ARTIFACT_TYPE_DISPATCH.brd.qualityGate).toBeNull();
+    expect(ARTIFACT_TYPE_DISPATCH.erd.qualityGate).toBeNull();
   });
 
   it('gives a default item type only to requirements and ui_requirements', () => {

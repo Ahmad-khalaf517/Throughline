@@ -14,6 +14,8 @@ const SHAPES: Record<ArtifactType, { rows: number; columns: number }> = {
   architecture: { rows: 2, columns: 2 },
   ui_requirements: { rows: 4, columns: 1 },
   backlog: { rows: 4, columns: 1 },
+  brd: { rows: 6, columns: 1 },
+  erd: { rows: 4, columns: 2 },
 };
 
 export function GenerationSkeleton({

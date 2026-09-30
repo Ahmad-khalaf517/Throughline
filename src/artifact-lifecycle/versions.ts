@@ -63,7 +63,7 @@ export async function getVersionRef(versionId: string): Promise<ArtifactVersionR
   return row ? { ...row, artifactType: row.artifactType as ArtifactType } : null;
 }
 
-/** The project's `artifact` row id for one type (`createProject` always inserts all four), or `null`. */
+/** The project's `artifact` row id for one type (`createProject` inserts all six), or `null`. */
 export async function getArtifactId(projectId: string, type: ArtifactType): Promise<string | null> {
   const [row] = await db
     .select({ id: schema.artifact.id })

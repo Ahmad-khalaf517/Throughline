@@ -20,7 +20,7 @@ export const artifact = pgTable(
     unique().on(table.id, table.projectId),
     check(
       'artifact_type_check',
-      sql`${table.type} IN ('requirements','architecture','ui_requirements','backlog')`,
+      sql`${table.type} IN ('requirements','architecture','ui_requirements','backlog','brd','erd')`,
     ),
   ],
 );

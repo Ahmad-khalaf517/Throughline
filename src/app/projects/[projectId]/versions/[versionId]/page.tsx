@@ -46,6 +46,17 @@ export default async function ProjectVersionPage({
           {detail.items.length} {detail.items.length === 1 ? 'item' : 'items'} in this version
         </p>
       </header>
+      {(detail.version.artifactType === 'brd' || detail.version.artifactType === 'erd') && (
+        <section
+          className="bg-surface-container-lowest border-surface-dim rounded-lg border p-6"
+          aria-label="Document payload"
+        >
+          <h2 className="text-on-surface mb-3 text-base font-semibold">Document content</h2>
+          <pre className="bg-surface-container-low text-on-surface overflow-x-auto rounded-md p-4 text-xs whitespace-pre-wrap">
+            {JSON.stringify(detail.version.payload, null, 2)}
+          </pre>
+        </section>
+      )}
       <section aria-label="Version items" className="flex flex-col gap-4">
         {detail.items.length ? (
           detail.items.map((item) => {

@@ -1,9 +1,9 @@
 # Throughline - Technical Requirements & Lineage Invariants
 
-**Document version:** 1.13  
+**Document version:** 1.15
 **Project type:** AI-assisted software project initialization platform  
 **Delivery context:** Solo capstone project, 8 full-time development days  
-**Status:** Technical baseline aligned with Throughline BRD v2.5 and ERD/Data Model v1.17; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v1.5: added FR-003/FR-004 (BR-011) for the project dashboard overview and persistent navigation shell. v1.6: FR-032 now pins a small set of starters (Django, Next.js) instead of one, each a deterministic file set generated in scaffold mode (FR-031); BRD v2.4. v1.7: per-user provider connections (BR-012) - new section 16B (FR-086 through FR-090), NFR-005 amended, the shared-credential model reversed at the project owner request. v1.13: the Jira project-creation scope is `manage:jira-configuration`, not `manage:jira-project` (FR-086, FR-092, NFR-005); a 401 'scope does not match' is `missing_scope` and leaves the connection active. v1.12: FR-092 records the verified plain-text key-validation behaviour. v1.11: UC-S11 adds FR-092 (create a Jira project from Throughline), the Jira OAuth scope set gains `manage:jira-configuration` (FR-086, NFR-005), and FR-087/FR-088 show the connected Jira site and the chosen project. v1.10: FR-091 corrected - the same repository name is reusable only once the old repository is deleted on GitHub. v1.9: UC-S10 adds FR-091 (remove a repository link without deleting the repository on GitHub); the Connections screen becomes the user-facing "Integrations" section in the navigation (FR-004, FR-087, UC-S7 note). v1.8: UC-S9 product feedback - the GitHub owner defaults to the connected account and the three provider screens get a guided step list (FR-088, FR-089 refined) and the GitHub repository visibility is user-selectable, public by default (FR-030, FR-031).  
+**Status:** v1.15: FR-094 uses cardinality endpoint marks and a compact expandable ERD preview with full-size SVG export. v1.14: includes the Jira `manage:jira-configuration` scope correction from main; FR-094 displays the ERD as a visual entity relationship diagram with tables, columns, types, keys and relation labels, with SVG download. v1.13: FR-003 and FR-093/094 cover overview milestones and PDF saving for approved documents. v1.12: FR-093..095 add generated BRD/ERD documents. Technical baseline aligned with Throughline BRD v2.7 and ERD/Data Model v1.16; parent document for ERD/Data Model -> Modules -> API Contracts -> Jira Plan -> Implementation. v1.5: added FR-003/FR-004 (BR-011) for the project dashboard overview and persistent navigation shell. v1.6: FR-032 now pins a small set of starters (Django, Next.js) instead of one, each a deterministic file set generated in scaffold mode (FR-031); BRD v2.4. v1.7: per-user provider connections (BR-012) - new section 16B (FR-086 through FR-090), NFR-005 amended, the shared-credential model reversed at the project owner request. v1.11: UC-S11 adds FR-092 (create a Jira project from Throughline), the Jira OAuth scope set gains `manage:jira-project` (FR-086, NFR-005), and FR-087/FR-088 show the connected Jira site and the chosen project. v1.10: FR-091 corrected - the same repository name is reusable only once the old repository is deleted on GitHub. v1.9: UC-S10 adds FR-091 (remove a repository link without deleting the repository on GitHub); the Connections screen becomes the user-facing "Integrations" section in the navigation (FR-004, FR-087, UC-S7 note). v1.8: UC-S9 product feedback - the GitHub owner defaults to the connected account and the three provider screens get a guided step list (FR-088, FR-089 refined) and the GitHub repository visibility is user-selectable, public by default (FR-030, FR-031).
 **Primary audience:** Developer, technical reviewers, and AI coding agents
 
 ### Revision 1.11 alignment
@@ -320,13 +320,14 @@ Added in v1.5 (BR-011). Purely presentational - a read-only view over state that
 The system shall provide one overview screen per project showing:
 
 - The current `artifact_version.status` (FR-013/FR-022/FR-041/FR-064) and item count for each of the four artifact types (Requirements, Architecture, UI Requirements, Backlog), rendered with the same status-badge vocabulary used on each artifact type's own review screen (exactly the four `artifact_version.status` values - no fifth state).
+- The current status of generated BRD and ERD artifact versions (FR-093/FR-094), with an explicit source-currentness indicator (FR-095). Show document availability instead of an item count, because these terminal documents have no logical items. The journey count includes each approved document as a milestone independently of the four item artifacts.
 - A chronological feed of recent lineage activity for the project: `item_version` creations, `artifact_version` status changes, and flagged-impact state (INV-020), each entry linking to the item/version it describes.
 
 This screen reads; it does not write. It has no effect on approval gating (FR-083/FR-084), currentness (INV-021), or any other workflow rule in this document - those are unchanged and continue to be evaluated exactly as specified wherever they already are. If a project has generated nothing yet, the screen shows the empty state, not an error (screen-kit "four states" rule).
 
 ### FR-004 - Persistent Navigation Shell
 
-Every screen under a project (Overview, Requirements, Architecture, UI Requirements, Backlog, Warnings, Dependencies, Outputs) shall share one navigation shell: a header identifying the current project and a tab/link set reaching every screen listed above, plus a way back to the user's project list.
+Every screen under a project (Overview, Requirements, Architecture, UI Requirements, Backlog, BRD, ERD, Warnings, Dependencies, Outputs) shall share one navigation shell: a header identifying the current project and a tab/link set reaching every screen listed above, plus a way back to the user's project list.
 
 Only screens that exist as a real FR belong in this shell. Cross-project chrome shown in the Stitch design reference with no backing FR anywhere in this document - a cross-project lineage map, a decisions register, an audit journal, a settings screen - is explicitly **out of scope for this shell** (P1, Jira Plan known-limitations, same treatment as FR-023). Do not add a nav entry that points at a screen this document doesn't define. **Round 14 exception (BR-012), amended v1.9:** the Integrations screen (FR-087; route `/connections`) has a backing FR and is reached from the shell through exactly two entries in the user-level chrome, since integrations belong to the user, not to a project: one top-level **Integrations** link in the persistent header navigation (with a status hint when an integration needs attention - not connected where a write is waiting, or reconnect required - never a token or secret), and one shortcut to the same screen in the account menu. It is the only item from that out-of-scope list that is admitted, and no project-level settings screen is admitted; a general settings screen, a decisions register, an audit journal and a cross-project lineage map remain out of scope.
 
@@ -747,6 +748,8 @@ An artifact may be generated only from approved upstream artifacts, in workflow 
 | Architecture | Requirements |
 | UI Requirements | Requirements, Architecture |
 | Backlog | Requirements, Architecture, UI Requirements |
+| BRD | Requirements |
+| ERD | Requirements, Architecture |
 
 The approved versions given to the model are recorded as the generation context (section 23.1). Because an approved artifact never returns to unapproved, no current downstream item can depend on an artifact that has no approved version.
 
@@ -780,6 +783,18 @@ The user may approve a blocked version with a **mandatory, non-empty note**. The
 ### FR-085 - Impact in External-Write Previews
 
 Every GitHub, Stitch and Jira preview shall show the current impact warnings for the items the write would be created from. Creating an external object from a flagged item requires an explicit confirmation; it is not blocked. The resulting external reference is flagged from the moment it exists, so nothing stale leaves Throughline silently.
+
+### FR-093 - Generated BRD (BR-013; post-P0)
+
+From the current approved Requirements version, the system shall generate a structured BRD with problem, stakeholders, goals, scope, assumptions, risks, and success measures. The model must distinguish known facts from inferred assumptions. A draft is reviewable, may be regenerated with feedback, and becomes authoritative only on explicit approval. No manual item revision applies because this document has no dependable logical items. A current approved BRD offers a print view suitable for saving as PDF through the browser print dialog, showing the document and version without workspace navigation or review controls.
+
+### FR-094 - Generated ERD (BR-013; post-P0)
+
+From the current approved Requirements and Architecture versions, the system shall generate a structured ERD with entities, attributes, keys, and relationships, plus a visual entity relationship diagram showing each table, its columns, data types, primary and foreign keys, and relations. The app shall render the validated structured entities and relationships as SVG, with endpoint cardinality marks (bars for one, crow's foot for many, and a circle for optionality). An unrecognized cardinality retains its text label. The inline diagram shall be a compact fit-to-view preview that can be expanded to inspect the full-size diagram; SVG download shall preserve full diagram dimensions independently of the preview size. Model-authored Mermaid text is not the primary review view. The output is a design proposal, never an automatic database migration. A draft is reviewable, may be regenerated with feedback, and becomes authoritative only on explicit approval. No manual item revision applies. A current approved ERD offers the same PDF saving path as the BRD.
+
+### FR-095 - Document Source Currentness (BR-013; post-P0)
+
+The BRD and ERD are terminal artifact types: the existing four artifact types do not consume them, and the document payload does not create semantic dependency edges. Their generation-context refs record the exact approved source versions. On read, the app compares these refs with the current approved source versions and labels a document whose source changed as needing regeneration, without inventing an `artifact_version.status`. A document draft whose source changed before approval cannot be approved; regenerate it. This document-level signal is distinct from item impact warnings and acknowledgements. Generation freshness still follows INV-006.
 
 ---
 
@@ -847,6 +862,8 @@ A project contains first-party Artifacts such as:
 - Architecture
 - UI Requirements
 - Backlog
+- BRD (post-P0)
+- ERD (post-P0)
 
 Each Artifact has multiple ArtifactVersions over time.
 

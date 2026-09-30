@@ -19,6 +19,7 @@ export {
   type ApproveVersionResult,
 } from './approval';
 export { VersionNotDraftError } from './errors';
+export { DocumentSourceChangedError, getDocumentSourceCurrentness } from './document-currentness';
 export { withArchitectureDraft, type ArchitectureDraftContext } from './architecture';
 
 export {
@@ -93,7 +94,7 @@ export class BriefFrozenError extends Error {
 }
 
 /**
- * Inserts a project and its 4 blank artifact rows (one per ArtifactType) in
+ * Inserts a project and its 6 blank artifact rows (one per ArtifactType) in
  * one transaction (ERD 4.2, Module Boundaries 4.3). No `artifact_version`
  * rows are created here - the artifacts stay version-less until a later
  * epic generates into them (FR-002 is out of scope for this call).
@@ -124,7 +125,7 @@ export async function createProject(
 // Shared read path for `getProjectById`/`listProjectsForOwner`: one project
 // row per artifact type, left-joined to whichever artifact_version (if any)
 // is currently `approved`/`draft` for that artifact. Every project always
-// has exactly 4 artifact rows (one per ArtifactType, inserted by
+// has exactly 6 artifact rows (one per ArtifactType, inserted by
 // `createProject`); both version ids are `null` until a later epic ever
 // creates an `artifact_version` row - never hardcoded, always the real join.
 async function projectsWithArtifacts(where: SQL): Promise<ProjectWithArtifacts[]> {

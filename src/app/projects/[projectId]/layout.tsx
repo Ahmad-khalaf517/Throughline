@@ -26,7 +26,7 @@ export default async function ProjectLayout({
 
   return (
     <div>
-      <div className="border-surface-dim bg-surface-container-lowest sticky top-16 z-30 border-b">
+      <div className="project-page-chrome border-surface-dim bg-surface-container-lowest sticky top-16 z-30 border-b">
         <div className="w-full px-4 sm:px-6 lg:px-8">
           <div className="flex min-h-20 min-w-0 items-center gap-4 py-3 sm:gap-6">
             <div className="min-w-0 flex-1">
