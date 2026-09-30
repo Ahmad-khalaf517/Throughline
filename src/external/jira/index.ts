@@ -321,13 +321,21 @@ class JiraHttpError extends Error {
  * `ReconnectRequiredError` - never a `failed` operation (ERD 7.6). The legacy
  * credential (`credential` null) keeps its old handling: a plain JiraHttpError.
  */
-async function requestJson<T>(args: {
+interface RequestArgs {
   url: string;
   label: string;
   authorization: string;
   init: RequestInit;
   credential: Credential | null;
-}): Promise<T> {
+}
+
+/**
+ * The raw-text form of one request: same 401 -> reconnect and status-only error
+ * behaviour as `requestJson`, but the 2xx body is returned as text. For endpoints
+ * whose real answer is not JSON (`projectvalidate/validProjectKey` answers with
+ * the key as plain text).
+ */
+async function requestText(args: RequestArgs): Promise<string> {
   const { init, credential } = args;
   const res = await fetch(args.url, {
     ...init,
@@ -349,28 +357,47 @@ async function requestJson<T>(args: {
     // (NFR-005). Classification reads `status` alone.
     throw new JiraHttpError(res.status, `Jira API ${args.label} -> ${res.status}`);
   }
-  return bodyText ? (JSON.parse(bodyText) as T) : ({} as T);
+  return bodyText;
 }
 
-/** A Jira REST call for an operation target: `/ex/jira/<cloudId>` + Bearer for a user, JIRA_BASE_URL + Basic for legacy. */
-async function jiraFetch<T>(auth: JiraAuth, path: string, init: RequestInit): Promise<T> {
+/** A 2xx body that is not JSON is an error naming the request only - never a SyntaxError, never the body. */
+async function requestJson<T>(args: RequestArgs): Promise<T> {
+  const bodyText = await requestText(args);
+  if (!bodyText) return {} as T;
+  try {
+    return JSON.parse(bodyText) as T;
+  } catch {
+    throw new Error(`Jira API ${args.label} returned an unreadable response`);
+  }
+}
+
+function requestArgsFor(auth: JiraAuth, path: string, init: RequestInit): RequestArgs {
   const label = `${init.method ?? 'GET'} ${path}`;
   if (auth.kind === 'user') {
-    return requestJson<T>({
+    return {
       url: `${ATLASSIAN_API}/ex/jira/${encodeURIComponent(auth.target.cloudId)}${path}`,
       label,
       authorization: `Bearer ${auth.credential.accessToken}`,
       init,
       credential: auth.credential,
-    });
+    };
   }
-  return requestJson<T>({
+  return {
     url: `${auth.config.baseUrl.replace(/\/$/, '')}${path}`,
     label,
     authorization: authHeader(auth.config),
     init,
     credential: null,
-  });
+  };
+}
+
+/** A Jira REST call for an operation target: `/ex/jira/<cloudId>` + Bearer for a user, JIRA_BASE_URL + Basic for legacy. */
+async function jiraFetch<T>(auth: JiraAuth, path: string, init: RequestInit): Promise<T> {
+  return requestJson<T>(requestArgsFor(auth, path, init));
+}
+
+async function jiraFetchText(auth: JiraAuth, path: string, init: RequestInit): Promise<string> {
+  return requestText(requestArgsFor(auth, path, init));
 }
 
 interface JiraCreateIssueResponse {
@@ -1186,22 +1213,59 @@ interface JiraKeyValidationResponse {
   errors?: unknown;
 }
 
+type KeyCheck = { valid: boolean; reason?: 'taken' | 'invalid' };
+
+// A project key as Jira returns it: letters, digits, underscore, short. Anything
+// else in a plain-text body (HTML, a sentence) is not a key and is "unsure".
+const KEY_SHAPED = /^[A-Za-z][A-Za-z0-9_]{0,31}$/;
+
 /**
- * `GET /rest/api/3/projectvalidate/validProjectKey?key=` (path from ERD 7.8, not
- * verified live). Jira answers 200 with an error collection: empty when the key
- * is free and valid, otherwise a message. The message text is only ever
- * classified against a small whitelist and never stored or thrown. Any failure
- * to validate (other than a 401, which reconnects) is "unsure": the create call's
- * own 400 stays the authority.
+ * Reads the `validProjectKey` answer. Real behaviour (observed in production):
+ * Atlassian answers with the KEY as plain text (`RMF`; possibly a quoted JSON
+ * string) - the same key when it is valid and free, a DIFFERENT generated key
+ * when the requested one is invalid or in use. An ErrorCollection JSON body is
+ * also tolerated. Anything unexpected is "unsure" (treated as valid; the create
+ * call's own 400 stays the authority). Never throws; never returns body text.
+ */
+function interpretKeyValidation(bodyText: string, key: string): KeyCheck {
+  const text = bodyText.trim();
+  if (text === '') return { valid: true };
+
+  let candidate: string | null = null;
+  if (/^["{[]/.test(text)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { valid: true };
+    }
+    if (typeof parsed === 'string') candidate = parsed.trim();
+    else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return classifyErrorCollection(parsed as JiraKeyValidationResponse);
+    } else return { valid: true };
+  } else {
+    candidate = text;
+  }
+
+  if (!KEY_SHAPED.test(candidate)) return { valid: true };
+  if (candidate.toLowerCase() === key.trim().toLowerCase()) return { valid: true };
+  // Atlassian generated an alternative: the requested key is invalid or in use.
+  return { valid: false, reason: 'taken' };
+}
+
+/**
+ * `GET /rest/api/3/projectvalidate/validProjectKey?key=`. See
+ * `interpretKeyValidation`. Any failure to validate (other than a 401, which
+ * reconnects) is "unsure": the create call's own 400 stays the authority.
  */
 async function checkKeyWith(
   credential: Credential,
   cloudId: string,
   key: string,
-): Promise<{ valid: boolean; reason?: 'taken' | 'invalid' }> {
-  let response: JiraKeyValidationResponse;
+): Promise<KeyCheck> {
+  let bodyText: string;
   try {
-    response = await jiraFetch<JiraKeyValidationResponse>(
+    bodyText = await jiraFetchText(
       { kind: 'user', credential, target: { cloudId, projectKey: '' } },
       `/rest/api/3/projectvalidate/validProjectKey?key=${encodeURIComponent(key)}`,
       { method: 'GET' },
@@ -1210,6 +1274,11 @@ async function checkKeyWith(
     if (error instanceof JiraHttpError) return { valid: true };
     throw error;
   }
+  return interpretKeyValidation(bodyText, key);
+}
+
+/** ErrorCollection form: the message text is only classified against a small whitelist, never stored or thrown. */
+function classifyErrorCollection(response: JiraKeyValidationResponse): KeyCheck {
   const messages: string[] = [];
   if (Array.isArray(response.errorMessages)) {
     for (const message of response.errorMessages) {
@@ -1265,23 +1334,24 @@ export async function createProject(
   const validation = await checkKeyWith(credential, input.cloudId, input.key);
   if (!validation.valid) throw new ProjectKeyTakenError();
 
-  let response: JiraCreateProjectResponse;
+  const projectAuth: JiraAuth = {
+    kind: 'user',
+    credential,
+    target: { cloudId: input.cloudId, projectKey: '' },
+  };
+  let createText: string;
   try {
-    response = await jiraFetch<JiraCreateProjectResponse>(
-      { kind: 'user', credential, target: { cloudId: input.cloudId, projectKey: '' } },
-      '/rest/api/3/project',
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          key: input.key,
-          name: input.name,
-          projectTypeKey: JIRA_PROJECT_TYPE_KEY,
-          projectTemplateKey: JIRA_PROJECT_TEMPLATE_KEYS[input.template],
-          leadAccountId: credential.accountId,
-          assigneeType: 'PROJECT_LEAD',
-        }),
-      },
-    );
+    createText = await jiraFetchText(projectAuth, '/rest/api/3/project', {
+      method: 'POST',
+      body: JSON.stringify({
+        key: input.key,
+        name: input.name,
+        projectTypeKey: JIRA_PROJECT_TYPE_KEY,
+        projectTemplateKey: JIRA_PROJECT_TEMPLATE_KEYS[input.template],
+        leadAccountId: credential.accountId,
+        assigneeType: 'PROJECT_LEAD',
+      }),
+    });
   } catch (error) {
     if (error instanceof JiraHttpError) {
       if (error.status === 400 || error.status === 409) throw new ProjectKeyTakenError();
@@ -1290,11 +1360,36 @@ export async function createProject(
     throw error;
   }
 
-  const id = typeof response.id === 'number' ? String(response.id) : response.id;
-  if (typeof id !== 'string' || id === '') {
-    throw new Error('Jira project creation returned an unusable response.');
+  // The project now exists (2xx). An unreadable or id-less body must not turn that
+  // into an internal error: look the project up by key once, else return no id.
+  let response: JiraCreateProjectResponse = {};
+  try {
+    const parsed: unknown = createText.trim() === '' ? {} : JSON.parse(createText);
+    if (parsed && typeof parsed === 'object') response = parsed as JiraCreateProjectResponse;
+  } catch {
+    response = {};
   }
-  return { id, key: typeof response.key === 'string' ? response.key : input.key, name: input.name };
+  let id = projectIdOf(response.id);
+  let key = typeof response.key === 'string' && response.key !== '' ? response.key : input.key;
+  if (id === '') {
+    try {
+      const found = await jiraFetch<JiraCreateProjectResponse>(
+        projectAuth,
+        `/rest/api/3/project/${encodeURIComponent(input.key)}`,
+        { method: 'GET' },
+      );
+      id = projectIdOf(found.id);
+      if (typeof found.key === 'string' && found.key !== '') key = found.key;
+    } catch (error) {
+      if (error instanceof ReconnectRequiredError) throw error;
+    }
+  }
+  return { id, key, name: input.name };
+}
+
+function projectIdOf(value: unknown): string {
+  if (typeof value === 'number') return String(value);
+  return typeof value === 'string' ? value : '';
 }
 
 // ---------------------------------------------------------------------------
