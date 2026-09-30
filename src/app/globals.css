@@ -333,6 +333,40 @@ body {
   background: var(--primary-container);
 }
 
+@media print {
+  body:has(.document-print-root) .app-shell > header,
+  body:has(.document-print-root) .app-shell > div > aside,
+  body:has(.document-print-root) .project-page-chrome,
+  body:has(.document-print-root) .document-print-hide {
+    display: none !important;
+  }
+
+  body:has(.document-print-root) .app-shell,
+  body:has(.document-print-root) main {
+    background: white !important;
+    min-height: 0;
+  }
+
+  body:has(.document-print-root) main {
+    max-width: none;
+    padding: 0;
+  }
+
+  .document-print-root .app-card {
+    break-inside: avoid;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    box-shadow: none;
+  }
+
+  .document-print-root section[aria-label='Document content'] > section {
+    break-inside: auto;
+    border-top: 1px solid #ccc;
+    padding-top: 1rem;
+  }
+}
+
 @media (forced-colors: active) {
   .app-shell {
     scrollbar-color: auto;

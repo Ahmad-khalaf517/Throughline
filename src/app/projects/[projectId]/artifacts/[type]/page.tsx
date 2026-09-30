@@ -84,7 +84,7 @@ export default async function ArtifactReviewPage({ params }: ArtifactReviewPageP
     >
       <Link
         href={`/projects/${projectId}`}
-        className="text-on-surface-variant hover:text-on-surface text-sm font-medium"
+        className="document-print-hide text-on-surface-variant hover:text-on-surface text-sm font-medium"
       >
         ← {project.name}
       </Link>

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { CircleAlert, FileText, Loader2 } from 'lucide-react';
+import { CircleAlert, Download, FileText, Loader2 } from 'lucide-react';
 import type { ArtifactVersionDTO, ArtifactVersionStatus } from '@/lib/serialize';
 import { StatusBadge } from '@/components/status/status-badge';
 
@@ -118,7 +118,7 @@ export function DocumentReviewScreen({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="document-print-root space-y-6">
       <header className="app-card p-6 sm:p-8">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -151,13 +151,13 @@ export function DocumentReviewScreen({
       {error && (
         <p
           role="alert"
-          className="bg-error-container text-on-error-container rounded-lg p-3 text-sm"
+          className="bg-error-container text-on-error-container document-print-hide rounded-lg p-3 text-sm"
         >
           {error}
         </p>
       )}
 
-      <section className="app-card space-y-4 p-6" aria-label="Document actions">
+      <section className="app-card document-print-hide space-y-4 p-6" aria-label="Document actions">
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -184,7 +184,20 @@ export function DocumentReviewScreen({
               {pending === 'approve' ? 'Approving…' : 'Approve draft'}
             </button>
           )}
+          {version?.status === 'approved' && version.sourceCurrent !== false && (
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="border-surface-dim text-on-surface focus-visible:ring-primary inline-flex min-h-11 items-center gap-2 rounded-lg border px-5 text-sm font-medium focus-visible:ring-2"
+            >
+              <Download className="size-4" aria-hidden="true" />
+              Export PDF
+            </button>
+          )}
         </div>
+        {version?.status === 'approved' && version.sourceCurrent !== false && (
+          <p className="text-on-surface-variant text-xs">Choose Save as PDF in the print dialog.</p>
+        )}
         <label htmlFor="document-feedback" className="text-on-surface text-sm font-medium">
           Guidance for regeneration (optional)
         </label>
@@ -199,7 +212,7 @@ export function DocumentReviewScreen({
       </section>
 
       {history.length > 0 && (
-        <section className="app-card p-6" aria-label="Version history">
+        <section className="app-card document-print-hide p-6" aria-label="Version history">
           <h2 className="text-on-surface text-base font-semibold">Version history</h2>
           <ul className="mt-3 flex flex-wrap gap-2">
             {history.map((entry) => (

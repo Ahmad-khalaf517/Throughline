@@ -222,12 +222,18 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
                 </div>
                 <div>
                   <p className="text-on-surface text-sm font-semibold">{LABELS[tile.type]}</p>
-                  <p className="text-on-surface mt-2 text-3xl font-semibold tracking-tight">
-                    {tile.itemCount}
-                    <span className="text-on-surface-variant ml-1 text-xs font-normal">
-                      {itemNoun(tile.itemCount)}
-                    </span>
-                  </p>
+                  {tile.type === 'brd' || tile.type === 'erd' ? (
+                    <p className="text-on-surface-variant mt-2 text-sm">
+                      {tile.versionId ? 'Document generated' : 'No document yet'}
+                    </p>
+                  ) : (
+                    <p className="text-on-surface mt-2 text-3xl font-semibold tracking-tight">
+                      {tile.itemCount}
+                      <span className="text-on-surface-variant ml-1 text-xs font-normal">
+                        {itemNoun(tile.itemCount)}
+                      </span>
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   {tile.status ? (
@@ -357,7 +363,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
       </div>
       {!hasVersions && (
         <p className="text-on-surface-variant text-xs">
-          All four artifact types are ready for their first version.
+          All six artifact types are ready for their first version.
         </p>
       )}
     </main>
