@@ -1,4 +1,5 @@
 import { env } from '@/lib/env';
+import { JIRA_CREATE_PROJECT_SCOPE } from '@/lib/jira-scopes';
 import { ConnectionConfigError, InvalidGrantError, OAuthFlowError } from './errors';
 import { registerRefresher, type RefreshInput, type RefreshResult } from './hooks';
 
@@ -15,10 +16,9 @@ import { registerRefresher, type RefreshInput, type RefreshResult } from './hook
 const AUTHORIZE_URL = 'https://auth.atlassian.com/authorize';
 const TOKEN_URL = 'https://auth.atlassian.com/oauth/token';
 const API = 'https://api.atlassian.com';
-// `manage:jira-project` (round 17, UC-S11) lets the app create a Jira project; a
+// `manage:jira-configuration` (round 17, UC-S11) lets the app create a Jira project; a
 // connection made before it was requested lacks it and reconnects once.
-export const JIRA_SCOPE =
-  'read:jira-work write:jira-work manage:jira-project offline_access read:me';
+export const JIRA_SCOPE = `read:jira-work write:jira-work ${JIRA_CREATE_PROJECT_SCOPE} offline_access read:me`;
 const CALLBACK_PATH = '/api/connections/jira/callback';
 const REQUEST_TIMEOUT_MS = 10_000;
 
