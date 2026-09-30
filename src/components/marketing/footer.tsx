@@ -37,6 +37,12 @@ export function Footer({ userEmail }: FooterProps) {
               </Link>
             </>
           )}
+          <Link
+            href="/privacy"
+            className="hover:text-on-surface focus-visible:ring-primary rounded-md transition-colors focus-visible:ring-2 focus-visible:outline-none"
+          >
+            Privacy
+          </Link>
           <span className="font-mono-code text-on-surface-variant">
             &copy; {new Date().getFullYear()} Throughline
           </span>
