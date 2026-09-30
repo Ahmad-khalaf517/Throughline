@@ -28,6 +28,8 @@ interface JiraExportPanelProps {
   projectId: string;
   /** The project's saved Jira site + project (FR-088), `null` until picked. */
   jiraTarget: { cloudId: string; projectKey: string } | null;
+  /** The Throughline project's name, prefilled into "Create a new Jira project". */
+  projectName: string;
 }
 
 type JiraDecision = 'skip' | 'create_new';
@@ -72,7 +74,7 @@ const SUBMIT_CLASSNAME =
  * (API Contracts section 9; E5-S9). Same client-`fetch` mutation pattern as
  * `github-init-panel.tsx`/`new-project-form.tsx`.
  */
-export function JiraExportPanel({ projectId, jiraTarget }: JiraExportPanelProps) {
+export function JiraExportPanel({ projectId, jiraTarget, projectName }: JiraExportPanelProps) {
   const router = useRouter();
   const [state, setState] = useState<PreviewState>({ status: 'loading' });
   const [preview, setPreview] = useState<JiraPreviewData | null>(null);
@@ -261,6 +263,7 @@ export function JiraExportPanel({ projectId, jiraTarget }: JiraExportPanelProps)
               projectId={projectId}
               current={jiraTarget}
               connection={connection}
+              projectName={projectName}
               onSaved={handleTargetSaved}
             />
           }

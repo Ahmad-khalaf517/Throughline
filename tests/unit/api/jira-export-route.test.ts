@@ -63,6 +63,8 @@ vi.mock('@/external/jira', () => ({
   BacklogVersionNotApprovedError: FakeBacklogVersionNotApprovedError,
   JiraTargetRequiredError: FakeJiraTargetRequiredError,
   JiraSiteNotAccessibleError: FakeJiraSiteError,
+  ProjectKeyTakenError: class ProjectKeyTakenError extends Error {},
+  JiraAdminRequiredError: class JiraAdminRequiredError extends Error {},
 }));
 vi.mock('@/external/github', () => ({ checkDrift: vi.fn() }));
 vi.mock('@/external/stitch', () => ({ checkDrift: vi.fn() }));

@@ -8,6 +8,8 @@ import {
   availableActions,
   connectStartHref,
   describeConnectionStatus,
+  describeJiraSite,
+  describeProjectCreationHint,
   PROVIDER_LABEL,
   PROVIDER_PURPOSE,
   type ConnectionProvider,
@@ -143,6 +145,46 @@ export function ConnectionsPanel({
   );
 }
 
+/** The connected Jira site and whether creating projects is allowed (FR-092). Non-secret only. */
+function JiraDetails({ connection }: { connection: ConnectionDTO }) {
+  const site = describeJiraSite(connection.site);
+  const hint = describeProjectCreationHint(connection.scopes);
+  return (
+    <div className="text-on-surface-variant mt-1 flex flex-col gap-1 text-sm">
+      {site && (
+        <p className="break-words">
+          Site:{' '}
+          {site.href ? (
+            <a
+              href={site.href}
+              target="_blank"
+              rel="noreferrer"
+              className="text-primary-container hover:text-primary-container-hover focus-visible:ring-primary rounded font-medium underline focus-visible:ring-2 focus-visible:outline-none"
+            >
+              {site.name || site.url}
+              {site.name && site.url ? ` - ${site.url}` : ''}
+            </a>
+          ) : (
+            <span className="text-on-surface">
+              {site.name}
+              {site.name && site.url ? ' - ' : ''}
+              {site.url}
+            </span>
+          )}
+        </p>
+      )}
+      <p className="flex items-center gap-1.5">
+        {hint.allowed ? (
+          <CircleCheck className="text-success size-4 shrink-0" aria-hidden="true" />
+        ) : (
+          <CircleAlert className="text-error size-4 shrink-0" aria-hidden="true" />
+        )}
+        <span>{hint.text}</span>
+      </p>
+    </div>
+  );
+}
+
 function ProviderCard({
   connection,
   onDisconnect,
@@ -189,6 +231,9 @@ function ProviderCard({
           </p>
           {copy.detail && (
             <p className="text-on-surface-variant mt-1 text-sm leading-relaxed">{copy.detail}</p>
+          )}
+          {provider === 'jira' && connection.status === 'active' && (
+            <JiraDetails connection={connection} />
           )}
         </div>
 

@@ -18,6 +18,7 @@ function make() {
     accountId: 'acct-1',
     accessToken: TOKEN,
     meta: { cloudId: 'cloud-1' },
+    scopes: ['read:jira-work', 'manage:jira-project'],
   });
 }
 
@@ -27,6 +28,15 @@ describe('Credential redaction (NFR-005)', () => {
     expect(c.accessToken).toBe(TOKEN);
     expect(c.accountId).toBe('acct-1');
     expect(c.meta).toEqual({ cloudId: 'cloud-1' });
+  });
+
+  it('carries the granted scopes (non-secret), frozen, and still redacts the token', () => {
+    const c = make();
+    expect(c.scopes).toEqual(['read:jira-work', 'manage:jira-project']);
+    expect(Object.isFrozen(c.scopes)).toBe(true);
+    expect(c.scopes.includes('manage:jira-project')).toBe(true);
+    expect(inspect(c)).not.toContain(TOKEN);
+    expect(() => JSON.stringify(c)).toThrow();
   });
 
   it('JSON.stringify throws instead of leaking', () => {

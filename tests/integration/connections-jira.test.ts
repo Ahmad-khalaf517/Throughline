@@ -202,7 +202,7 @@ describe('Atlassian 3LO OAuth flow (UC-S5 application half)', () => {
           access_token: NEW_ACCESS,
           refresh_token: NEW_REFRESH,
           expires_in: 3600,
-          scope: 'read:jira-work write:jira-work offline_access read:me',
+          scope: 'read:jira-work write:jira-work manage:jira-project offline_access read:me',
         });
       }
       if (url.host === 'api.atlassian.com' && url.pathname === '/me') {

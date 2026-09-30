@@ -64,7 +64,7 @@ const okToken = () =>
     access_token: ACCESS,
     refresh_token: REFRESH,
     expires_in: 3600,
-    scope: 'read:jira-work write:jira-work offline_access read:me',
+    scope: 'read:jira-work write:jira-work manage:jira-project offline_access read:me',
   });
 const okMe = () =>
   Response.json({ account_id: '5b10-acct', name: 'Ada Lovelace', email: 'ada@example.test' });
@@ -108,9 +108,11 @@ describe('beginOAuth (jira)', () => {
     expect(url.searchParams.get('audience')).toBe('api.atlassian.com');
     expect(url.searchParams.get('client_id')).toBe('atlassian-client-id');
     expect(url.searchParams.get('scope')).toBe(
-      'read:jira-work write:jira-work offline_access read:me',
+      'read:jira-work write:jira-work manage:jira-project offline_access read:me',
     );
-    expect(JIRA_SCOPE).toBe('read:jira-work write:jira-work offline_access read:me');
+    expect(JIRA_SCOPE).toBe(
+      'read:jira-work write:jira-work manage:jira-project offline_access read:me',
+    );
     expect(url.searchParams.get('redirect_uri')).toBe(
       'https://app.example.test/api/connections/jira/callback',
     );
@@ -177,7 +179,13 @@ describe('completeOAuth (jira)', () => {
       displayName: 'Ada Lovelace',
       accessToken: ACCESS,
       refreshToken: REFRESH,
-      scopes: ['read:jira-work', 'write:jira-work', 'offline_access', 'read:me'],
+      scopes: [
+        'read:jira-work',
+        'write:jira-work',
+        'manage:jira-project',
+        'offline_access',
+        'read:me',
+      ],
       // Only the first site is the default; the sites route lists all of them live.
       providerMeta: { cloudId: 'cloud-1', siteUrl: 'https://acme.atlassian.net', siteName: 'Acme' },
     });

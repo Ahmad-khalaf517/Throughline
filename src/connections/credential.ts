@@ -11,6 +11,8 @@ export class Credential {
   readonly provider: ConnectionProvider;
   readonly accountId: string;
   readonly meta: Readonly<Record<string, string>>;
+  /** The scopes the provider granted (non-secret, from `provider_connection.scopes`). */
+  readonly scopes: readonly string[];
   readonly #accessToken: string;
 
   constructor(args: {
@@ -19,11 +21,13 @@ export class Credential {
     accountId: string;
     accessToken: string;
     meta: Record<string, string>;
+    scopes: readonly string[];
   }) {
     this.connectionId = args.connectionId;
     this.provider = args.provider;
     this.accountId = args.accountId;
     this.meta = Object.freeze({ ...args.meta });
+    this.scopes = Object.freeze([...args.scopes]);
     this.#accessToken = args.accessToken;
   }
 

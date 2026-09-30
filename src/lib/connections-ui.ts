@@ -280,6 +280,7 @@ const RECONNECT_REASON_COPY: Record<NonNullable<NeedsReconnect>['reason'], strin
   revoked: 'the connection was revoked',
   different_account: 'a different account is connected than the one used for this',
   legacy_credential_missing: 'legacy credential missing',
+  missing_scope: 'needs permission to create projects - reconnect',
 };
 
 /**
@@ -337,6 +338,132 @@ export function describeTargetError(code: string | undefined): TargetErrorCopy {
 /** Picker choices never carry text other than the provider's own owner/site/project names. */
 export function ownerOptionLabel(owner: { login: string; kind: 'user' | 'org' }): string {
   return owner.kind === 'org' ? `${owner.login} (organization)` : `${owner.login} (you)`;
+}
+
+// ---------------------------------------------------------------------------
+// Jira site display and project creation (round 17, UC-S11, FR-092)
+// ---------------------------------------------------------------------------
+
+/** The Atlassian scope that lets the app create a Jira project (ERD 7.8). */
+export const JIRA_PROJECT_SCOPE = 'manage:jira-project';
+
+/** A connection made before the scope was requested lacks it and must reconnect once. */
+export function canCreateJiraProjects(scopes: readonly string[] | null | undefined): boolean {
+  return (scopes ?? []).includes(JIRA_PROJECT_SCOPE);
+}
+
+/** The Integrations card's hint for a usable Jira connection. */
+export function describeProjectCreationHint(scopes: readonly string[]): {
+  allowed: boolean;
+  text: string;
+} {
+  return canCreateJiraProjects(scopes)
+    ? { allowed: true, text: 'Can create projects' }
+    : { allowed: false, text: 'Reconnect to allow creating projects' };
+}
+
+/**
+ * The connected Jira site line. The URL becomes a link only when it is an https
+ * `*.atlassian.net` address (it comes from provider metadata, so it is never
+ * trusted to be a safe href); anything else is shown as plain text.
+ */
+export function describeJiraSite(
+  site: { name: string; url: string } | null | undefined,
+): { name: string; url: string; href: string | null } | null {
+  if (!site || (site.name === '' && site.url === '')) return null;
+  return { name: site.name, url: site.url, href: safeSiteHref(site.url) };
+}
+
+export function safeSiteHref(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') return null;
+    if (!parsed.hostname.endsWith('.atlassian.net') || parsed.hostname === '.atlassian.net') {
+      return null;
+    }
+    if (parsed.username !== '' || parsed.password !== '') return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+/** `<site url>/jira/projects`, or null when the site URL is not a safe Atlassian address. */
+export function jiraProjectsListHref(siteUrl: string | null | undefined): string | null {
+  const origin = safeSiteHref(siteUrl ?? '');
+  return origin ? `${origin}/jira/projects` : null;
+}
+
+export const JIRA_KEY_PATTERN = /^[A-Z][A-Z0-9]{1,9}$/;
+
+/** Suggests a Jira project key from a name: uppercase letters/digits, first a letter, 2-10 chars. */
+export function deriveProjectKey(name: string): string {
+  const words = name
+    .normalize('NFKD')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .toUpperCase()
+    .split(/\s+/)
+    .map((word) => word.replace(/[^A-Z0-9]/g, ''))
+    .filter(Boolean);
+  if (words.length === 0) return '';
+  // Initials read best for multi-word names; the words joined is the fallback when
+  // that is too short (or a single word).
+  const candidates =
+    words.length === 1 ? [words[0]!] : [words.map((word) => word[0]).join(''), words.join('')];
+  for (const candidate of candidates) {
+    const key = candidate.replace(/^[0-9]+/, '').slice(0, 10);
+    if (key.length >= 2) return key;
+  }
+  return '';
+}
+
+/** Client-side format check of a key; `existingKeys` are the site's already-listed projects. */
+export function validateProjectKeyInput(
+  key: string,
+  existingKeys: readonly string[],
+): string | null {
+  if (key === '') return 'Enter a project key.';
+  if (!JIRA_KEY_PATTERN.test(key)) {
+    return 'Use 2-10 uppercase letters or digits, starting with a letter.';
+  }
+  if (existingKeys.includes(key))
+    return 'That key is already used in this Jira site - choose another';
+  return null;
+}
+
+export type CreateProjectErrorKind = 'key_taken' | 'admin_required' | 'reconnect' | 'other';
+
+/** Maps the error codes of `POST /api/connections/jira/projects` to copy the form shows. */
+export function describeCreateProjectError(code: string | undefined): {
+  kind: CreateProjectErrorKind;
+  message: string;
+} {
+  switch (code) {
+    case 'PROJECT_KEY_TAKEN':
+      return {
+        kind: 'key_taken',
+        message: 'That key is already used in this Jira site - choose another',
+      };
+    case 'JIRA_ADMIN_REQUIRED':
+      return {
+        kind: 'admin_required',
+        message:
+          'Your Atlassian account is not a Jira administrator on this site. Ask an admin, or create the project in Jira and refresh',
+      };
+    case 'RECONNECT_REQUIRED':
+    case 'CONNECTION_REQUIRED':
+      return {
+        kind: 'reconnect',
+        message: 'Reconnect Jira to allow creating projects',
+      };
+    case 'TARGET_NOT_ACCESSIBLE':
+      return {
+        kind: 'other',
+        message: 'That Jira site is not available to your connected account.',
+      };
+    default:
+      return { kind: 'other', message: 'Could not create the project. Please try again.' };
+  }
 }
 
 // ---------------------------------------------------------------------------

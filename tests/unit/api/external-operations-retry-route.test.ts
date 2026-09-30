@@ -84,6 +84,8 @@ vi.mock('@/external/jira', () => ({
   JiraOperationConflictError: FakeJiraOperationConflictError,
   JiraTargetRequiredError: FakeJiraTargetRequiredError,
   JiraSiteNotAccessibleError: FakeJiraSiteError,
+  ProjectKeyTakenError: class ProjectKeyTakenError extends Error {},
+  JiraAdminRequiredError: class JiraAdminRequiredError extends Error {},
 }));
 
 vi.mock('@/external/stitch', () => ({

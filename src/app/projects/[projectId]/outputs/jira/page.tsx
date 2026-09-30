@@ -50,7 +50,11 @@ export default async function ProjectJiraOutputPage({ params }: ProjectJiraOutpu
         </p>
       </header>
 
-      <JiraExportPanel projectId={projectId} jiraTarget={toProjectDTO(project).targets.jira} />
+      <JiraExportPanel
+        projectId={projectId}
+        jiraTarget={toProjectDTO(project).targets.jira}
+        projectName={project.name}
+      />
     </main>
   );
 }

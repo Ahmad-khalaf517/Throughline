@@ -11,6 +11,9 @@ const {
   FakeOAuthFlowError,
   FakeJiraTargetRequiredError,
   FakeJiraSiteError,
+  FakeProjectKeyTakenError,
+  FakeJiraAdminRequiredError,
+  createProjectMock,
   beginOAuthMock,
   completeOAuthMock,
   listSitesMock,
@@ -32,12 +35,17 @@ const {
     readonly target = 'jira' as const;
   }
   class FakeJiraSiteError extends Error {}
+  class FakeProjectKeyTakenError extends Error {}
+  class FakeJiraAdminRequiredError extends Error {}
   return {
     FakeConnectionRequiredError,
     FakeReconnectRequiredError,
     FakeOAuthFlowError,
     FakeJiraTargetRequiredError,
     FakeJiraSiteError,
+    FakeProjectKeyTakenError,
+    FakeJiraAdminRequiredError,
+    createProjectMock: vi.fn(),
     beginOAuthMock: vi.fn(),
     completeOAuthMock: vi.fn(),
     listSitesMock: vi.fn(),
@@ -56,15 +64,21 @@ vi.mock('@/connections', () => ({
 vi.mock('@/external/jira', () => ({
   listSites: listSitesMock,
   listProjects: listProjectsMock,
+  createProject: createProjectMock,
   JiraTargetRequiredError: FakeJiraTargetRequiredError,
   JiraSiteNotAccessibleError: FakeJiraSiteError,
+  ProjectKeyTakenError: FakeProjectKeyTakenError,
+  JiraAdminRequiredError: FakeJiraAdminRequiredError,
 }));
 
 import { getVerifiedUser } from '@/auth';
 import { GET as startRoute } from '@/app/api/connections/jira/start/route';
 import { GET as callbackRoute } from '@/app/api/connections/jira/callback/route';
 import { GET as sitesRoute } from '@/app/api/connections/jira/sites/route';
-import { GET as projectsRoute } from '@/app/api/connections/jira/projects/route';
+import {
+  GET as projectsRoute,
+  POST as createProjectRoute,
+} from '@/app/api/connections/jira/projects/route';
 
 const mockedUser = vi.mocked(getVerifiedUser);
 const user = { id: 'user-1', email: 'a@b.com', displayName: null };
@@ -81,6 +95,7 @@ beforeEach(() => {
   completeOAuthMock.mockReset().mockResolvedValue({});
   listSitesMock.mockReset();
   listProjectsMock.mockReset();
+  createProjectMock.mockReset();
 });
 
 afterEach(() => {
@@ -262,5 +277,85 @@ describe('GET /api/connections/jira/projects', () => {
     listProjectsMock.mockRejectedValueOnce(new FakeReconnectRequiredError('lapsed'));
     const lapsed = await projectsRoute(get('/api/connections/jira/projects?cloudId=c1'));
     expect((await lapsed.json()).error.code).toBe('RECONNECT_REQUIRED');
+  });
+});
+
+describe('POST /api/connections/jira/projects', () => {
+  const body = { cloudId: 'c1', name: 'ShiftSwap', key: 'SHIFT', template: 'scrum' };
+
+  function post(payload: unknown): Request {
+    return new Request('http://localhost/api/connections/jira/projects', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: typeof payload === 'string' ? payload : JSON.stringify(payload),
+    });
+  }
+
+  it('returns 401 without a verified user and creates nothing', async () => {
+    mockedUser.mockResolvedValue(null);
+    expect((await createProjectRoute(post(body))).status).toBe(401);
+    expect(createProjectMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['not JSON', 'nope'],
+    ['no cloudId', { ...body, cloudId: '' }],
+    ['a blank name', { ...body, name: '   ' }],
+    ['a name over 80 characters', { ...body, name: 'x'.repeat(81) }],
+    ['a lowercase key', { ...body, key: 'shift' }],
+    ['a one-character key', { ...body, key: 'S' }],
+    ['an eleven-character key', { ...body, key: 'ABCDEFGHIJK' }],
+    ['a key starting with a digit', { ...body, key: '1ABC' }],
+    ['an unknown template', { ...body, template: 'waterfall' }],
+  ])('400 VALIDATION_ERROR for %s, creating nothing', async (_label, payload) => {
+    const response = await createProjectRoute(post(payload));
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe('VALIDATION_ERROR');
+    expect(createProjectMock).not.toHaveBeenCalled();
+  });
+
+  it('201 { project } with a user-only ctx and the trimmed input', async () => {
+    createProjectMock.mockResolvedValue({ id: '10001', key: 'SHIFT', name: 'ShiftSwap' });
+    const response = await createProjectRoute(post({ ...body, name: '  ShiftSwap  ' }));
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({
+      project: { id: '10001', key: 'SHIFT', name: 'ShiftSwap' },
+    });
+    expect(createProjectMock).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      { cloudId: 'c1', name: 'ShiftSwap', key: 'SHIFT', template: 'scrum' },
+    );
+  });
+
+  it('409 PROJECT_KEY_TAKEN and 403 JIRA_ADMIN_REQUIRED', async () => {
+    createProjectMock.mockRejectedValueOnce(new FakeProjectKeyTakenError('taken'));
+    const taken = await createProjectRoute(post(body));
+    expect(taken.status).toBe(409);
+    expect((await taken.json()).error.code).toBe('PROJECT_KEY_TAKEN');
+
+    createProjectMock.mockRejectedValueOnce(new FakeJiraAdminRequiredError('admin'));
+    const admin = await createProjectRoute(post(body));
+    expect(admin.status).toBe(403);
+    expect((await admin.json()).error.code).toBe('JIRA_ADMIN_REQUIRED');
+  });
+
+  it('422 TARGET_NOT_ACCESSIBLE; 409 CONNECTION_REQUIRED; 409 RECONNECT_REQUIRED with the missing_scope reason', async () => {
+    createProjectMock.mockRejectedValueOnce(new FakeJiraSiteError('not yours'));
+    expect((await createProjectRoute(post(body))).status).toBe(422);
+
+    createProjectMock.mockRejectedValueOnce(new FakeConnectionRequiredError('none'));
+    const missing = await createProjectRoute(post(body));
+    expect(missing.status).toBe(409);
+    expect((await missing.json()).error.code).toBe('CONNECTION_REQUIRED');
+
+    const scope = new FakeReconnectRequiredError('scope');
+    scope.reason = 'missing_scope';
+    createProjectMock.mockRejectedValueOnce(scope);
+    const lapsed = await createProjectRoute(post(body));
+    expect(lapsed.status).toBe(409);
+    expect((await lapsed.json()).error).toMatchObject({
+      code: 'RECONNECT_REQUIRED',
+      details: { provider: 'jira', reason: 'missing_scope' },
+    });
   });
 });

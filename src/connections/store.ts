@@ -31,6 +31,8 @@ export type ConnectionStatus = {
   displayName: string | null;
   scopes: string[];
   connectedAt: Date | null;
+  /** Jira only: the connected site (non-secret `provider_meta` siteName/siteUrl); null otherwise. */
+  site: { name: string; url: string } | null;
 };
 
 export type OperationConnectionStatus =
@@ -66,13 +68,26 @@ function needsRefresh(row: Row): boolean {
   );
 }
 
+function parseScopes(stored: string): string[] {
+  return stored === '' ? [] : stored.split(' ').filter(Boolean);
+}
+
+function siteOf(row: Row): ConnectionStatus['site'] {
+  if (row.provider !== 'jira') return null;
+  const meta = (row.providerMeta ?? {}) as Record<string, unknown>;
+  const name = typeof meta.siteName === 'string' ? meta.siteName : '';
+  const url = typeof meta.siteUrl === 'string' ? meta.siteUrl : '';
+  return name === '' && url === '' ? null : { name, url };
+}
+
 function toStatus(row: Row): ConnectionStatus {
   return {
     provider: row.provider as Provider,
     status: row.status as ConnectionStatus['status'],
     displayName: row.displayName,
-    scopes: row.scopes === '' ? [] : row.scopes.split(' '),
+    scopes: parseScopes(row.scopes),
     connectedAt: row.createdAt,
+    site: siteOf(row),
   };
 }
 
@@ -89,6 +104,7 @@ function toCredential(row: Row): Credential {
       key: key(),
     }),
     meta: row.providerMeta as Record<string, string>,
+    scopes: parseScopes(row.scopes),
   });
 }
 
@@ -403,7 +419,14 @@ export async function listConnections(userId: string): Promise<ConnectionStatus[
     const row = rows.find((r) => r.provider === provider);
     return row
       ? toStatus(row)
-      : { provider, status: 'none' as const, displayName: null, scopes: [], connectedAt: null };
+      : {
+          provider,
+          status: 'none' as const,
+          displayName: null,
+          scopes: [],
+          connectedAt: null,
+          site: null,
+        };
   });
 }
 

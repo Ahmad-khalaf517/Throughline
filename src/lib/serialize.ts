@@ -359,7 +359,12 @@ export interface ExternalOperationDTO {
   // Round 14 (FR-090): the recorded connection cannot be used; the operation itself is unchanged.
   needsReconnect: {
     provider: 'github' | 'jira' | 'stitch';
-    reason: 'needs_reauth' | 'revoked' | 'different_account' | 'legacy_credential_missing';
+    reason:
+      | 'needs_reauth'
+      | 'revoked'
+      | 'different_account'
+      | 'legacy_credential_missing'
+      | 'missing_scope';
   } | null;
   createdAt: string;
   updatedAt: string;
@@ -372,6 +377,9 @@ export interface ConnectionDTO {
   displayName: string | null;
   scopes: string[];
   connectedAt: string | null;
+  // Round 17 (FR-092): Jira only - the connected site (non-secret provider_meta
+  // siteName/siteUrl); null for other providers and when unknown.
+  site: { name: string; url: string } | null;
 }
 
 /** Structural input: `connections.ConnectionStatus` (lib may not import layer 3b). */
@@ -381,6 +389,7 @@ export interface ConnectionInput {
   displayName: string | null;
   scopes: string[];
   connectedAt: Date | null;
+  site?: { name: string; url: string } | null;
 }
 
 export function toConnectionDTO(connection: ConnectionInput): ConnectionDTO {
@@ -390,6 +399,7 @@ export function toConnectionDTO(connection: ConnectionInput): ConnectionDTO {
     displayName: connection.displayName,
     scopes: connection.scopes,
     connectedAt: connection.connectedAt ? connection.connectedAt.toISOString() : null,
+    site: connection.site ? { name: connection.site.name, url: connection.site.url } : null,
   };
 }
 

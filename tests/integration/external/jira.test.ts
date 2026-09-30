@@ -921,4 +921,168 @@ describe('jira (E4-S3 / SCRUM-52)', () => {
       expect(await jiraOperationRows(projectId)).toHaveLength(1);
     });
   });
+
+  // ERD 7.8 / T54 (UC-S11, FR-092): creating a Jira project is a provider SETUP
+  // action - it writes no external_operation, no external_ref and no lineage
+  // row (no table at all), needs manage:jira-project in the stored scopes, and
+  // maps Jira's answers to typed errors.
+  describe('T54 - create a Jira project (setup action, no rows written)', () => {
+    const FULL_SCOPES = [
+      'read:jira-work',
+      'write:jira-work',
+      'manage:jira-project',
+      'offline_access',
+      'read:me',
+    ];
+
+    async function connectWithScopes(userId: string, scopes: string[]) {
+      await connections.saveConnection({
+        userId,
+        provider: 'jira',
+        externalAccountId: `atl-${userId}`,
+        displayName: 'Test User',
+        accessToken: TEST_ACCESS_TOKEN,
+        refreshToken: 'atl_thrln_test_refresh_token',
+        expiresAt: new Date(Date.now() + 3_600_000),
+        scopes,
+        providerMeta: { cloudId: CLOUD_ID, siteUrl: FAKE_SITE_URL, siteName: 'Fake' },
+      });
+    }
+
+    async function tableCounts(): Promise<Record<string, number>> {
+      const tables = await sql<{ tablename: string }[]>`
+        SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename
+      `;
+      const counts: Record<string, number> = {};
+      for (const { tablename } of tables) {
+        const rows = await sql.unsafe<{ n: number }[]>(
+          `SELECT count(*)::int AS n FROM "${tablename}"`,
+        );
+        counts[tablename] = rows[0]!.n;
+      }
+      return counts;
+    }
+
+    // A fake Atlassian: accessible-resources, key validation and project creation.
+    function createFakeAtlassian(options: { createStatus?: number; takenKeys?: string[] } = {}) {
+      const requests: { method: string; path: string }[] = [];
+      const created: { key: string; body: Record<string, unknown> }[] = [];
+      const taken = new Set(options.takenKeys ?? []);
+      async function fetchImpl(url: string | URL, init?: RequestInit): Promise<Response> {
+        const parsed = new URL(url);
+        const method = (init?.method ?? 'GET').toUpperCase();
+        requests.push({ method, path: parsed.pathname });
+        if (parsed.host !== 'api.atlassian.com') {
+          throw new Error(`fake Atlassian: unexpected host ${parsed.host}`);
+        }
+        if (new Headers(init?.headers).get('authorization') !== `Bearer ${TEST_ACCESS_TOKEN}`) {
+          return jsonResponse(401, { message: 'Unauthorized' });
+        }
+        if (method === 'GET' && parsed.pathname === '/oauth/token/accessible-resources') {
+          return jsonResponse(200, [{ id: CLOUD_ID, url: FAKE_SITE_URL, name: 'Fake' }]);
+        }
+        const base = `/ex/jira/${CLOUD_ID}/rest/api/3`;
+        if (method === 'GET' && parsed.pathname === `${base}/projectvalidate/validProjectKey`) {
+          const key = parsed.searchParams.get('key') ?? '';
+          return jsonResponse(
+            200,
+            taken.has(key)
+              ? { errorMessages: [], errors: { projectKey: 'Project X uses this project key.' } }
+              : { errorMessages: [], errors: {} },
+          );
+        }
+        if (method === 'POST' && parsed.pathname === `${base}/project`) {
+          if (options.createStatus && options.createStatus !== 201) {
+            return jsonResponse(options.createStatus, { errorMessages: ['nope'] });
+          }
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          created.push({ key: String(body.key), body });
+          return jsonResponse(201, {
+            id: String(nextFakeJiraNumericId++),
+            key: body.key,
+            self: `${FAKE_SITE_URL}/rest/api/3/project/${String(body.key)}`,
+          });
+        }
+        throw new Error(`fake Atlassian: unhandled ${method} ${parsed.pathname}`);
+      }
+      return { fetch: fetchImpl, requests, created };
+    }
+
+    const INPUT = {
+      cloudId: CLOUD_ID,
+      name: 'ShiftSwap',
+      key: 'SHIFT',
+      template: 'kanban',
+    } as const;
+
+    it('creates the project as the connected account and writes no row in any table', async () => {
+      const { userId } = await fx.createProjectWithOwner(sql, { name: 'jira T54 create' });
+      await connectWithScopes(userId, FULL_SCOPES);
+      const fake = createFakeAtlassian();
+
+      const before = await tableCounts();
+      const project = await withFakeFetch(fake.fetch, () => jira.createProject({ userId }, INPUT));
+      const after = await tableCounts();
+
+      expect(project).toMatchObject({ key: 'SHIFT', name: 'ShiftSwap' });
+      expect(fake.created).toHaveLength(1);
+      expect(fake.created[0]!.body).toEqual({
+        key: 'SHIFT',
+        name: 'ShiftSwap',
+        projectTypeKey: 'software',
+        projectTemplateKey: 'com.pyxis.greenhopper.jira:gh-simplified-agility-kanban',
+        leadAccountId: `atl-${userId}`,
+        assigneeType: 'PROJECT_LEAD',
+      });
+      // Nothing was written anywhere: no external_operation, no external_ref, no
+      // lineage row - every table has exactly the rows it had before.
+      expect(after).toEqual(before);
+    });
+
+    it('a connection made before manage:jira-project is reconnect required (missing_scope) with no network call', async () => {
+      const { userId } = await fx.createProjectWithOwner(sql, { name: 'jira T54 scope' });
+      await connectWithScopes(userId, ['read:jira-work', 'write:jira-work', 'offline_access']);
+      const fake = createFakeAtlassian();
+
+      const failure = await withFakeFetch(fake.fetch, () =>
+        jira.createProject({ userId }, INPUT),
+      ).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(connections.ReconnectRequiredError);
+      expect(failure).toMatchObject({ reason: 'missing_scope' });
+      expect(fake.requests).toHaveLength(0);
+      // The row is untouched: missing_scope does not lapse the connection.
+      const status = (await connections.listConnections(userId)).find((c) => c.provider === 'jira');
+      expect(status?.status).toBe('active');
+    });
+
+    it('a taken key is ProjectKeyTakenError and nothing is created; a 403 is JiraAdminRequiredError', async () => {
+      const { userId } = await fx.createProjectWithOwner(sql, { name: 'jira T54 errors' });
+      await connectWithScopes(userId, FULL_SCOPES);
+
+      const takenFake = createFakeAtlassian({ takenKeys: ['SHIFT'] });
+      await expect(
+        withFakeFetch(takenFake.fetch, () => jira.createProject({ userId }, INPUT)),
+      ).rejects.toBeInstanceOf(jira.ProjectKeyTakenError);
+      expect(takenFake.created).toHaveLength(0);
+
+      const deniedFake = createFakeAtlassian({ createStatus: 403 });
+      await expect(
+        withFakeFetch(deniedFake.fetch, () => jira.createProject({ userId }, INPUT)),
+      ).rejects.toBeInstanceOf(jira.JiraAdminRequiredError);
+    });
+
+    it('a site the connection cannot reach is JiraSiteNotAccessibleError before any create call', async () => {
+      const { userId } = await fx.createProjectWithOwner(sql, { name: 'jira T54 site' });
+      await connectWithScopes(userId, FULL_SCOPES);
+      const fake = createFakeAtlassian();
+
+      await expect(
+        withFakeFetch(fake.fetch, () =>
+          jira.createProject({ userId }, { ...INPUT, cloudId: 'cloud-foreign' }),
+        ),
+      ).rejects.toBeInstanceOf(jira.JiraSiteNotAccessibleError);
+      expect(fake.requests.some((r) => r.method === 'POST')).toBe(false);
+    });
+  });
 });

@@ -32,6 +32,8 @@ vi.mock('@/external/jira', () => ({
   BacklogVersionNotApprovedError: FakeBacklogVersionNotApprovedError,
   JiraTargetRequiredError: FakeJiraTargetRequiredError,
   JiraSiteNotAccessibleError: FakeJiraSiteError,
+  ProjectKeyTakenError: class ProjectKeyTakenError extends Error {},
+  JiraAdminRequiredError: class JiraAdminRequiredError extends Error {},
 }));
 vi.mock('@/connections', () => ({
   ConnectionRequiredError: class extends Error {},

@@ -68,6 +68,13 @@ import {
 import { getWarnings, getExternalDrift, type ImpactRow } from '@/lineage/impact';
 import { getBacklogVersionMembers, type BacklogVersionMember } from '@/artifact-types/backlog';
 import { buildIssueDescription, buildIssueSummary } from './issue-content';
+import {
+  JIRA_PROJECT_TEMPLATE_KEYS,
+  JIRA_PROJECT_TYPE_KEY,
+  type JiraProjectTemplate,
+} from './project-templates';
+
+export type { JiraProjectTemplate } from './project-templates';
 
 // ---------------------------------------------------------------------------
 // Module Boundaries 4.6 documents `previewExport`'s `skipped: PreviewItem[]`
@@ -157,6 +164,31 @@ export class JiraSiteNotAccessibleError extends Error {
   constructor() {
     super('That Jira site is not available to your connected Atlassian account.');
     this.name = 'JiraSiteNotAccessibleError';
+  }
+}
+
+/**
+ * `createProject` (round 17, FR-092): the key already exists in the site or is not
+ * a valid key; nothing was created. -> API 409 `PROJECT_KEY_TAKEN`.
+ */
+export class ProjectKeyTakenError extends Error {
+  constructor() {
+    super('That Jira project key is already used in this site or is not valid.');
+    this.name = 'ProjectKeyTakenError';
+  }
+}
+
+/**
+ * `createProject` (round 17, FR-092): Jira refused with 403 - the connected
+ * account lacks the Administer Jira global permission. -> API 403 `JIRA_ADMIN_REQUIRED`.
+ */
+export class JiraAdminRequiredError extends Error {
+  constructor() {
+    super(
+      "You need the 'Administer Jira' permission on this site to create a project. " +
+        'Ask a Jira admin, or create the project in Jira and refresh the list.',
+    );
+    this.name = 'JiraAdminRequiredError';
   }
 }
 
@@ -1123,6 +1155,146 @@ export async function checkProjectAccessible(
     }
     throw error;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Round 17 (UC-S11, FR-092, ERD 7.8): creating a Jira project. A provider SETUP
+// action, not an external write of an artifact output: it goes outside the write
+// protocol (no `runOperation`, no `external_operation`/`external_ref`, no lock,
+// no lineage) and is idempotent by Jira's own key uniqueness. Never called under
+// `withProjectLock`.
+// ---------------------------------------------------------------------------
+
+const MANAGE_PROJECT_SCOPE = 'manage:jira-project';
+
+/** The connection's credential, or `ReconnectRequiredError('missing_scope')` before any Atlassian call. */
+async function projectAdminCredential(ctx: Pick<JiraCtx, 'userId'>): Promise<Credential> {
+  const credential = await getCredential(ctx.userId, 'jira');
+  if (!credential.scopes.includes(MANAGE_PROJECT_SCOPE)) {
+    throw new ReconnectRequiredError('jira', 'missing_scope', credential.connectionId);
+  }
+  return credential;
+}
+
+async function requireAccessibleSite(credential: Credential, cloudId: string): Promise<void> {
+  const sites = await fetchAccessibleResources(credential);
+  if (!sites.some((site) => site.id === cloudId)) throw new JiraSiteNotAccessibleError();
+}
+
+interface JiraKeyValidationResponse {
+  errorMessages?: unknown;
+  errors?: unknown;
+}
+
+/**
+ * `GET /rest/api/3/projectvalidate/validProjectKey?key=` (path from ERD 7.8, not
+ * verified live). Jira answers 200 with an error collection: empty when the key
+ * is free and valid, otherwise a message. The message text is only ever
+ * classified against a small whitelist and never stored or thrown. Any failure
+ * to validate (other than a 401, which reconnects) is "unsure": the create call's
+ * own 400 stays the authority.
+ */
+async function checkKeyWith(
+  credential: Credential,
+  cloudId: string,
+  key: string,
+): Promise<{ valid: boolean; reason?: 'taken' | 'invalid' }> {
+  let response: JiraKeyValidationResponse;
+  try {
+    response = await jiraFetch<JiraKeyValidationResponse>(
+      { kind: 'user', credential, target: { cloudId, projectKey: '' } },
+      `/rest/api/3/projectvalidate/validProjectKey?key=${encodeURIComponent(key)}`,
+      { method: 'GET' },
+    );
+  } catch (error) {
+    if (error instanceof JiraHttpError) return { valid: true };
+    throw error;
+  }
+  const messages: string[] = [];
+  if (Array.isArray(response.errorMessages)) {
+    for (const message of response.errorMessages) {
+      if (typeof message === 'string') messages.push(message);
+    }
+  }
+  if (response.errors && typeof response.errors === 'object') {
+    for (const message of Object.values(response.errors as Record<string, unknown>)) {
+      if (typeof message === 'string') messages.push(message);
+    }
+  }
+  if (messages.length === 0) return { valid: true };
+  const text = messages.join(' ').toLowerCase();
+  const taken = text.includes('uses this project key') || text.includes('already');
+  return { valid: false, reason: taken ? 'taken' : 'invalid' };
+}
+
+/**
+ * Is `key` free and well-formed on `cloudId`? Uses the caller's own connection;
+ * `JiraSiteNotAccessibleError` when the site is not one of theirs.
+ */
+export async function validateProjectKey(
+  ctx: Pick<JiraCtx, 'userId'>,
+  cloudId: string,
+  key: string,
+): Promise<{ valid: boolean; reason?: 'taken' | 'invalid' }> {
+  const credential = await getCredential(ctx.userId, 'jira');
+  await requireAccessibleSite(credential, cloudId);
+  return checkKeyWith(credential, cloudId, key);
+}
+
+interface JiraCreateProjectResponse {
+  id?: unknown;
+  key?: unknown;
+}
+
+/**
+ * Creates a project on `cloudId` with the caller's own credential; the caller
+ * becomes the project lead. Order: connection (`ConnectionRequiredError` /
+ * `ReconnectRequiredError` propagate) -> `manage:jira-project` in the stored
+ * scopes (else `ReconnectRequiredError('missing_scope')`, no Atlassian call) ->
+ * the site is one of the caller's -> the key is free (`ProjectKeyTakenError`) ->
+ * the create call. 400/409 -> `ProjectKeyTakenError`; 403 ->
+ * `JiraAdminRequiredError`; 401 -> connection marked `needs_reauth` +
+ * `ReconnectRequiredError`. Provider response text never enters an error.
+ */
+export async function createProject(
+  ctx: Pick<JiraCtx, 'userId'>,
+  input: { cloudId: string; name: string; key: string; template: JiraProjectTemplate },
+): Promise<{ id: string; key: string; name: string }> {
+  const credential = await projectAdminCredential(ctx);
+  await requireAccessibleSite(credential, input.cloudId);
+  const validation = await checkKeyWith(credential, input.cloudId, input.key);
+  if (!validation.valid) throw new ProjectKeyTakenError();
+
+  let response: JiraCreateProjectResponse;
+  try {
+    response = await jiraFetch<JiraCreateProjectResponse>(
+      { kind: 'user', credential, target: { cloudId: input.cloudId, projectKey: '' } },
+      '/rest/api/3/project',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          key: input.key,
+          name: input.name,
+          projectTypeKey: JIRA_PROJECT_TYPE_KEY,
+          projectTemplateKey: JIRA_PROJECT_TEMPLATE_KEYS[input.template],
+          leadAccountId: credential.accountId,
+          assigneeType: 'PROJECT_LEAD',
+        }),
+      },
+    );
+  } catch (error) {
+    if (error instanceof JiraHttpError) {
+      if (error.status === 400 || error.status === 409) throw new ProjectKeyTakenError();
+      if (error.status === 403) throw new JiraAdminRequiredError();
+    }
+    throw error;
+  }
+
+  const id = typeof response.id === 'number' ? String(response.id) : response.id;
+  if (typeof id !== 'string' || id === '') {
+    throw new Error('Jira project creation returned an unusable response.');
+  }
+  return { id, key: typeof response.key === 'string' ? response.key : input.key, name: input.name };
 }
 
 // ---------------------------------------------------------------------------

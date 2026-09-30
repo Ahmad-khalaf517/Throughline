@@ -21,6 +21,15 @@ export const jiraProjectsQuerySchema = z.object({
   cloudId: z.string().trim().min(1, 'cloudId is required'),
 });
 
+// `POST /api/connections/jira/projects` (API Contracts 10A, ERD 7.8): the key is
+// uppercase letters and digits, 2-10 characters, starting with a letter.
+export const createJiraProjectSchema = z.object({
+  cloudId: z.string().trim().min(1, 'cloudId is required'),
+  name: z.string().trim().min(1, 'name is required').max(80),
+  key: z.string().regex(/^[A-Z][A-Z0-9]{1,9}$/, 'key must be 2-10 uppercase letters or digits'),
+  template: z.enum(['scrum', 'kanban']),
+});
+
 // Only these three provider segments exist (API Contracts 10A); anything else is 404.
 export const providerParamSchema = z.enum(['github', 'jira', 'stitch']);
 

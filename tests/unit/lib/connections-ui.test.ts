@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   availableActions,
+  canCreateJiraProjects,
+  deriveProjectKey,
+  describeCreateProjectError,
+  describeJiraSite,
+  describeProjectCreationHint,
+  jiraProjectsListHref,
+  validateProjectKeyInput,
   connectionAfterWriteError,
   connectStartHref,
   describeConnectionSteps,
@@ -17,7 +24,7 @@ import {
 import type { ConnectionDTO } from '@/lib/serialize';
 
 function dto(status: ConnectionDTO['status'], displayName: string | null = 'ada'): ConnectionDTO {
-  return { provider: 'github', status, displayName, scopes: [], connectedAt: null };
+  return { provider: 'github', status, displayName, scopes: [], connectedAt: null, site: null };
 }
 
 describe('describeConnectionStatus / availableActions', () => {
@@ -273,5 +280,90 @@ describe('describeTargetError', () => {
     expect(describeTargetError('TARGET_NOT_ACCESSIBLE').kind).toBe('not_accessible');
     expect(describeTargetError('CONNECTION_REQUIRED').kind).toBe('connection');
     expect(describeTargetError(undefined).kind).toBe('other');
+  });
+});
+
+describe('Jira site display and project creation (FR-092)', () => {
+  it('links the site only when it is an https *.atlassian.net address', () => {
+    expect(describeJiraSite({ name: 'Acme', url: 'https://acme.atlassian.net' })).toEqual({
+      name: 'Acme',
+      url: 'https://acme.atlassian.net',
+      href: 'https://acme.atlassian.net',
+    });
+    for (const url of [
+      'http://acme.atlassian.net',
+      'https://evil.example',
+      'https://atlassian.net.evil.example',
+      'javascript:alert(1)',
+      'https://user:pw@acme.atlassian.net',
+      'not a url',
+      '',
+    ]) {
+      expect(describeJiraSite({ name: 'Acme', url })?.href).toBeNull();
+    }
+    expect(describeJiraSite(null)).toBeNull();
+    expect(describeJiraSite({ name: '', url: '' })).toBeNull();
+  });
+
+  it('builds the Open Jira link from a safe site URL only', () => {
+    expect(jiraProjectsListHref('https://acme.atlassian.net/')).toBe(
+      'https://acme.atlassian.net/jira/projects',
+    );
+    expect(jiraProjectsListHref('https://evil.example')).toBeNull();
+    expect(jiraProjectsListHref(null)).toBeNull();
+  });
+
+  it('reads project-creation permission from the granted scopes', () => {
+    expect(canCreateJiraProjects(['read:jira-work', 'manage:jira-project'])).toBe(true);
+    expect(canCreateJiraProjects(['read:jira-work'])).toBe(false);
+    expect(canCreateJiraProjects(undefined)).toBe(false);
+    expect(describeProjectCreationHint(['manage:jira-project'])).toEqual({
+      allowed: true,
+      text: 'Can create projects',
+    });
+    expect(describeProjectCreationHint([])).toEqual({
+      allowed: false,
+      text: 'Reconnect to allow creating projects',
+    });
+  });
+
+  it('derives a valid key from a name', () => {
+    expect(deriveProjectKey('ShiftSwap')).toBe('SHIFTSWAP');
+    expect(deriveProjectKey('Shift Swap Verify')).toBe('SSV');
+    expect(deriveProjectKey('Averyveryverylongsinglewordname')).toHaveLength(10);
+    expect(deriveProjectKey('2024 Plan')).toBe('PLAN');
+    expect(deriveProjectKey('!!!')).toBe('');
+    for (const name of ['ShiftSwap', 'Shift Swap Verify', 'Order Desk']) {
+      expect(validateProjectKeyInput(deriveProjectKey(name), [])).toBeNull();
+    }
+  });
+
+  it('checks the key format and collisions with the listed projects', () => {
+    expect(validateProjectKeyInput('SHIFT', ['OTHER'])).toBeNull();
+    expect(validateProjectKeyInput('', [])).toMatch(/Enter/);
+    for (const key of ['S', 'shift', '1ABC', 'ABCDEFGHIJK', 'AB-C']) {
+      expect(validateProjectKeyInput(key, [])).toMatch(/2-10 uppercase/);
+    }
+    expect(validateProjectKeyInput('SHIFT', ['SHIFT'])).toBe(
+      'That key is already used in this Jira site - choose another',
+    );
+  });
+
+  it('maps the create-project error codes to fixed copy', () => {
+    expect(describeCreateProjectError('PROJECT_KEY_TAKEN').kind).toBe('key_taken');
+    expect(describeCreateProjectError('JIRA_ADMIN_REQUIRED')).toMatchObject({
+      kind: 'admin_required',
+      message: expect.stringContaining('not a Jira administrator'),
+    });
+    expect(describeCreateProjectError('RECONNECT_REQUIRED').kind).toBe('reconnect');
+    expect(describeCreateProjectError('anything else').kind).toBe('other');
+  });
+
+  it('describes a missing_scope reconnect for the badge', () => {
+    expect(describeNeedsReconnect({ provider: 'jira', reason: 'missing_scope' })).toEqual({
+      label: 'Reconnect required',
+      reason: 'needs permission to create projects - reconnect',
+      provider: 'jira',
+    });
   });
 });

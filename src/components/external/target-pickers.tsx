@@ -5,11 +5,14 @@ import { useRouter } from 'next/navigation';
 import { CircleAlert, CircleCheck } from 'lucide-react';
 import { FieldShell } from '@/components/auth/field-shell';
 import {
+  canCreateJiraProjects,
   describeTargetError,
   ownerOptionLabel,
   type PreviewConnection,
   type TargetErrorCopy,
 } from '@/lib/connections-ui';
+import type { ConnectionDTO } from '@/lib/serialize';
+import { CreateJiraProject, type CreatedJiraProject } from './create-jira-project';
 
 export interface ProjectTargets {
   githubOwner: string | null;
@@ -249,7 +252,13 @@ interface JiraTargetPickerProps {
   projectId: string;
   current: { cloudId: string; projectKey: string } | null;
   connection: PreviewConnection | null;
+  /** The Throughline project's name: the prefill of the "create a Jira project" form. */
+  projectName: string;
   onSaved: (targets: ProjectTargets) => void;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -257,16 +266,22 @@ interface JiraTargetPickerProps {
  * one Save sends both. Sites come from `GET /api/connections/jira/sites`,
  * projects from `.../jira/projects?cloudId=`. `TARGET_NOT_ACCESSIBLE` is shown
  * inline; changing the target only affects new exports (existing issues are
- * never moved).
+ * never moved). FR-092: "Create a new Jira project" creates one on the chosen
+ * site and saves it as the target in the same step.
  */
 export function JiraTargetPicker({
   projectId,
   current,
   connection,
+  projectName,
   onSaved,
 }: JiraTargetPickerProps) {
   const router = useRouter();
   const usable = connection?.status === 'active';
+  // Whether the connection was granted `manage:jira-project`; null until read.
+  const [canCreate, setCanCreate] = useState<boolean | null>(null);
+  const [projectsRefresh, setProjectsRefresh] = useState(0);
+  const createdRef = useRef<{ cloudId: string; project: CreatedJiraProject } | null>(null);
   const [sites, setSites] = useState<{ cloudId: string; url: string; name: string }[] | null>(null);
   const [projects, setProjects] = useState<{ key: string; name: string }[] | null>(null);
   const [cloudId, setCloudId] = useState(current?.cloudId ?? '');
@@ -308,6 +323,27 @@ export function JiraTargetPicker({
     };
   }, [usable, router]);
 
+  // The connection's granted scopes decide whether project creation is offered.
+  useEffect(() => {
+    if (!usable) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch('/api/connections');
+        if (!response.ok) throw new Error('bad status');
+        const body = (await response.json()) as { connections: ConnectionDTO[] };
+        const jira = body.connections.find((entry) => entry.provider === 'jira');
+        if (!cancelled) setCanCreate(canCreateJiraProjects(jira?.scopes));
+      } catch {
+        // Unknown: offer the form; the route answers RECONNECT_REQUIRED itself if it is not allowed.
+        if (!cancelled) setCanCreate(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [usable]);
+
   useEffect(() => {
     if (!usable || !cloudId) return;
     let cancelled = false;
@@ -329,10 +365,17 @@ export function JiraTargetPicker({
         }
         const body = (await response.json()) as { projects: { key: string; name: string }[] };
         if (!cancelled) {
-          setProjects(body.projects);
+          // A project just created here can lag in Jira's listing: keep it in the list.
+          const created = createdRef.current;
+          const listed =
+            created &&
+            created.cloudId === cloudId &&
+            !body.projects.some((project) => project.key === created.project.key)
+              ? [...body.projects, { key: created.project.key, name: created.project.name }]
+              : body.projects;
+          setProjects(listed);
           // Exactly one project on the site: pre-select it. Saving stays explicit.
-          if (body.projects.length === 1)
-            setProjectKey((chosen) => chosen || body.projects[0]!.key);
+          if (listed.length === 1) setProjectKey((chosen) => chosen || listed[0]!.key);
         }
       } catch {
         if (!cancelled) {
@@ -344,7 +387,42 @@ export function JiraTargetPicker({
     return () => {
       cancelled = true;
     };
-  }, [usable, cloudId, router]);
+  }, [usable, cloudId, router, projectsRefresh]);
+
+  /**
+   * A project was just created: list it, select it and save it as the target.
+   * Jira can lag between creating a project and answering for it, so a
+   * `TARGET_NOT_ACCESSIBLE` from the save is retried once after a short wait.
+   */
+  async function handleProjectCreated(project: CreatedJiraProject): Promise<string | null> {
+    createdRef.current = { cloudId, project };
+    setProjects((list) =>
+      list && !list.some((entry) => entry.key === project.key)
+        ? [...list, { key: project.key, name: project.name }]
+        : list,
+    );
+    setProjectKey(project.key);
+    setProjectsRefresh((count) => count + 1);
+    setError(null);
+    setJustSaved(false);
+
+    let result = await saveTargets(projectId, { jira: { cloudId, projectKey: project.key } });
+    if (!result.ok && result.error.kind === 'not_accessible') {
+      await sleep(1500);
+      result = await saveTargets(projectId, { jira: { cloudId, projectKey: project.key } });
+    }
+    if (!result.ok) {
+      if (result.unauthenticated) {
+        router.push('/sign-in');
+        return null;
+      }
+      return result.error.message;
+    }
+    setSaved(result.targets.jira);
+    setJustSaved(true);
+    onSaved(result.targets);
+    return null;
+  }
 
   async function handleSave() {
     if (!cloudId || !projectKey || pending) return;
@@ -368,6 +446,10 @@ export function JiraTargetPicker({
 
   const unchanged = saved?.cloudId === cloudId && saved?.projectKey === projectKey;
   const projectsLoading = usable && cloudId !== '' && projects === null;
+  const savedProjectName =
+    saved && saved.cloudId === cloudId
+      ? projects?.find((project) => project.key === saved.projectKey)?.name
+      : undefined;
 
   return (
     <div className={CARD_CLASSNAME}>
@@ -442,6 +524,28 @@ export function JiraTargetPicker({
           </button>
         </div>
       </FieldShell>
+      {saved && (
+        <p className="text-on-surface text-sm">
+          Current target:{' '}
+          <strong className="font-medium">
+            <span className="font-mono-code">{saved.projectKey}</span>
+            {savedProjectName ? ` - ${savedProjectName}` : ''}
+          </strong>
+        </p>
+      )}
+      {usable && (
+        <CreateJiraProject
+          key={cloudId}
+          cloudId={cloudId}
+          siteUrl={sites?.find((site) => site.cloudId === cloudId)?.url ?? null}
+          existingKeys={projects?.map((project) => project.key) ?? []}
+          defaultName={projectName}
+          canCreate={canCreate}
+          returnTo={`/projects/${projectId}/outputs/jira`}
+          onCreated={handleProjectCreated}
+          onRefreshList={() => setProjectsRefresh((count) => count + 1)}
+        />
+      )}
       {!usable && (
         <p className="text-on-surface-variant text-xs">
           Sites and projects are listed once your Jira connection is active.

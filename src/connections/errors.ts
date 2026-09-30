@@ -20,7 +20,8 @@ export type ReconnectReason =
   | 'revoked'
   | 'refresh_rejected'
   | 'account_mismatch'
-  | 'legacy_credential_missing';
+  | 'legacy_credential_missing'
+  | 'missing_scope';
 
 /**
  * The connection exists but cannot be used until the user reconnects
