@@ -126,6 +126,7 @@ export async function getUpstreamDependencies(
     upstreamLogicalItemId: string | null;
     upstreamItemType: string | null;
     upstreamDisplayKey: string | null;
+    upstreamRevisionNumber: number | null;
   }[]
 > {
   const uniqueIds = [...new Set(downstreamItemVersionIds)];
@@ -139,6 +140,7 @@ export async function getUpstreamDependencies(
       upstreamLogicalItemId: schema.logicalItem.id,
       upstreamItemType: schema.logicalItem.itemType,
       upstreamDisplayKey: schema.logicalItem.displayKey,
+      upstreamRevisionNumber: schema.itemVersion.revisionNumber,
     })
     .from(schema.semanticDependency)
     .leftJoin(

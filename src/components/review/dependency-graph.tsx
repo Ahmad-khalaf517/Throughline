@@ -20,15 +20,13 @@ interface DependencyGraphProps {
  * presentational component like the TR example itself: a vertical chain of
  * boxes connected by arrows, each labeled with a status.
  *
- * Renders two chains, stacked vertically (this story's scoping call - TR
- * section 27's own example spans Requirements->Architecture->Backlog->Jira,
- * but only `requirements` has fixture data today; the other artifact types
- * are separate, later tickets):
+ * Renders two kinds of chains, stacked vertically (this story's scoping call - TR
+ * section 27's own example spans Requirements->Architecture->Backlog->Jira):
  *
  * 1. A version-level chain: this draft and the approved version it was
  *    regenerated from (`baseApprovedVersionId`).
- * 2. An item-level chain: the *same* `ImpactRowDTO[]` the warning panel
- *    reads (`getFixtureImpactWarnings`), merged into one path - TR section
+ * 2. Item-level paths: the *same* `ImpactRowDTO[]` the warning panel
+ *    reads, grouped by root with every path retained - TR section
  *    27: "must use the same dependency data and traversal rules as the
  *    warning engine... must not contain an independent implementation of
  *    staleness logic."
@@ -40,8 +38,7 @@ interface DependencyGraphProps {
  * since a screen reader never sees the SVG's visual geometry.
  */
 export function DependencyGraph({ version, warnings }: DependencyGraphProps) {
-  const chain = buildDependencyChain(warnings);
-  const caption = buildCaption(version, chain);
+  const groups = groupWarningPaths(warnings);
 
   return (
     <div className="flex flex-col gap-6">
@@ -56,21 +53,52 @@ export function DependencyGraph({ version, warnings }: DependencyGraphProps) {
 
       <section className="border-surface-dim bg-surface-container-lowest rounded-xl border p-6">
         <h2 className="text-on-surface-variant text-xs font-semibold tracking-wide uppercase">
-          Dependency chain
+          Dependency paths
         </h2>
-        <div className="mt-4">
-          {chain.length === 0 ? (
-            <p className="text-on-surface-variant text-sm">No dependency data available.</p>
-          ) : (
-            <ItemChainDiagram chain={chain} />
-          )}
-        </div>
+        {groups.length === 0 ? (
+          <p className="text-on-surface-variant mt-4 text-sm">
+            No impact found. Current items have no dependency warnings.
+          </p>
+        ) : (
+          <div className="mt-4 flex flex-col gap-6">
+            {groups.map((group, groupIndex) => (
+              <section
+                key={group.rootItemVersionId}
+                aria-label={`Impact from ${group.rootDisplayKey}`}
+              >
+                <h3 className="text-on-surface text-sm font-semibold">
+                  Impact from <span className="font-mono-code">{group.rootDisplayKey}</span>
+                </h3>
+                <ol className="mt-3 flex flex-col gap-4">
+                  {group.rows.map((row, rowIndex) => (
+                    <li
+                      key={`${row.subjectKind}:${row.subjectId}`}
+                      className="border-outline-variant rounded-lg border p-4"
+                    >
+                      <p className="text-on-surface-variant text-xs font-medium">
+                        {row.depth === 0 ? 'Direct impact' : 'Transitive impact'} ·{' '}
+                        {row.acknowledged ? 'Acknowledged' : 'Needs review'}
+                        {row.subjectKind === 'external_ref' ? ' · External reference' : ''}
+                      </p>
+                      <ItemChainDiagram
+                        chain={buildPathChain(row)}
+                        markerId={`dependency-graph-item-arrow-${groupIndex}-${rowIndex}`}
+                      />
+                      <p className="text-on-surface mt-2 text-sm">{row.path.join(' → ')}</p>
+                      <p className="text-on-surface-variant font-mono-code mt-1 text-xs">
+                        {row.subjectKind === 'external_ref' ? 'External ref' : 'Item version'}:{' '}
+                        {row.subjectId}
+                      </p>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            ))}
+          </div>
+        )}
       </section>
 
-      {/* Plain-text restatement of the same chain (screen-kit accessibility
-          rule 4) - not decorative, the only version of this content a
-          screen reader can consume. */}
-      <p className="text-on-surface text-sm leading-relaxed">{caption}</p>
+      <p className="text-on-surface text-sm leading-relaxed">{buildVersionCaption(version)}</p>
     </div>
   );
 }
@@ -315,36 +343,40 @@ interface ChainStep {
 }
 
 /**
- * Builds one root-to-leaf chain from the warning engine's own
- * `ImpactRowDTO[]` output - TR section 27's "same dependency data and
- * traversal rules as the warning engine... not an independent
- * implementation." At P0 scale every row's `path` shares the same root and
- * the longest path is a strict extension of every shorter one (fixtures.ts's
- * two rows: `['R-04','R-06']` and `['R-04','R-06','GitHub: README.md']`) -
- * so "merge" here is just picking that longest path as the backbone and
- * attaching each row to the step where its own path ends. No separate
- * traversal, comparison, or staleness logic of its own.
+ * Keep each warning engine path intact. Grouping is presentation only;
+ * distinct obsolete ItemVersions may have the same display key.
  */
-function buildDependencyChain(warnings: ImpactRowDTO[]): ChainStep[] {
-  if (warnings.length === 0) return [];
-  const longestPath = warnings.reduce<string[]>(
-    (best, row) => (row.path.length > best.length ? row.path : best),
-    [],
-  );
-  const rowBySubjectLabel = new Map<string, ImpactRowDTO>();
+function groupWarningPaths(warnings: ImpactRowDTO[]) {
+  const byRoot = new Map<
+    string,
+    { rootItemVersionId: string; rootDisplayKey: string; rows: ImpactRowDTO[] }
+  >();
   for (const row of warnings) {
-    const subjectLabel = row.path[row.path.length - 1] ?? row.subjectId;
-    rowBySubjectLabel.set(subjectLabel, row);
+    const group = byRoot.get(row.rootItemVersionId);
+    if (group) group.rows.push(row);
+    else
+      byRoot.set(row.rootItemVersionId, {
+        rootItemVersionId: row.rootItemVersionId,
+        rootDisplayKey: row.rootDisplayKey,
+        rows: [row],
+      });
   }
-  return longestPath.map((label, index) => ({
+  return [...byRoot.values()].sort(
+    (a, b) =>
+      a.rootDisplayKey.localeCompare(b.rootDisplayKey) ||
+      a.rootItemVersionId.localeCompare(b.rootItemVersionId),
+  );
+}
+
+function buildPathChain(row: ImpactRowDTO): ChainStep[] {
+  return row.path.map((label, index) => ({
     label,
-    row: index === 0 ? null : (rowBySubjectLabel.get(label) ?? null),
+    row: index === row.path.length - 1 ? row : null,
   }));
 }
 
-function ItemChainDiagram({ chain }: { chain: ChainStep[] }) {
+function ItemChainDiagram({ chain, markerId }: { chain: ChainStep[]; markerId: string }) {
   const { positioned, viewWidth, viewHeight } = layoutVerticalChain(chain);
-  const markerId = 'dependency-graph-item-arrow';
   const rootLabel = chain[0]?.label ?? '';
 
   return (
@@ -433,7 +465,7 @@ function ItemNode({ rect, step, isRoot }: { rect: NodeRect; step: ChainStep; isR
 // Plain-text caption (screen-kit accessibility rule 4)
 // ---------------------------------------------------------------------------
 
-function buildCaption(version: ArtifactVersionDTO, chain: ChainStep[]): string {
+function buildVersionCaption(version: ArtifactVersionDTO): string {
   const typeLabel = ARTIFACT_TYPE_LABELS[version.artifactType];
   const previousVersionNumber = version.versionNumber - 1;
   const hasBase = version.baseApprovedVersionId !== null && previousVersionNumber >= 1;
@@ -441,35 +473,5 @@ function buildCaption(version: ArtifactVersionDTO, chain: ChainStep[]): string {
     ? `${typeLabel} v${version.versionNumber} supersedes v${previousVersionNumber}.`
     : `${typeLabel} v${version.versionNumber} has no prior approved version yet.`;
 
-  if (chain.length === 0) {
-    return `${versionSentence} No dependency data is available for this version.`;
-  }
-
-  const stepSentences: string[] = [];
-  for (let index = 0; index < chain.length; index += 1) {
-    const step = chain[index];
-    if (!step) continue;
-    if (index === 0) {
-      stepSentences.push(`${step.label} changed`);
-      continue;
-    }
-    const previousLabel = chain[index - 1]?.label ?? '';
-    if (!step.row) {
-      stepSentences.push(`${step.label} is on the dependency path from ${previousLabel}`);
-    } else if (step.row.depth === 0) {
-      stepSentences.push(
-        `${step.label} depends on ${previousLabel} directly and is potentially affected`,
-      );
-    } else if (step.row.subjectKind === 'external_ref') {
-      stepSentences.push(
-        `a ${step.label} reference created from ${previousLabel} is transitively affected`,
-      );
-    } else {
-      stepSentences.push(
-        `${step.label} depends on ${previousLabel} transitively and is potentially affected`,
-      );
-    }
-  }
-
-  return `${versionSentence} ${stepSentences.join('; ')}.`;
+  return versionSentence;
 }

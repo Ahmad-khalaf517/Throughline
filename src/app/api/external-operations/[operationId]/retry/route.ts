@@ -7,7 +7,7 @@ import {
   type ExternalOperation,
 } from '@/external/operations';
 import {
-  initRepo,
+  retryRepoOperation,
   GithubReconciliationRequiredError,
   GithubOperationInFlightError,
   GithubOperationConflictError,
@@ -47,12 +47,8 @@ type RetryResult =
   | { status: 'reconciliation_required' | 'pending' };
 
 async function retryGithub(op: ExternalOperation): Promise<RetryResult> {
-  const targetDescriptor = op.targetDescriptor as { repoName?: unknown };
-  if (typeof targetDescriptor.repoName !== 'string') {
-    throw new Error(`github external_operation ${op.id} has a malformed target_descriptor`);
-  }
   try {
-    const ref = await initRepo(op.sourceArtifactVersionId, targetDescriptor.repoName);
+    const ref = await retryRepoOperation(op);
     return { status: 'completed', ref: await serializeRefWithFreshDrift(ref) };
   } catch (error) {
     if (error instanceof GithubReconciliationRequiredError) {

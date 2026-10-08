@@ -62,6 +62,10 @@ export {
   type SelectedArchitectureOption,
   type ArchitectureDecisionItem,
 } from '@/architecture-materialization';
+export {
+  getRequirementsContextVersionIds,
+  isApprovedArchitectureVersion,
+} from '@/artifact-lifecycle';
 
 import {
   createOptions as persistOptions,

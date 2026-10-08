@@ -30,11 +30,14 @@ import {
   getRefById,
   DefinitiveProviderError,
   type ExternalRef,
+  type ExternalOperation,
 } from '@/external/operations';
 import { getWarnings, getExternalDrift, type ImpactRow } from '@/lineage/impact';
 import {
   getSelectedOption,
   getArchitectureDecisionItems,
+  getRequirementsContextVersionIds,
+  isApprovedArchitectureVersion,
   type ArchitectureDecisionItem,
   type SelectedArchitectureOption,
 } from '@/artifact-types/architecture';
@@ -485,12 +488,20 @@ async function sendCreateRepo(args: {
   selected: SelectedArchitectureOption;
   architectureVersionId: string;
   adrItems: ArchitectureDecisionItem[];
+  requirementsSourceVersionIds: string[];
 }): Promise<{
   externalId: string;
   externalKey: string;
   externalUrl: string;
   metadata: { mode: 'scaffold' | 'docs-only' };
 }> {
+  // Approval may change after the operation row's short transaction commits.
+  // Check again immediately before the outbound create; a known-stale source
+  // is a definitive local refusal and must not remain ambiguous/pending.
+  const currentSelection = await getSelectedOption(args.architectureVersionId);
+  if (currentSelection?.versionStatus !== 'approved') {
+    throw new DefinitiveProviderError('source_architecture_superseded');
+  }
   let created: CreatedRepo;
   try {
     const response = await args.octokit.rest.repos.createForAuthenticatedUser({
@@ -535,6 +546,7 @@ async function sendCreateRepo(args: {
     selected: args.selected,
     architectureVersionId: args.architectureVersionId,
     adrItems: args.adrItems,
+    requirementsSourceVersionIds: args.requirementsSourceVersionIds,
   });
 
   return {
@@ -551,6 +563,10 @@ async function reconcileRepo(args: {
   repoName: string;
   marker: string;
   mode: 'scaffold' | 'docs-only';
+  selected: SelectedArchitectureOption;
+  architectureVersionId: string;
+  adrItems: ArchitectureDecisionItem[];
+  requirementsSourceVersionIds: string[];
 }): Promise<
   | {
       found: true;
@@ -577,6 +593,12 @@ async function reconcileRepo(args: {
     // not match ours - definitively foreign, never adopt.
     return { found: 'foreign' };
   }
+  // A lost create response happens before sendCreateRepo can write any files.
+  // Marker ownership alone must not complete the operation with no ADRs or
+  // lineage metadata (FR-033..035). A later reconcile fills only missing
+  // files; a lost contents response is safe to retry because GET sees the
+  // file that already landed, and existing user content is never overwritten.
+  await writeMissingProvenanceFiles(args.octokit, args.owner, args.repoName, args);
   return {
     found: true,
     externalId: String(response.data.id),
@@ -627,19 +649,31 @@ files never changes Throughline's own lineage.
 
 function buildAdrDoc(
   item: ArchitectureDecisionItem,
-  args: { selected: SelectedArchitectureOption; architectureVersionId: string },
+  args: {
+    selected: SelectedArchitectureOption;
+    architectureVersionId: string;
+    requirementsSourceVersionIds: string[];
+  },
 ): string {
-  // TR FR-034's YAML example also shows a `depends_on` (exact upstream
-  // Requirement item versions) and `requirements_version` field. Both would
-  // require reading `semantic_dependency` (owned by `identity`), which is
-  // not among the two narrow read exports this story's own instructions
-  // authorize (architecture-materialization.getSelectedOption,
-  // external-operations.getRefById) - deliberately NOT added here to avoid
-  // a third, unauthorized cross-module read. What FR-034 actually requires
-  // ("cite the exact Throughline item versions... plus the artifact
-  // versions for context") is satisfied by the fields below: the ADR's own
-  // exact LogicalItem/ItemVersion ids and the Architecture artifact version
-  // - this is a deliberate, documented scope narrowing, not an oversight.
+  const upstream = upstreamRequirementVersions(item);
+  const payload = item.payload as Record<string, unknown> | null;
+  const field = (key: string) => (typeof payload?.[key] === 'string' ? payload[key] : null);
+  const list = (key: string) =>
+    Array.isArray(payload?.[key])
+      ? payload[key].filter((value): value is string => typeof value === 'string')
+      : [];
+  const requirementsVersionId =
+    args.requirementsSourceVersionIds.length === 1 ? args.requirementsSourceVersionIds[0] : null;
+  const sourceVersions = args.requirementsSourceVersionIds.map((id) => `  - ${id}`).join('\n');
+  const dependencies = upstream
+    .map(
+      (dependency) =>
+        `  - display_key: ${dependency.displayKey}\n` +
+        `    item_version_id: ${dependency.itemVersionId}\n` +
+        `    revision_number: ${dependency.revisionNumber}`,
+    )
+    .join('\n');
+  const bullets = (values: string[]) => values.map((value) => `- ${value}`).join('\n');
   return `# ${item.displayKey}
 
 \`\`\`yaml
@@ -648,14 +682,35 @@ adr_logical_item_id: ${item.logicalItemId}
 adr_item_version_id: ${item.itemVersionId}
 architecture_version_id: ${args.architectureVersionId}
 architecture_version_number: ${args.selected.versionNumber}
+requirements_version_id: ${requirementsVersionId ?? 'null'}
+requirements_source_version_ids:${sourceVersions ? `\n${sourceVersions}` : ' []'}
+depends_on:${dependencies ? `\n${dependencies}` : ' []'}
 selected_option: ${args.selected.option.optionKey}
 \`\`\`
 
-This decision is part of "${args.selected.option.title}". See the parent
-project's Throughline workspace for the full decision text - this file
-exists to give the repository durable, inspectable provenance (FR-034), not
-to duplicate Throughline's own database.
+${field('title') ? `## ${field('title')}\n\n` : ''}${field('decision') ?? 'No decision text was recorded.'}
+
+${field('technologyOrApproach') ? `**Technology or approach:** ${field('technologyOrApproach')}\n\n` : ''}${list('constraints').length ? `**Constraints**\n\n${bullets(list('constraints'))}\n\n` : ''}${list('significantTradeoffs').length ? `**Significant trade-offs**\n\n${bullets(list('significantTradeoffs'))}\n\n` : ''}This decision is part of "${args.selected.option.title}".${requirementsVersionId ? '' : ' No single Requirements source version was recorded for this Architecture version; the list above contains every recorded Requirements source version.'}
 `;
+}
+
+function upstreamRequirementVersions(item: ArchitectureDecisionItem) {
+  return item.upstreamDependencies
+    .map((dependency) => {
+      if (
+        dependency.upstreamItemType !== 'requirement' ||
+        !dependency.upstreamDisplayKey ||
+        dependency.upstreamRevisionNumber === null
+      ) {
+        throw new Error(`Incomplete upstream provenance for ${item.displayKey}`);
+      }
+      return {
+        displayKey: dependency.upstreamDisplayKey,
+        itemVersionId: dependency.upstreamItemVersionId,
+        revisionNumber: dependency.upstreamRevisionNumber,
+      };
+    })
+    .sort((a, b) => a.displayKey.localeCompare(b.displayKey));
 }
 
 function buildLineageJson(args: {
@@ -664,6 +719,7 @@ function buildLineageJson(args: {
   selected: SelectedArchitectureOption;
   architectureVersionId: string;
   adrItems: ArchitectureDecisionItem[];
+  requirementsSourceVersionIds: string[];
 }): unknown {
   return {
     // ERD 7.3: "docs/architecture/lineage.json repeats it as a durable
@@ -675,6 +731,9 @@ function buildLineageJson(args: {
     mode: args.mode,
     architectureVersionId: args.architectureVersionId,
     architectureVersionNumber: args.selected.versionNumber,
+    requirementsVersionId:
+      args.requirementsSourceVersionIds.length === 1 ? args.requirementsSourceVersionIds[0] : null,
+    requirementsSourceVersionIds: args.requirementsSourceVersionIds,
     selectedOption: {
       key: args.selected.option.optionKey,
       title: args.selected.option.title,
@@ -684,50 +743,82 @@ function buildLineageJson(args: {
       displayKey: item.displayKey,
       logicalItemId: item.logicalItemId,
       itemVersionId: item.itemVersionId,
+      upstreamRequirementItemVersions: upstreamRequirementVersions(item),
     })),
     generatedAt: new Date().toISOString(),
   };
+}
+
+interface ProvenanceFilesArgs {
+  marker: string;
+  mode: 'scaffold' | 'docs-only';
+  selected: SelectedArchitectureOption;
+  architectureVersionId: string;
+  adrItems: ArchitectureDecisionItem[];
+  requirementsSourceVersionIds: string[];
+}
+
+function provenanceFiles(args: ProvenanceFilesArgs) {
+  return [
+    {
+      path: 'README.md',
+      message: 'Throughline: add architecture rationale (FR-033)',
+      content: buildReadme(args),
+    },
+    ...args.adrItems.map((item) => ({
+      path: `docs/adr/${item.displayKey}.md`,
+      message: `Throughline: add ${item.displayKey} (FR-034)`,
+      content: buildAdrDoc(item, args),
+    })),
+    {
+      path: 'docs/architecture/lineage.json',
+      message: 'Throughline: add lineage metadata + durable marker (ERD 7.3)',
+      content: JSON.stringify(buildLineageJson(args), null, 2),
+    },
+  ];
 }
 
 async function writeProvenanceFiles(
   octokit: Octokit,
   owner: string,
   repo: string,
-  args: {
-    marker: string;
-    mode: 'scaffold' | 'docs-only';
-    selected: SelectedArchitectureOption;
-    architectureVersionId: string;
-    adrItems: ArchitectureDecisionItem[];
-  },
+  args: ProvenanceFilesArgs,
 ): Promise<void> {
-  const encode = (text: string): string => Buffer.from(text, 'utf8').toString('base64');
-
-  await octokit.rest.repos.createOrUpdateFileContents({
-    owner,
-    repo,
-    path: 'README.md',
-    message: 'Throughline: add architecture rationale (FR-033)',
-    content: encode(buildReadme(args)),
-  });
-
-  for (const item of args.adrItems) {
+  for (const file of provenanceFiles(args)) {
     await octokit.rest.repos.createOrUpdateFileContents({
       owner,
       repo,
-      path: `docs/adr/${item.displayKey}.md`,
-      message: `Throughline: add ${item.displayKey} (FR-034)`,
-      content: encode(buildAdrDoc(item, args)),
+      path: file.path,
+      message: file.message,
+      content: Buffer.from(file.content, 'utf8').toString('base64'),
     });
   }
+}
 
-  await octokit.rest.repos.createOrUpdateFileContents({
-    owner,
-    repo,
-    path: 'docs/architecture/lineage.json',
-    message: 'Throughline: add lineage metadata + durable marker (ERD 7.3)',
-    content: encode(JSON.stringify(buildLineageJson(args), null, 2)),
-  });
+async function writeMissingProvenanceFiles(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  args: ProvenanceFilesArgs,
+): Promise<void> {
+  for (const file of provenanceFiles(args)) {
+    try {
+      const existing = await octokit.rest.repos.getContent({ owner, repo, path: file.path });
+      if (Array.isArray(existing.data) || existing.data.type !== 'file') {
+        throw new Error(`Expected a file at ${file.path} during GitHub reconciliation`);
+      }
+      continue;
+    } catch (error) {
+      if (!(error instanceof RequestError && error.status === 404)) throw error;
+    }
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner,
+      repo,
+      path: file.path,
+      message: file.message,
+      content: Buffer.from(file.content, 'utf8').toString('base64'),
+    });
+  }
 }
 
 export async function initRepo(
@@ -735,6 +826,54 @@ export async function initRepo(
   repoName: string,
 ): Promise<ExternalRef> {
   const selected = await resolveApprovedSelection(architectureVersionId);
+  return runInitRepo(architectureVersionId, repoName, selected);
+}
+
+/** Retry a stored operation against its original Architecture snapshot. */
+export async function retryRepoOperation(operation: ExternalOperation): Promise<ExternalRef> {
+  if (operation.provider !== 'github' || operation.operationType !== 'create_repo') {
+    throw new Error(`external_operation ${operation.id} is not a GitHub repo initialization`);
+  }
+  const target = operation.targetDescriptor as { repoName?: unknown; mode?: unknown };
+  if (
+    typeof target.repoName !== 'string' ||
+    (target.mode !== 'scaffold' && target.mode !== 'docs-only')
+  ) {
+    throw new Error(`github external_operation ${operation.id} has a malformed target_descriptor`);
+  }
+  const selected = await getSelectedOption(operation.sourceArtifactVersionId);
+  if (!selected || selected.projectId !== operation.projectId) {
+    throw new ArchitectureOptionNotSelectedError(operation.sourceArtifactVersionId);
+  }
+  if (
+    operation.operationKey !==
+    `github:create_repo:${operation.projectId}:${normalizeRepoName(target.repoName)}`
+  ) {
+    throw new GithubOperationConflictError(operation.operationKey);
+  }
+  // An ambiguous send may have created the repo while this version was
+  // approved. Reconciliation can adopt that repo, but a definitive failure
+  // must not initiate a new repo from a now-superseded Architecture.
+  if (operation.status === 'failed' && selected.versionStatus !== 'approved') {
+    throw new ArchitectureVersionNotApprovedError(
+      operation.sourceArtifactVersionId,
+      selected.versionStatus,
+    );
+  }
+  if (target.mode !== decideMode(selected.option.stack)) {
+    throw new GithubOperationConflictError(operation.operationKey);
+  }
+  return runInitRepo(operation.sourceArtifactVersionId, target.repoName, selected, {
+    allowFailedRetry: selected.versionStatus === 'approved',
+  });
+}
+
+async function runInitRepo(
+  architectureVersionId: string,
+  repoName: string,
+  selected: SelectedArchitectureOption,
+  options: { allowFailedRetry?: boolean } = {},
+): Promise<ExternalRef> {
   const mode = decideMode(selected.option.stack);
   const normalizedRepoName = normalizeRepoName(repoName);
   const operationKey = `github:create_repo:${selected.projectId}:${normalizedRepoName}`;
@@ -751,6 +890,8 @@ export async function initRepo(
   const octokit = createOctokitClient();
 
   const adrItems = await getArchitectureDecisionItems(architectureVersionId);
+  const requirementsSourceVersionIds =
+    await getRequirementsContextVersionIds(architectureVersionId);
 
   const result = await runOperation({
     projectId: selected.projectId,
@@ -760,6 +901,9 @@ export async function initRepo(
     requestHash,
     targetDescriptor: { repoName: normalizedRepoName, mode },
     sourceArtifactVersionId: architectureVersionId,
+    allowFailedRetry: options.allowFailedRetry ?? true,
+    canRetryFailed: (tx) =>
+      isApprovedArchitectureVersion(tx, architectureVersionId, selected.projectId),
     send: () =>
       sendCreateRepo({
         octokit,
@@ -769,8 +913,20 @@ export async function initRepo(
         selected,
         architectureVersionId,
         adrItems,
+        requirementsSourceVersionIds,
       }),
-    reconcile: () => reconcileRepo({ octokit, owner, repoName: normalizedRepoName, marker, mode }),
+    reconcile: () =>
+      reconcileRepo({
+        octokit,
+        owner,
+        repoName: normalizedRepoName,
+        marker,
+        mode,
+        selected,
+        architectureVersionId,
+        adrItems,
+        requirementsSourceVersionIds,
+      }),
   });
 
   switch (result.status) {

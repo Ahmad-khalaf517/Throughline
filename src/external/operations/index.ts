@@ -14,7 +14,7 @@
 // only 7.1/7.2; 7.3 (GitHub), 7.4 (Jira) and 7.5 (Stitch) reconciliation
 // mechanics belong to their own provider modules in later stories.
 import { and, desc, eq, getTableColumns, inArray, ne, sql } from 'drizzle-orm';
-import { db, schema, withTx } from '@/db';
+import { db, schema, withTx, type Tx } from '@/db';
 
 export type ExternalRef = typeof schema.externalRef.$inferSelect;
 
@@ -96,6 +96,10 @@ export interface RunOperationOptions {
   targetDescriptor: unknown;
   sourceArtifactVersionId: string;
   sourceItemVersionId?: string;
+  /** Reject a locked failed-row resend when the provider's source is no longer eligible. */
+  allowFailedRetry?: boolean;
+  /** Provider-supplied source check, evaluated inside the locked failed-row transaction. */
+  canRetryFailed?: (tx: Tx) => Promise<boolean>;
   send: () => Promise<SendResult>;
   reconcile: () => Promise<ReconcileResult>;
 }
@@ -310,7 +314,10 @@ async function decideExisting(opts: RunOperationOptions): Promise<ExistingDecisi
     // R11 / ERD 7.2 step 3.a: hash checked BEFORE any status dispatch, for
     // EVERY status including completed - never a silent resend, never a
     // silent reuse.
-    if (row.requestHash !== opts.requestHash) {
+    if (
+      row.requestHash !== opts.requestHash ||
+      (opts.provider === 'github' && row.sourceArtifactVersionId !== opts.sourceArtifactVersionId)
+    ) {
       return { kind: 'conflict' };
     }
 
@@ -350,6 +357,18 @@ async function decideExisting(opts: RunOperationOptions): Promise<ExistingDecisi
 
     if (row.status === 'reconciliation_required') {
       return { kind: 'reconcile', operationId: row.id };
+    }
+
+    // The caller may have loaded an older pending snapshot while the first
+    // send was still finishing. Check this guard against the locked row,
+    // before transitioning failed -> pending or invoking the send callback.
+    if (opts.allowFailedRetry === false) {
+      return { kind: 'conflict' };
+    }
+    // The provider can re-read its source through the owning module while
+    // this row is locked. A stale route snapshot cannot authorize a resend.
+    if (opts.provider === 'github' && opts.canRetryFailed && !(await opts.canRetryFailed(tx))) {
+      return { kind: 'conflict' };
     }
 
     // status === 'failed': ERD 7.2 step 3.b - "user may retry; set pending,

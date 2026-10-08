@@ -130,6 +130,8 @@ interface FakeRepo {
   fullName: string;
   description: string;
   htmlUrl: string;
+  files: Map<string, string>;
+  fileWrites: Map<string, number>;
 }
 
 // Module-level (NOT per-`createFakeGitHub()` call) so ids stay unique
@@ -177,6 +179,8 @@ function createFakeGitHub(owner: string) {
       fullName,
       description,
       htmlUrl: `https://github.com/${fullName}`,
+      files: new Map(),
+      fileWrites: new Map(),
     });
   }
 
@@ -208,6 +212,8 @@ function createFakeGitHub(owner: string) {
         fullName,
         description: body.description ?? '',
         htmlUrl: `https://github.com/${fullName}`,
+        files: new Map(),
+        fileWrites: new Map(),
       };
       repos.set(fullName, created);
       return jsonResponse(201, toApiShape(created));
@@ -222,13 +228,29 @@ function createFakeGitHub(owner: string) {
     }
 
     const contentsMatch = /^\/repos\/([^/]+)\/([^/]+)\/contents\/(.+)$/.exec(pathname);
+    if (method === 'GET' && contentsMatch) {
+      const [, matchedOwner, name, path] = contentsMatch;
+      const repo = matchedOwner === owner && name ? repos.get(repoKey(name)) : undefined;
+      const decodedPath = path ? decodeURIComponent(path) : '';
+      const content = decodedPath ? repo?.files.get(decodedPath) : undefined;
+      if (content === undefined) return jsonResponse(404, { message: 'Not Found' });
+      return jsonResponse(200, {
+        type: 'file',
+        path: decodedPath,
+        content: Buffer.from(content, 'utf8').toString('base64'),
+        encoding: 'base64',
+      });
+    }
     if (method === 'PUT' && contentsMatch) {
-      // `initRepo`'s README/ADR/lineage.json writes (FR-033/034/035) - the
-      // exact file content isn't asserted on by these tests (that's
-      // covered by inspecting the description marker instead), so a
-      // minimal, valid response shape is enough.
+      const [, matchedOwner, name, path] = contentsMatch;
+      const repo = matchedOwner === owner && name ? repos.get(repoKey(name)) : undefined;
+      if (!repo || !path) return jsonResponse(404, { message: 'Not Found' });
+      const decodedPath = decodeURIComponent(path);
+      const body = JSON.parse(String(init?.body)) as { content: string };
+      repo.files.set(decodedPath, Buffer.from(body.content, 'base64').toString('utf8'));
+      repo.fileWrites.set(decodedPath, (repo.fileWrites.get(decodedPath) ?? 0) + 1);
       return jsonResponse(201, {
-        content: { path: contentsMatch[3] },
+        content: { path: decodedPath },
         commit: { sha: `fake-${nextFakeGitHubId++}` },
       });
     }
@@ -245,9 +267,14 @@ function createResponseDropper(
   underlyingFetch: (url: string | URL, init?: RequestInit) => Promise<Response>,
 ) {
   const dropNextResponseFor = new Set<string>();
+  const dropNextContentResponseFor = new Set<string>();
 
   function simulateLostResponseFor(repoName: string): void {
     dropNextResponseFor.add(repoName);
+  }
+
+  function simulateLostContentResponseFor(path: string): void {
+    dropNextContentResponseFor.add(path);
   }
 
   async function fetchWithDrop(url: string | URL, init?: RequestInit): Promise<Response> {
@@ -258,12 +285,17 @@ function createResponseDropper(
       const body = JSON.parse(String(init.body)) as { name?: string };
       if (body.name && dropNextResponseFor.has(body.name)) dropKey = body.name;
     }
+    if (method === 'PUT') {
+      const path = /^\/repos\/[^/]+\/[^/]+\/contents\/(.+)$/.exec(pathname)?.[1];
+      if (path && dropNextContentResponseFor.has(path)) dropKey = path;
+    }
     // The call underneath always runs to completion - its real side effect
     // (a fake repo recorded in the Map) genuinely happens either way; only
     // the caller's view of the response is dropped.
     const response = await underlyingFetch(url, init);
     if (dropKey) {
       dropNextResponseFor.delete(dropKey);
+      dropNextContentResponseFor.delete(dropKey);
       throw new TypeError(
         'test-simulated network fault: response lost before the client could observe it',
       );
@@ -271,7 +303,7 @@ function createResponseDropper(
     return response;
   }
 
-  return { fetch: fetchWithDrop, simulateLostResponseFor };
+  return { fetch: fetchWithDrop, simulateLostResponseFor, simulateLostContentResponseFor };
 }
 
 /** Advances the FAKE clock past github's 90s RECONCILIATION_THRESHOLD_MS (src/external/operations/index.ts), the same technique tests/integration/external/operations.test.ts already uses - only `Date` is faked, real Testcontainers I/O is unaffected. */
@@ -332,8 +364,131 @@ function respondingToLookupWith(
 }
 
 describe('github (E4-S2 / SCRUM-51)', () => {
+  it('FR-033/034/035: ADR files and lineage.json preserve bound Requirements provenance and rationale after Requirements change', async () => {
+    const { projectId } = await fx.createProjectWithOwner(sql, { name: 'github provenance' });
+    const requirementsArtifactId = await fx.createArtifact(sql, projectId, 'requirements');
+    const requirement = await fx.createLogicalItem(sql, {
+      projectId,
+      artifactId: requirementsArtifactId,
+      itemType: 'requirement',
+    });
+    const requirementV1 = await fx.createItemVersion(sql, {
+      projectId,
+      logicalItemId: requirement.id,
+      revisionNumber: 1,
+    });
+    const requirementsVersionV1 = await fx.createDraftArtifactVersion(sql, requirementsArtifactId);
+    await fx.createMembership(sql, {
+      artifactVersionId: requirementsVersionV1,
+      artifactId: requirementsArtifactId,
+      logicalItemId: requirement.id,
+      itemVersionId: requirementV1,
+    });
+    await fx.approveArtifactVersion(sql, requirementsVersionV1);
+
+    const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+    const adr = await fx.createLogicalItem(sql, {
+      projectId,
+      artifactId: architectureArtifactId,
+      itemType: 'architecture_decision',
+    });
+    const adrVersion = await fx.createItemVersion(sql, {
+      projectId,
+      logicalItemId: adr.id,
+      payload: {
+        title: 'Protect appointment booking',
+        decision: 'Use an audited booking service for clinic appointments.',
+        technologyOrApproach: 'Audited service',
+        constraints: ['Patient privacy'],
+        significantTradeoffs: ['More operational overhead'],
+      },
+    });
+    const architectureVersion = await fx.createDraftArtifactVersion(sql, architectureArtifactId);
+    await fx.createMembership(sql, {
+      artifactVersionId: architectureVersion,
+      artifactId: architectureArtifactId,
+      logicalItemId: adr.id,
+      itemVersionId: adrVersion,
+    });
+    await fx.createSemanticDependency(sql, {
+      projectId,
+      downstreamItemVersionId: adrVersion,
+      upstreamItemVersionId: requirementV1,
+    });
+    await sql`
+      INSERT INTO generation_context_ref (target_artifact_version_id, source_artifact_version_id)
+      VALUES (${architectureVersion}, ${requirementsVersionV1})
+    `;
+    const selectedOptionId = await fx.createArchitectureOption(sql, {
+      artifactVersionId: architectureVersion,
+      optionKey: 'A',
+      title: 'Clinic booking architecture',
+      summary: 'A project-specific clinic booking service.',
+    });
+    await fx.createArchitectureOption(sql, {
+      artifactVersionId: architectureVersion,
+      optionKey: 'B',
+    });
+    await fx.approveArtifactVersion(sql, architectureVersion, {
+      selectedArchitectureOptionId: selectedOptionId,
+    });
+
+    const requirementV2 = await fx.createItemVersion(sql, {
+      projectId,
+      logicalItemId: requirement.id,
+      revisionNumber: 2,
+    });
+    const requirementsVersionV2 = await fx.createDraftArtifactVersion(sql, requirementsArtifactId, {
+      versionNumber: 2,
+    });
+    await fx.createMembership(sql, {
+      artifactVersionId: requirementsVersionV2,
+      artifactId: requirementsArtifactId,
+      logicalItemId: requirement.id,
+      itemVersionId: requirementV2,
+    });
+    await sql`UPDATE artifact_version SET status = 'superseded' WHERE id = ${requirementsVersionV1}`;
+    await fx.approveArtifactVersion(sql, requirementsVersionV2);
+
+    const fake = createFakeGitHub(FAKE_OWNER);
+    const repoName = `provenance-${randomUUID().slice(0, 8)}`;
+    await withFakeFetch(fake.fetch, () => github.initRepo(architectureVersion, repoName));
+
+    const repo = fake.repos.get(`${FAKE_OWNER}/${repoName}`);
+    expect(repo).toBeDefined();
+    const readme = repo!.files.get('README.md');
+    const adrDoc = repo!.files.get(`docs/adr/${adr.displayKey}.md`);
+    const lineageText = repo!.files.get('docs/architecture/lineage.json');
+    expect(readme).toContain('Clinic booking architecture');
+    expect(readme).toContain(adr.displayKey);
+    expect(adrDoc).toContain('Use an audited booking service for clinic appointments.');
+    expect(adrDoc).toContain('Patient privacy');
+    expect(adrDoc).toContain(`adr_item_version_id: ${adrVersion}`);
+    expect(adrDoc).toContain(`architecture_version_id: ${architectureVersion}`);
+    expect(adrDoc).toContain(`requirements_version_id: ${requirementsVersionV1}`);
+    expect(adrDoc).toContain(`item_version_id: ${requirementV1}`);
+    expect(adrDoc).toContain('revision_number: 1');
+    expect(adrDoc).not.toContain(requirementV2);
+    expect(adrDoc).not.toContain(requirementsVersionV2);
+
+    const lineage = JSON.parse(lineageText!) as {
+      marker: string;
+      requirementsVersionId: string;
+      architectureDecisions: {
+        itemVersionId: string;
+        upstreamRequirementItemVersions: { itemVersionId: string; revisionNumber: number }[];
+      }[];
+    };
+    expect(lineage.marker).toBe(repo!.description);
+    expect(lineage.requirementsVersionId).toBe(requirementsVersionV1);
+    expect(lineage.architectureDecisions[0]).toMatchObject({
+      itemVersionId: adrVersion,
+      upstreamRequirementItemVersions: [{ itemVersionId: requirementV1, revisionNumber: 1 }],
+    });
+  });
+
   describe('T11 - lost response; unrelated repo with same name; double-click; stale pending', () => {
-    it('T11a: a lost create response reconciles via marker match on the next call - exactly one operation row, one ref', async () => {
+    it('T11a: lost create and file responses reconcile by marker and fill missing provenance once', async () => {
       const { projectId } = await fx.createProjectWithOwner(sql, { name: 'github T11a' });
       const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
       const adr = await fx.createLogicalItemWithVersion(sql, {
@@ -358,9 +513,15 @@ describe('github (E4-S2 / SCRUM-51)', () => {
         expect(afterLoss).toHaveLength(1);
         expect(afterLoss[0]!.status).toBe('pending'); // R6/R9: left exactly as-is, never failed
 
-        const ref = await withClockAdvancedPastThreshold(() =>
-          github.initRepo(architectureVersionId, repoName),
-        );
+        dropper.simulateLostContentResponseFor('README.md');
+        await expect(
+          withClockAdvancedPastThreshold(() => github.initRepo(architectureVersionId, repoName)),
+        ).rejects.toThrow();
+        const afterPartialWrite = await githubOperationRows(projectId);
+        expect(afterPartialWrite).toHaveLength(1);
+        expect(afterPartialWrite[0]!.status).toBe('reconciliation_required');
+
+        const ref = await github.initRepo(architectureVersionId, repoName);
 
         expect(ref.provider).toBe('github');
         expect(ref.sourceArtifactVersionId).toBe(architectureVersionId);
@@ -377,6 +538,146 @@ describe('github (E4-S2 / SCRUM-51)', () => {
         // not just a name match (ERD 7.3/30.1).
         const fakeRepo = fake.repos.get(`${FAKE_OWNER}/${normalizedRepoName}`);
         expect(fakeRepo?.description).toMatch(/^thrln-marker:[0-9a-f]{16}$/);
+        expect(fakeRepo?.files.get('README.md')).toContain('Architecture decisions');
+        expect(fakeRepo?.files.get(`docs/adr/${adr.displayKey}.md`)).toContain(
+          `adr_item_version_id: ${adr.itemVersionId}`,
+        );
+        expect(fakeRepo?.files.get('docs/architecture/lineage.json')).toContain(
+          fakeRepo!.description,
+        );
+        expect([...fakeRepo!.fileWrites.values()]).toEqual([1, 1, 1]);
+
+        await github.initRepo(architectureVersionId, repoName);
+        expect([...fakeRepo!.fileWrites.values()]).toEqual([1, 1, 1]);
+      });
+    });
+
+    it('T11a: a superseding Architecture cannot take over an ambiguous repo operation', async () => {
+      const { projectId } = await fx.createProjectWithOwner(sql, {
+        name: 'github T11a source pin',
+      });
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const adr = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: architectureArtifactId,
+        itemType: 'architecture_decision',
+      });
+      const versionA = await approveArchitectureVersion(architectureArtifactId, 1, [
+        { logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId },
+      ]);
+      const repoName = `t11a-source-${randomUUID().slice(0, 8)}`;
+      const normalizedRepoName = github.normalizeRepoName(repoName);
+      const fake = createFakeGitHub(FAKE_OWNER);
+      const dropper = createResponseDropper(fake.fetch);
+      const observedFetch = vi.fn(dropper.fetch);
+
+      await withFakeFetch(observedFetch, async () => {
+        dropper.simulateLostResponseFor(normalizedRepoName);
+        await expect(github.initRepo(versionA, repoName)).rejects.toThrow();
+
+        const adrVersionB = await fx.createItemVersion(sql, {
+          projectId,
+          logicalItemId: adr.logicalItemId,
+          revisionNumber: 2,
+        });
+        const versionB = await approveArchitectureVersion(architectureArtifactId, 2, [
+          { logicalItemId: adr.logicalItemId, itemVersionId: adrVersionB },
+        ]);
+
+        const callsBeforeB = observedFetch.mock.calls.length;
+        await expect(github.initRepo(versionB, repoName)).rejects.toBeInstanceOf(
+          github.GithubOperationConflictError,
+        );
+        expect(observedFetch).toHaveBeenCalledTimes(callsBeforeB);
+
+        const [stored] = await sql<{ id: string }[]>`
+          SELECT id FROM external_operation WHERE project_id = ${projectId} AND provider = 'github'
+        `;
+        const operation = await (
+          await import('@/external/operations')
+        ).getOperationById(stored!.id);
+        expect(operation?.sourceArtifactVersionId).toBe(versionA);
+        const ref = await withClockAdvancedPastThreshold(() =>
+          github.retryRepoOperation(operation!),
+        );
+        expect(ref.sourceArtifactVersionId).toBe(versionA);
+        const fakeRepo = fake.repos.get(`${FAKE_OWNER}/${normalizedRepoName}`)!;
+        const adrFile = fakeRepo.files.get(`docs/adr/${adr.displayKey}.md`);
+        expect(adrFile).toContain(adr.itemVersionId);
+        expect(adrFile).not.toContain(adrVersionB);
+        expect(fakeRepo.files.get('docs/architecture/lineage.json')).toContain(versionA);
+        expect(fakeRepo.files.get('docs/architecture/lineage.json')).not.toContain(versionB);
+        expect(await github.checkDrift(ref.id)).toMatchObject({
+          subjectKind: 'external_ref',
+          rootItemVersionId: adr.itemVersionId,
+        });
+      });
+    });
+
+    it('T11a: a stale pending retry snapshot cannot resend after the locked row becomes failed and its source is superseded', async () => {
+      const { projectId } = await fx.createProjectWithOwner(sql, {
+        name: 'github T11a retry race',
+      });
+      const architectureArtifactId = await fx.createArtifact(sql, projectId, 'architecture');
+      const adr = await fx.createLogicalItemWithVersion(sql, {
+        projectId,
+        artifactId: architectureArtifactId,
+        itemType: 'architecture_decision',
+      });
+      const versionA = await approveArchitectureVersion(architectureArtifactId, 1, [
+        { logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId },
+      ]);
+      const repoName = `t11a-race-${randomUUID().slice(0, 8)}`;
+      const fake = createFakeGitHub(FAKE_OWNER);
+      const dropper = createResponseDropper(fake.fetch);
+      const observedFetch = vi.fn(dropper.fetch);
+
+      await withFakeFetch(observedFetch, async () => {
+        dropper.simulateLostResponseFor(github.normalizeRepoName(repoName));
+        await expect(github.initRepo(versionA, repoName)).rejects.toThrow();
+        const [stored] = await sql<{ id: string }[]>`
+          SELECT id FROM external_operation WHERE project_id = ${projectId} AND provider = 'github'
+        `;
+        const stalePending = await (
+          await import('@/external/operations')
+        ).getOperationById(stored!.id);
+        expect(stalePending?.status).toBe('pending');
+
+        await approveArchitectureVersion(architectureArtifactId, 2, [
+          { logicalItemId: adr.logicalItemId, itemVersionId: adr.itemVersionId },
+        ]);
+        await sql`
+          UPDATE external_operation
+          SET status = 'failed', error_message = 'provider rejected original send'
+          WHERE id = ${stored!.id}
+        `;
+        const callsBeforeRetry = observedFetch.mock.calls.length;
+        await expect(github.retryRepoOperation(stalePending!)).rejects.toBeInstanceOf(
+          github.GithubOperationConflictError,
+        );
+        const send = vi.fn(async () => ({ externalId: 'must-not-send' }));
+        const operations = await import('@/external/operations');
+        const { isApprovedArchitectureVersion } = await import('@/artifact-types/architecture');
+        // A source check captured as eligible before the lock must be
+        // re-evaluated in the failed-row transaction after B supersedes A.
+        const lockedDecision = await operations.runOperation({
+          projectId,
+          provider: 'github',
+          operationType: 'create_repo',
+          operationKey: stalePending!.operationKey,
+          requestHash: stalePending!.requestHash,
+          targetDescriptor: stalePending!.targetDescriptor,
+          sourceArtifactVersionId: versionA,
+          allowFailedRetry: true,
+          canRetryFailed: (tx) => isApprovedArchitectureVersion(tx, versionA, projectId),
+          send,
+          reconcile: async () => ({ found: false }),
+        });
+        expect(lockedDecision.status).toBe('conflict');
+        expect(send).not.toHaveBeenCalled();
+        expect(observedFetch).toHaveBeenCalledTimes(callsBeforeRetry);
+        expect((await githubOperationRows(projectId))[0]).toMatchObject({ status: 'failed' });
+        expect(await githubRefRows(projectId)).toHaveLength(0);
       });
     });
 
@@ -695,6 +996,15 @@ describe('github (E4-S2 / SCRUM-51)', () => {
         const differentName = `t18-fresh-${randomUUID().slice(0, 8)}`;
         const ref = await github.initRepo(architectureVersionId, differentName);
         expect(ref.provider).toBe('github');
+        const createdRepo = fake.repos.get(`${FAKE_OWNER}/${differentName}`);
+        const legacyLineage = JSON.parse(
+          createdRepo!.files.get('docs/architecture/lineage.json')!,
+        ) as {
+          requirementsVersionId: string | null;
+          requirementsSourceVersionIds: string[];
+        };
+        expect(legacyLineage.requirementsVersionId).toBeNull();
+        expect(legacyLineage.requirementsSourceVersionIds).toEqual([]);
 
         const rows = await githubOperationRows(projectId);
         expect(rows).toHaveLength(2);

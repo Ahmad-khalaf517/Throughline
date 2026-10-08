@@ -8,7 +8,7 @@
 // Nothing outside src/artifact-lifecycle may import this file directly - it
 // is re-exported through ./index.ts (Module Boundaries section 7).
 import { and, desc, eq } from 'drizzle-orm';
-import { db, schema, withTx } from '@/db';
+import { db, schema, withTx, type Tx } from '@/db';
 import {
   getDisplayKeysByItemVersionId,
   getSourceVersionMembers,
@@ -61,6 +61,46 @@ export async function getVersionRef(versionId: string): Promise<ArtifactVersionR
     .where(eq(schema.artifactVersion.id, versionId))
     .limit(1);
   return row ? { ...row, artifactType: row.artifactType as ArtifactType } : null;
+}
+
+/** Read the current Architecture approval state inside a caller's transaction. */
+export async function isApprovedArchitectureVersion(
+  tx: Tx,
+  versionId: string,
+  projectId: string,
+): Promise<boolean> {
+  const [row] = await tx
+    .select({ status: schema.artifactVersion.status })
+    .from(schema.artifactVersion)
+    .innerJoin(schema.artifact, eq(schema.artifact.id, schema.artifactVersion.artifactId))
+    .where(
+      and(
+        eq(schema.artifactVersion.id, versionId),
+        eq(schema.artifact.projectId, projectId),
+        eq(schema.artifact.type, 'architecture'),
+      ),
+    )
+    .limit(1);
+  return row?.status === 'approved';
+}
+
+/** Exact Requirements versions recorded when this Architecture version was generated (INV-006). */
+export async function getRequirementsContextVersionIds(versionId: string): Promise<string[]> {
+  const rows = await db
+    .select({ id: schema.artifactVersion.id })
+    .from(schema.generationContextRef)
+    .innerJoin(
+      schema.artifactVersion,
+      eq(schema.artifactVersion.id, schema.generationContextRef.sourceArtifactVersionId),
+    )
+    .innerJoin(schema.artifact, eq(schema.artifact.id, schema.artifactVersion.artifactId))
+    .where(
+      and(
+        eq(schema.generationContextRef.targetArtifactVersionId, versionId),
+        eq(schema.artifact.type, 'requirements'),
+      ),
+    );
+  return rows.map((row) => row.id).sort();
 }
 
 /** The project's `artifact` row id for one type (`createProject` always inserts all four), or `null`. */

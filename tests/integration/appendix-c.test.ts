@@ -623,6 +623,7 @@ interface FakeGithubRepo {
   fullName: string;
   description: string;
   htmlUrl: string;
+  files: Map<string, string>;
 }
 
 // Module-level, not per-`createFakeGithubProvider()` call - keeps every fake
@@ -657,6 +658,7 @@ function createFakeGithubProvider(owner: string) {
       fullName,
       description,
       htmlUrl: `https://github.com/${fullName}`,
+      files: new Map(),
     });
   }
 
@@ -688,6 +690,7 @@ function createFakeGithubProvider(owner: string) {
         fullName,
         description: body.description ?? '',
         htmlUrl: `https://github.com/${fullName}`,
+        files: new Map(),
       };
       repos.set(fullName, created);
       return jsonResponse(201, toApiShape(created));
@@ -702,12 +705,28 @@ function createFakeGithubProvider(owner: string) {
     }
 
     const contentsMatch = /^\/repos\/([^/]+)\/([^/]+)\/contents\/(.+)$/.exec(pathname);
+    if (method === 'GET' && contentsMatch) {
+      const [, matchedOwner, name, encodedPath] = contentsMatch;
+      const repo = matchedOwner === owner && name ? repos.get(repoKey(name)) : undefined;
+      const path = encodedPath ? decodeURIComponent(encodedPath) : '';
+      const content = repo?.files.get(path);
+      if (content === undefined) return jsonResponse(404, { message: 'Not Found' });
+      return jsonResponse(200, {
+        type: 'file',
+        path,
+        content: Buffer.from(content, 'utf8').toString('base64'),
+        encoding: 'base64',
+      });
+    }
     if (method === 'PUT' && contentsMatch) {
-      // initRepo's README/ADR/lineage.json writes (FR-033/034/035) - exact
-      // content isn't asserted on here (same scope decision github.test.ts's
-      // own fake makes), a minimal valid response shape is enough.
+      const [, matchedOwner, name, encodedPath] = contentsMatch;
+      const repo = matchedOwner === owner && name ? repos.get(repoKey(name)) : undefined;
+      if (!repo || !encodedPath) return jsonResponse(404, { message: 'Not Found' });
+      const path = decodeURIComponent(encodedPath);
+      const body = JSON.parse(String(init?.body)) as { content: string };
+      repo.files.set(path, Buffer.from(body.content, 'base64').toString('utf8'));
       return jsonResponse(201, {
-        content: { path: contentsMatch[3] },
+        content: { path },
         commit: { sha: `fake-e4t3-${nextFakeGithubId++}` },
       });
     }
@@ -2263,6 +2282,11 @@ describe('ERD Appendix C acceptance suite (T1-T43)', () => {
         // Marker-verified adoption, not a bare name match (ERD 7.3/30.1).
         const fakeRepo = fake.repos.get(`${FAKE_GITHUB_OWNER}/${normalizedRepoName}`);
         expect(fakeRepo?.description).toMatch(/^thrln-marker:[0-9a-f]{16}$/);
+        expect(fakeRepo?.files.get('README.md')).toContain('Architecture decisions');
+        expect(fakeRepo?.files.get(`docs/adr/${adr.displayKey}.md`)).toContain(adr.itemVersionId);
+        expect(fakeRepo?.files.get('docs/architecture/lineage.json')).toContain(
+          fakeRepo!.description,
+        );
       });
     });
 

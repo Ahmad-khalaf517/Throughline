@@ -40,6 +40,8 @@ export {
 } from './dashboard';
 export {
   getVersionRef,
+  isApprovedArchitectureVersion,
+  getRequirementsContextVersionIds,
   getArtifactId,
   listArtifactVersions,
   getArtifactVersionDetail,

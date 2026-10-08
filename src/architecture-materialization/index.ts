@@ -19,7 +19,7 @@
 // `ArtifactVersionDTO.options`.
 import { asc, eq } from 'drizzle-orm';
 import { db, schema, withTx } from '@/db';
-import { getSourceVersionMembers } from '@/lineage/identity';
+import { getSourceVersionMembers, getUpstreamDependencies } from '@/lineage/identity';
 
 export {
   createOptions,
@@ -107,7 +107,11 @@ export async function getOptionsForVersion(
     .orderBy(asc(schema.architectureOption.optionKey));
 }
 
-export type ArchitectureDecisionItem = Awaited<ReturnType<typeof getSourceVersionMembers>>[number];
+export type ArchitectureDecisionItem = Awaited<
+  ReturnType<typeof getSourceVersionMembers>
+>[number] & {
+  upstreamDependencies: Awaited<ReturnType<typeof getUpstreamDependencies>>;
+};
 
 /**
  * The ADR LogicalItem/ItemVersion rows an Architecture artifact_version
@@ -126,5 +130,17 @@ export type ArchitectureDecisionItem = Awaited<ReturnType<typeof getSourceVersio
 export async function getArchitectureDecisionItems(
   architectureVersionId: string,
 ): Promise<ArchitectureDecisionItem[]> {
-  return withTx((tx) => getSourceVersionMembers(tx, [architectureVersionId]));
+  return withTx(async (tx) => {
+    const items = await getSourceVersionMembers(tx, [architectureVersionId]);
+    const dependencies = await getUpstreamDependencies(
+      tx,
+      items.flatMap((item) => (item.itemVersionId ? [item.itemVersionId] : [])),
+    );
+    return items.map((item) => ({
+      ...item,
+      upstreamDependencies: dependencies.filter(
+        (dependency) => dependency.downstreamItemVersionId === item.itemVersionId,
+      ),
+    }));
+  });
 }
