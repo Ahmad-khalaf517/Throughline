@@ -1,8 +1,8 @@
 # E6-S5: three-brief evaluation preregistration
 
-**Prepared:** 2026-09-28 10:16 UTC, before any E6-S5 sample run or project mutation.  
+**Prepared:** 2026-09-28 10:16 UTC, before any E6-S5 sample run or project mutation.
 **Status:** Preregistered in commit `329f6d4` and Jira SCRUM-71 comment `11173` before all sample runs. Results below were appended after the runs; the fixed briefs, rubric, and answer keys above were not changed.
-**Source:** BRD §§10.1–10.3; Jira Plan E6-S5 / SCRUM-71.  
+**Source:** BRD §§10.1–10.3; Jira Plan E6-S5 / SCRUM-71.
 **Evaluation setting:** One developer/evaluator is expected. The user chose an **AI-assisted template proxy** for the manual condition. This is not a human manual baseline. Record the author, model/tool, prompts, and any human edits. Apply the same review checklist to both conditions.
 
 This document fixed the briefs, template, checklist, change stimuli, and answer keys before the hosted runs. Observations are appended below. If a correction is necessary, date it and retain the original text in the history.
